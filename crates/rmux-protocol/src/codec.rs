@@ -209,6 +209,9 @@ fn encode_message_data(msg: &Message, buf: &mut BytesMut) {
         Message::WriteClose(m) => {
             buf.put_i32_le(m.stream);
         }
+        Message::OutputData(data) | Message::InputData(data) => {
+            buf.put_slice(data);
+        }
     }
 }
 
@@ -327,6 +330,9 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
             // These will be implemented fully later
             Ok(Message::Version { version: 0 })
         }
+        // rmux extensions
+        MessageType::OutputData => Ok(Message::OutputData(data.to_vec())),
+        MessageType::InputData => Ok(Message::InputData(data.to_vec())),
     }
 }
 
@@ -369,6 +375,77 @@ fn message_to_type(msg: &Message) -> MessageType {
         Message::Write(_) => MessageType::Write,
         Message::WriteReady(_) => MessageType::WriteReady,
         Message::WriteClose(_) => MessageType::WriteClose,
+        Message::OutputData(_) => MessageType::OutputData,
+        Message::InputData(_) => MessageType::InputData,
+    }
+}
+
+// --- Async message I/O ---
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+
+/// Async message reader wrapping the read half of a Unix stream.
+pub struct MessageReader {
+    stream: OwnedReadHalf,
+    buf: BytesMut,
+}
+
+impl MessageReader {
+    /// Create a new reader from a stream read half.
+    pub fn new(stream: OwnedReadHalf) -> Self {
+        Self {
+            stream,
+            buf: BytesMut::with_capacity(8192),
+        }
+    }
+
+    /// Read the next message from the stream.
+    ///
+    /// Returns `None` on EOF (connection closed).
+    pub async fn read_message(&mut self) -> Result<Option<Message>, CodecError> {
+        loop {
+            // Try to decode from existing buffer
+            if let Some(msg) = decode_message(&mut self.buf)? {
+                return Ok(Some(msg));
+            }
+
+            // Read more data
+            let n = self.stream.read_buf(&mut self.buf).await
+                .map_err(CodecError::Io)?;
+            if n == 0 {
+                return Ok(None); // EOF
+            }
+        }
+    }
+}
+
+/// Async message writer wrapping the write half of a Unix stream.
+pub struct MessageWriter {
+    stream: OwnedWriteHalf,
+    buf: BytesMut,
+}
+
+impl MessageWriter {
+    /// Create a new writer from a stream write half.
+    pub fn new(stream: OwnedWriteHalf) -> Self {
+        Self {
+            stream,
+            buf: BytesMut::with_capacity(8192),
+        }
+    }
+
+    /// Write a message to the stream.
+    pub async fn write_message(&mut self, msg: &Message) -> Result<(), CodecError> {
+        encode_message(msg, &mut self.buf)?;
+        let data = self.buf.split();
+        self.stream.write_all(&data).await.map_err(CodecError::Io)?;
+        Ok(())
+    }
+
+    /// Flush the underlying stream.
+    pub async fn flush(&mut self) -> Result<(), CodecError> {
+        self.stream.flush().await.map_err(CodecError::Io)
     }
 }
 

@@ -97,6 +97,12 @@ pub enum MessageType {
     WriteClose = 306,
     /// Cancel read.
     ReadCancel = 307,
+
+    // rmux extensions (400+)
+    /// Terminal output data from server to attached client.
+    OutputData = 400,
+    /// Keyboard/input data from attached client to server.
+    InputData = 401,
 }
 
 impl MessageType {
@@ -145,6 +151,8 @@ impl MessageType {
             305 => Some(Self::WriteReady),
             306 => Some(Self::WriteClose),
             307 => Some(Self::ReadCancel),
+            400 => Some(Self::OutputData),
+            401 => Some(Self::InputData),
             _ => None,
         }
     }
@@ -262,6 +270,10 @@ pub enum Message {
     Write(MsgWriteData),
     WriteReady(MsgWriteReady),
     WriteClose(MsgWriteClose),
+    /// Terminal output data from server to attached client.
+    OutputData(Vec<u8>),
+    /// Keyboard/input data from attached client to server.
+    InputData(Vec<u8>),
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ description = "Wire protocol for rmux - imsg-compatible message encoding/decodin
 bytes = { workspace = true }
 nix = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

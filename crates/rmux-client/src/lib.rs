@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(clippy::all, clippy::pedantic)]
 #![allow(
     clippy::module_name_repetitions,

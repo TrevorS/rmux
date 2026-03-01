@@ -9,6 +9,7 @@ description = "Client process for rmux - CLI, terminal setup, server connection"
 [dependencies]
 rmux-core = { workspace = true }
 rmux-protocol = { workspace = true }
+bytes = { workspace = true }
 nix = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

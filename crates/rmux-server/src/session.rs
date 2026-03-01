@@ -105,6 +105,11 @@ impl SessionManager {
         self.sessions.get(&id)
     }
 
+    /// Find a session by ID (mutable).
+    pub fn find_by_id_mut(&mut self, id: u32) -> Option<&mut Session> {
+        self.sessions.get_mut(&id)
+    }
+
     /// Remove a session.
     pub fn remove(&mut self, id: u32) -> Option<Session> {
         self.sessions.remove(&id)
@@ -119,6 +124,11 @@ impl SessionManager {
     /// Iterate over all sessions.
     pub fn iter(&self) -> impl Iterator<Item = &Session> {
         self.sessions.values()
+    }
+
+    /// Iterate over all sessions mutably.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Session> {
+        self.sessions.values_mut()
     }
 
     /// Is the session list empty?
