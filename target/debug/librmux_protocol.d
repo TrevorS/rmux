@@ -1,0 +1,1 @@
+/home/user/tmux/rmux/target/debug/librmux_protocol.rlib: /home/user/tmux/rmux/crates/rmux-protocol/src/codec.rs /home/user/tmux/rmux/crates/rmux-protocol/src/identify.rs /home/user/tmux/rmux/crates/rmux-protocol/src/lib.rs /home/user/tmux/rmux/crates/rmux-protocol/src/message.rs

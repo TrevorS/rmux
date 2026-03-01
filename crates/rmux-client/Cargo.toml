@@ -1,0 +1,20 @@
+[package]
+name = "rmux-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Client process for rmux - CLI, terminal setup, server connection"
+
+[dependencies]
+rmux-core = { workspace = true }
+rmux-protocol = { workspace = true }
+nix = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "rmux"
+path = "src/main.rs"

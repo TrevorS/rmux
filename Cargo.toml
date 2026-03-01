@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rmux-core",
+    "crates/rmux-terminal",
+    "crates/rmux-protocol",
+    "crates/rmux-server",
+    "crates/rmux-client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "ISC"
+repository = "https://github.com/TrevorS/rmux"
+description = "A high-performance drop-in replacement for tmux, written in Rust"
+
+[workspace.dependencies]
+# Core
+bitflags = "2"
+bytes = "1"
+memchr = "2"
+smallvec = "1"
+thiserror = "2"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Unix
+nix = { version = "0.29", features = ["term", "signal", "socket", "uio", "fs", "process"] }
+
+# Terminal
+terminfo = "0.9"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1"
+
+# Workspace crates
+rmux-core = { path = "crates/rmux-core" }
+rmux-terminal = { path = "crates/rmux-terminal" }
+rmux-protocol = { path = "crates/rmux-protocol" }
+rmux-server = { path = "crates/rmux-server" }
+rmux-client = { path = "crates/rmux-client" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1

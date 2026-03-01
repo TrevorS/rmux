@@ -1,0 +1,15 @@
+[package]
+name = "rmux-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Wire protocol for rmux - imsg-compatible message encoding/decoding"
+
+[dependencies]
+bytes = { workspace = true }
+nix = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

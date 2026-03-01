@@ -1,0 +1,25 @@
+[package]
+name = "rmux-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Terminal I/O for rmux - VT100 parser, escape sequences, PTY"
+
+[dependencies]
+rmux-core = { workspace = true }
+bitflags = { workspace = true }
+bytes = { workspace = true }
+memchr = { workspace = true }
+nix = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+name = "input_bench"
+harness = false

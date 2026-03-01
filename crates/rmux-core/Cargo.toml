@@ -1,0 +1,27 @@
+[package]
+name = "rmux-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core data structures for rmux (grid, screen, layout) - no I/O"
+
+[dependencies]
+bitflags = { workspace = true }
+memchr = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+name = "grid_bench"
+harness = false
+
+[[bench]]
+name = "utf8_bench"
+harness = false
