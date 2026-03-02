@@ -896,3 +896,1336 @@ mod pane_copy_mode_tests {
         );
     }
 }
+
+// ============================================================
+// Extended paste buffer store edge cases
+// ============================================================
+
+mod paste_buffer_store_extended {
+    use crate::paste::PasteBufferStore;
+
+    #[test]
+    fn named_buffer_not_evicted_by_limit() {
+        let mut store = PasteBufferStore::new(2);
+        store.set("custom", b"named".to_vec());
+        store.add(b"a1".to_vec());
+        store.add(b"a2".to_vec());
+        store.add(b"a3".to_vec()); // Should evict oldest auto, not "custom"
+        assert!(store.get_by_name("custom").is_some());
+        // 2 automatic + 1 named = 3
+        assert_eq!(store.len(), 3);
+    }
+
+    #[test]
+    fn set_replaces_existing_named() {
+        let mut store = PasteBufferStore::new(50);
+        store.set("mybuf", b"old".to_vec());
+        store.set("mybuf", b"new".to_vec());
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.get_by_name("mybuf").unwrap().data, b"new");
+    }
+
+    #[test]
+    fn set_empty_name_auto_generates() {
+        let mut store = PasteBufferStore::new(50);
+        store.set("", b"data".to_vec());
+        let top = store.get_top().unwrap();
+        assert!(top.name.starts_with("buffer"));
+        assert!(top.automatic);
+    }
+
+    #[test]
+    fn delete_nonexistent_returns_false() {
+        let mut store = PasteBufferStore::new(50);
+        assert!(!store.delete("nope"));
+    }
+
+    #[test]
+    fn empty_data_buffer() {
+        let mut store = PasteBufferStore::new(50);
+        store.add(Vec::new());
+        assert_eq!(store.get_top().unwrap().data.len(), 0);
+    }
+
+    #[test]
+    fn large_buffer_data() {
+        let mut store = PasteBufferStore::new(50);
+        let big = vec![b'X'; 100_000];
+        store.add(big.clone());
+        assert_eq!(store.get_top().unwrap().data.len(), 100_000);
+    }
+
+    #[test]
+    fn mixed_named_auto_ordering() {
+        let mut store = PasteBufferStore::new(50);
+        store.add(b"auto1".to_vec());
+        store.set("named1", b"n1".to_vec());
+        store.add(b"auto2".to_vec());
+        let list = store.list();
+        assert_eq!(list.len(), 3);
+        // Most recent first: auto2, named1, auto1
+        assert_eq!(list[0].data, b"auto2");
+        assert_eq!(list[1].data, b"n1");
+        assert_eq!(list[2].data, b"auto1");
+    }
+
+    #[test]
+    fn limit_one() {
+        let mut store = PasteBufferStore::new(1);
+        store.add(b"a".to_vec());
+        store.add(b"b".to_vec());
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.get_top().unwrap().data, b"b");
+    }
+
+    #[test]
+    fn get_top_empty_store() {
+        let store = PasteBufferStore::new(50);
+        assert!(store.get_top().is_none());
+    }
+}
+
+// ============================================================
+// Extended paste command tests
+// ============================================================
+
+mod paste_command_extended {
+    use super::*;
+    #[test]
+    fn paste_buffer_named() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-buffer", "-b", "mybuf", "hello"]).unwrap();
+        let result = exec(&mut s, &["paste-buffer", "-b", "mybuf"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn paste_buffer_named_nonexistent_errors() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(&mut s, &["paste-buffer", "-b", "nope"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn show_buffer_default_name() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-buffer", "-b", "buffer0000", "default"]).unwrap();
+        // show-buffer without -b should default to buffer0000
+        let output = output_text(exec(&mut s, &["show-buffer"]));
+        assert_eq!(output, "default");
+    }
+
+    #[test]
+    fn multiple_set_delete_cycle() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-buffer", "-b", "a", "aaa"]).unwrap();
+        exec(&mut s, &["set-buffer", "-b", "b", "bbb"]).unwrap();
+        exec(&mut s, &["set-buffer", "-b", "c", "ccc"]).unwrap();
+
+        let output = output_text(exec(&mut s, &["list-buffers"]));
+        assert!(output.contains("a:"));
+        assert!(output.contains("b:"));
+        assert!(output.contains("c:"));
+
+        exec(&mut s, &["delete-buffer", "-b", "b"]).unwrap();
+        let output = output_text(exec(&mut s, &["list-buffers"]));
+        assert!(!output.contains("b:") || output.contains("a:"));
+
+        // show-buffer for deleted should fail
+        assert!(exec(&mut s, &["show-buffer", "-b", "b"]).is_err());
+    }
+
+    #[test]
+    fn set_buffer_replaces_content() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-buffer", "-b", "test", "old"]).unwrap();
+        exec(&mut s, &["set-buffer", "-b", "test", "new"]).unwrap();
+        let output = output_text(exec(&mut s, &["show-buffer", "-b", "test"]));
+        assert_eq!(output, "new");
+    }
+
+    #[test]
+    fn set_buffer_no_data_errors() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(&mut s, &["set-buffer"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_buffers_shows_sizes() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-buffer", "-b", "x", "hello"]).unwrap();
+        let output = output_text(exec(&mut s, &["list-buffers"]));
+        assert!(output.contains("5 bytes")); // "hello" is 5 bytes
+    }
+}
+
+// ============================================================
+// Extended copy mode navigation edge cases
+// ============================================================
+
+mod copy_mode_navigation_extended {
+    use crate::copymode::CopyModeState;
+    use rmux_core::grid::cell::GridCell;
+    use rmux_core::screen::Screen;
+    use rmux_core::style::Style;
+    use rmux_core::utf8::Utf8Char;
+
+    fn make_screen(width: u32, height: u32, lines: &[&str]) -> Screen {
+        let mut screen = Screen::new(width, height, 2000);
+        for (y, line) in lines.iter().enumerate() {
+            for (x, ch) in line.bytes().enumerate() {
+                screen.grid.set_cell(
+                    x as u32,
+                    y as u32,
+                    &GridCell {
+                        data: Utf8Char::from_ascii(ch),
+                        style: Style::DEFAULT,
+                        link: 0,
+                        flags: rmux_core::grid::cell::CellFlags::empty(),
+                    },
+                );
+            }
+        }
+        screen
+    }
+
+    #[test]
+    fn cursor_up_scrolls_into_history_and_back() {
+        let mut screen = Screen::new(80, 24, 2000);
+        for _ in 0..10 {
+            screen.grid.scroll_up();
+        }
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cursor_up(&screen, 3);
+        assert_eq!(cm.oy, 3);
+        assert_eq!(cm.cy, 0);
+
+        // cursor_down first moves cy until max_y, then decreases oy
+        cm.cursor_down(&screen, 3);
+        assert_eq!(cm.cy, 3);
+        assert_eq!(cm.oy, 3); // oy unchanged because cy wasn't at max
+    }
+
+    #[test]
+    fn page_up_clamps_at_max_history() {
+        let mut screen = Screen::new(80, 24, 2000);
+        for _ in 0..10 {
+            screen.grid.scroll_up();
+        }
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        // Page up should cap at history_size
+        cm.page_up(&screen);
+        assert_eq!(cm.oy, 10); // Clamped to max
+        cm.page_up(&screen);
+        assert_eq!(cm.oy, 10); // Still clamped
+    }
+
+    #[test]
+    fn page_down_clamps_at_zero() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.page_down(&screen);
+        assert_eq!(cm.oy, 0); // Can't go below zero
+    }
+
+    #[test]
+    fn halfpage_up_down_symmetry() {
+        let mut screen = Screen::new(80, 24, 2000);
+        for _ in 0..100 {
+            screen.grid.scroll_up();
+        }
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.halfpage_up(&screen);
+        let oy1 = cm.oy;
+        cm.halfpage_down(&screen);
+        assert_eq!(cm.oy, 0); // Back to start
+        cm.halfpage_up(&screen);
+        assert_eq!(cm.oy, oy1); // Same as before
+    }
+
+    #[test]
+    fn cursor_right_clamps_at_width() {
+        let screen = Screen::new(10, 5, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        for _ in 0..20 {
+            cm.cursor_right(&screen);
+        }
+        assert_eq!(cm.cx, 9); // Max for width 10
+    }
+
+    #[test]
+    fn word_nav_at_line_start() {
+        let screen = make_screen(80, 24, &["hello world"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+        cm.previous_word(&screen);
+        assert_eq!(cm.cx, 0); // Already at start, stays there
+    }
+
+    #[test]
+    fn word_nav_at_line_end() {
+        let screen = make_screen(80, 24, &["hello world"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 10; // End of "world"
+        cm.next_word(&screen);
+        // No more words, should stay put or go to end
+        assert!(cm.cx >= 10);
+    }
+
+    #[test]
+    fn back_to_indentation_no_indentation() {
+        let screen = make_screen(80, 24, &["noindent"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 5;
+        cm.back_to_indentation(&screen);
+        assert_eq!(cm.cx, 0); // First char is non-space
+    }
+
+    #[test]
+    fn next_word_end_from_start() {
+        let screen = make_screen(80, 24, &["abc def ghi"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+        cm.next_word_end(&screen);
+        assert_eq!(cm.cx, 2); // End of "abc"
+    }
+
+    #[test]
+    fn absolute_y_no_history() {
+        let screen = Screen::new(80, 24, 2000);
+        let cm = CopyModeState::enter(&screen, "vi");
+        assert_eq!(cm.absolute_y(0), 23); // cy=23, oy=0, hs=0
+    }
+
+    #[test]
+    fn absolute_y_with_history() {
+        let mut screen = Screen::new(80, 24, 2000);
+        for _ in 0..50 {
+            screen.grid.scroll_up();
+        }
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.oy = 10;
+        cm.cy = 5;
+        // abs_y = hs - oy + cy = 50 - 10 + 5 = 45
+        assert_eq!(cm.absolute_y(50), 45);
+    }
+
+    #[test]
+    fn small_screen_navigation() {
+        let screen = Screen::new(5, 3, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        assert_eq!(cm.cy, 2); // Height-1
+        cm.cursor_up(&screen, 10);
+        assert_eq!(cm.cy, 0);
+        cm.cursor_right(&screen);
+        cm.cursor_right(&screen);
+        cm.cursor_right(&screen);
+        cm.cursor_right(&screen);
+        assert_eq!(cm.cx, 4); // Width-1
+        cm.cursor_right(&screen);
+        assert_eq!(cm.cx, 4); // Clamped
+    }
+}
+
+// ============================================================
+// Extended selection edge cases
+// ============================================================
+
+mod copy_mode_selection_extended {
+    use crate::copymode::{CopyModeState, copy_selection};
+    use rmux_core::grid::cell::GridCell;
+    use rmux_core::screen::Screen;
+    use rmux_core::screen::selection::SelectionType;
+    use rmux_core::style::Style;
+    use rmux_core::utf8::Utf8Char;
+
+    fn make_screen(width: u32, height: u32, lines: &[&str]) -> Screen {
+        let mut screen = Screen::new(width, height, 2000);
+        for (y, line) in lines.iter().enumerate() {
+            for (x, ch) in line.bytes().enumerate() {
+                screen.grid.set_cell(
+                    x as u32,
+                    y as u32,
+                    &GridCell {
+                        data: Utf8Char::from_ascii(ch),
+                        style: Style::DEFAULT,
+                        link: 0,
+                        flags: rmux_core::grid::cell::CellFlags::empty(),
+                    },
+                );
+            }
+        }
+        screen
+    }
+
+    #[test]
+    fn single_char_selection() {
+        let screen = make_screen(80, 24, &["ABCDE"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 2;
+        cm.begin_selection(screen.grid.history_size());
+        // Don't move - select just one char
+        let data = copy_selection(&screen, &cm).unwrap();
+        assert_eq!(data, b"C");
+    }
+
+    #[test]
+    fn selection_reversed_direction() {
+        let screen = make_screen(80, 24, &["ABCDE"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 4;
+        cm.begin_selection(screen.grid.history_size());
+        cm.cx = 0; // Move left (reverse)
+        let data = copy_selection(&screen, &cm).unwrap();
+        assert_eq!(data, b"ABCDE");
+    }
+
+    #[test]
+    fn multiline_selection_trims_trailing_spaces() {
+        let screen = make_screen(80, 24, &["Hello   ", "World   "]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+        cm.begin_selection(screen.grid.history_size());
+        cm.cy = 1;
+        cm.cx = 4;
+        let data = copy_selection(&screen, &cm).unwrap();
+        let text = String::from_utf8_lossy(&data);
+        // Lines should have trailing spaces trimmed between them
+        assert!(text.starts_with("Hello"));
+        assert!(text.contains("World"));
+    }
+
+    #[test]
+    fn line_selection_multiple_lines() {
+        let screen = make_screen(80, 24, &["AAA", "BBB", "CCC"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+        cm.select_line(screen.grid.history_size());
+        cm.cy = 2; // Extend to line 2
+        let data = copy_selection(&screen, &cm).unwrap();
+        let text = String::from_utf8_lossy(&data);
+        assert!(text.contains("AAA"));
+        assert!(text.contains("BBB"));
+        assert!(text.contains("CCC"));
+    }
+
+    #[test]
+    fn rectangle_toggle_from_line_stays_line() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.select_line(screen.grid.history_size());
+        assert_eq!(cm.sel_type, SelectionType::Line);
+        cm.rectangle_toggle();
+        // Line stays Line (only Normal <-> Block toggle)
+        assert_eq!(cm.sel_type, SelectionType::Line);
+    }
+
+    #[test]
+    fn rectangle_toggle_normal_block_cycle() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.begin_selection(screen.grid.history_size());
+        assert_eq!(cm.sel_type, SelectionType::Normal);
+        cm.rectangle_toggle();
+        assert_eq!(cm.sel_type, SelectionType::Block);
+        cm.rectangle_toggle();
+        assert_eq!(cm.sel_type, SelectionType::Normal);
+    }
+
+    #[test]
+    fn rectangle_toggle_without_selection_noop() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        assert!(!cm.selecting);
+        cm.rectangle_toggle();
+        // Should not crash; selection type is unchanged
+        assert_eq!(cm.sel_type, SelectionType::Normal);
+    }
+
+    #[test]
+    fn current_selection_none_when_not_selecting() {
+        let screen = Screen::new(80, 24, 2000);
+        let cm = CopyModeState::enter(&screen, "vi");
+        assert!(cm.current_selection(0).is_none());
+    }
+
+    #[test]
+    fn current_selection_some_when_selecting() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 5;
+        cm.cx = 10;
+        cm.begin_selection(screen.grid.history_size());
+        cm.cy = 8;
+        cm.cx = 20;
+        let sel = cm.current_selection(screen.grid.history_size()).unwrap();
+        assert_eq!(sel.start_x, 10);
+        assert_eq!(sel.end_x, 20);
+        assert!(sel.active);
+    }
+
+    #[test]
+    fn block_selection_columns() {
+        let screen = make_screen(80, 24, &["0123456789", "ABCDEFGHIJ", "abcdefghij"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 2;
+        cm.begin_selection(screen.grid.history_size());
+        cm.rectangle_toggle();
+        cm.cy = 2;
+        cm.cx = 5;
+        let data = copy_selection(&screen, &cm).unwrap();
+        let text = String::from_utf8_lossy(&data);
+        assert!(text.contains("2345"));
+        assert!(text.contains("CDEF"));
+        assert!(text.contains("cdef"));
+    }
+}
+
+// ============================================================
+// Extended key table and string_to_key tests
+// ============================================================
+
+mod key_table_extended {
+    use crate::keybind::{KeyBindings, string_to_key};
+    use rmux_core::key::*;
+
+    #[test]
+    fn vi_word_bindings() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'w' as KeyCode),
+            Some(&vec!["next-word".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'b' as KeyCode),
+            Some(&vec!["previous-word".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'e' as KeyCode),
+            Some(&vec!["next-word-end".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_line_bindings() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'0' as KeyCode),
+            Some(&vec!["start-of-line".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'$' as KeyCode),
+            Some(&vec!["end-of-line".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'^' as KeyCode),
+            Some(&vec!["back-to-indentation".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_page_bindings() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_PPAGE),
+            Some(&vec!["page-up".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_NPAGE),
+            Some(&vec!["page-down".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_top_bottom_bindings() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'g' as KeyCode),
+            Some(&vec!["history-top".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'G' as KeyCode),
+            Some(&vec!["history-bottom".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_line_selection() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'V' as KeyCode),
+            Some(&vec!["select-line".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_arrow_keys() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_UP),
+            Some(&vec!["cursor-up".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_DOWN),
+            Some(&vec!["cursor-down".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_LEFT),
+            Some(&vec!["cursor-left".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_RIGHT),
+            Some(&vec!["cursor-right".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_home_end() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_HOME),
+            Some(&vec!["start-of-line".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_END),
+            Some(&vec!["end-of-line".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_enter_copies() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_RETURN),
+            Some(&vec!["copy-selection-and-cancel".to_string()])
+        );
+    }
+
+    #[test]
+    fn vi_space_begins_selection() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", KEYC_SPACE),
+            Some(&vec!["begin-selection".to_string()])
+        );
+    }
+
+    #[test]
+    fn emacs_navigation_bindings() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_UP),
+            Some(&vec!["cursor-up".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_DOWN),
+            Some(&vec!["cursor-down".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_LEFT),
+            Some(&vec!["cursor-left".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_RIGHT),
+            Some(&vec!["cursor-right".to_string()])
+        );
+    }
+
+    #[test]
+    fn emacs_page_bindings() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_PPAGE),
+            Some(&vec!["page-up".to_string()])
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_NPAGE),
+            Some(&vec!["page-down".to_string()])
+        );
+    }
+
+    #[test]
+    fn emacs_cancel() {
+        let kb = KeyBindings::default_bindings();
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-emacs", KEYC_ESCAPE),
+            Some(&vec!["cancel".to_string()])
+        );
+    }
+
+    #[test]
+    fn custom_binding_in_copy_mode_table() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.add_binding(
+            "copy-mode-vi",
+            b'z' as KeyCode,
+            vec!["custom-action".into()],
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'z' as KeyCode),
+            Some(&vec!["custom-action".to_string()])
+        );
+    }
+
+    #[test]
+    fn binding_overwrite() {
+        let mut kb = KeyBindings::default_bindings();
+        // h is cursor-left by default
+        kb.add_binding(
+            "copy-mode-vi",
+            b'h' as KeyCode,
+            vec!["replaced".into()],
+        );
+        assert_eq!(
+            kb.lookup_in_table("copy-mode-vi", b'h' as KeyCode),
+            Some(&vec!["replaced".to_string()])
+        );
+    }
+
+    #[test]
+    fn remove_nonexistent_returns_false() {
+        let mut kb = KeyBindings::default_bindings();
+        assert!(!kb.remove_binding("copy-mode-vi", 0xDEAD));
+    }
+
+    #[test]
+    fn lookup_nonexistent_table() {
+        let kb = KeyBindings::default_bindings();
+        assert!(kb.lookup_in_table("nonexistent", b'a' as KeyCode).is_none());
+    }
+
+    // string_to_key tests
+    #[test]
+    fn string_to_key_single_char() {
+        assert_eq!(string_to_key("a"), Some(b'a' as KeyCode));
+        assert_eq!(string_to_key("Z"), Some(b'Z' as KeyCode));
+    }
+
+    #[test]
+    fn string_to_key_special_keys() {
+        assert_eq!(string_to_key("Up"), Some(KEYC_UP));
+        assert_eq!(string_to_key("Down"), Some(KEYC_DOWN));
+        assert_eq!(string_to_key("Left"), Some(KEYC_LEFT));
+        assert_eq!(string_to_key("Right"), Some(KEYC_RIGHT));
+        assert_eq!(string_to_key("Home"), Some(KEYC_HOME));
+        assert_eq!(string_to_key("End"), Some(KEYC_END));
+        assert_eq!(string_to_key("Enter"), Some(KEYC_RETURN));
+        assert_eq!(string_to_key("Escape"), Some(KEYC_ESCAPE));
+        assert_eq!(string_to_key("Space"), Some(KEYC_SPACE));
+        assert_eq!(string_to_key("Tab"), Some(KEYC_TAB));
+        assert_eq!(string_to_key("BSpace"), Some(KEYC_BACKSPACE));
+        assert_eq!(string_to_key("PPage"), Some(KEYC_PPAGE));
+        assert_eq!(string_to_key("NPage"), Some(KEYC_NPAGE));
+    }
+
+    #[test]
+    fn string_to_key_function_keys() {
+        assert_eq!(string_to_key("F1"), Some(KEYC_F1));
+        assert_eq!(string_to_key("F12"), Some(KEYC_F12));
+    }
+
+    #[test]
+    fn string_to_key_ctrl_modifier() {
+        let key = string_to_key("C-b").unwrap();
+        assert_eq!(keyc_base(key), b'b' as KeyCode);
+        assert!(keyc_modifiers(key).contains(KeyModifiers::CTRL));
+    }
+
+    #[test]
+    fn string_to_key_meta_modifier() {
+        let key = string_to_key("M-x").unwrap();
+        assert_eq!(keyc_base(key), b'x' as KeyCode);
+        assert!(keyc_modifiers(key).contains(KeyModifiers::META));
+    }
+
+    #[test]
+    fn string_to_key_shift_modifier() {
+        let key = string_to_key("S-Up").unwrap();
+        assert_eq!(keyc_base(key), KEYC_UP);
+        assert!(keyc_modifiers(key).contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn string_to_key_invalid() {
+        assert!(string_to_key("FooBar").is_none());
+        assert!(string_to_key("F99").is_none());
+    }
+
+    #[test]
+    fn string_to_key_aliases() {
+        assert_eq!(string_to_key("CR"), Some(KEYC_RETURN));
+        assert_eq!(string_to_key("Esc"), Some(KEYC_ESCAPE));
+        assert_eq!(string_to_key("IC"), Some(KEYC_INSERT));
+        assert_eq!(string_to_key("DC"), Some(KEYC_DELETE));
+        assert_eq!(string_to_key("PageUp"), Some(KEYC_PPAGE));
+        assert_eq!(string_to_key("PageDown"), Some(KEYC_NPAGE));
+    }
+}
+
+// ============================================================
+// Extended mouse parsing edge cases
+// ============================================================
+
+mod mouse_extended {
+    use rmux_core::key::*;
+    use rmux_terminal::mouse;
+
+    #[test]
+    fn x10_middle_button() {
+        // Button 1 (middle): cb bit 1 set
+        let data = [32 + 1, 43, 38]; // button=1, x=10, y=5
+        let result = mouse::try_parse_mouse_csi(&[b'M', data[0], data[1], data[2]]).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN2);
+    }
+
+    #[test]
+    fn x10_right_button() {
+        let data = [32 + 2, 43, 38];
+        let result = mouse::try_parse_mouse_csi(&[b'M', data[0], data[1], data[2]]).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN3);
+    }
+
+    #[test]
+    fn sgr_button2_click() {
+        let result = mouse::try_parse_mouse_csi(b"<1;5;10M").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN2);
+        assert_eq!(result.x, 4);
+        assert_eq!(result.y, 9);
+    }
+
+    #[test]
+    fn sgr_button3_click() {
+        let result = mouse::try_parse_mouse_csi(b"<2;5;10M").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN3);
+    }
+
+    #[test]
+    fn sgr_button2_release() {
+        let result = mouse::try_parse_mouse_csi(b"<1;5;10m").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEUP2);
+    }
+
+    #[test]
+    fn sgr_button3_release() {
+        let result = mouse::try_parse_mouse_csi(b"<2;5;10m").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEUP3);
+    }
+
+    #[test]
+    fn sgr_drag_button2() {
+        let result = mouse::try_parse_mouse_csi(b"<33;15;20M").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDRAG2);
+    }
+
+    #[test]
+    fn sgr_drag_button3() {
+        let result = mouse::try_parse_mouse_csi(b"<34;15;20M").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDRAG3);
+    }
+
+    #[test]
+    fn sgr_large_coordinates() {
+        let result = mouse::try_parse_mouse_csi(b"<0;256;128M").unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 255);
+        assert_eq!(result.y, 127);
+    }
+
+    #[test]
+    fn encode_all_mouse_events() {
+        // Test roundtrip for every type of mouse event
+        let events: [(KeyCode, u8); 9] = [
+            (KEYC_MOUSEDOWN1, b'M'),
+            (KEYC_MOUSEDOWN2, b'M'),
+            (KEYC_MOUSEDOWN3, b'M'),
+            (KEYC_MOUSEUP1, b'm'),
+            (KEYC_MOUSEUP2, b'm'),
+            (KEYC_MOUSEUP3, b'm'),
+            (KEYC_MOUSEDRAG1, b'M'),
+            (KEYC_WHEELUP, b'M'),
+            (KEYC_WHEELDOWN, b'M'),
+        ];
+        for &(key, expected_final) in &events {
+            let encoded = mouse::encode_sgr_mouse(key, 5, 3);
+            // Check the final byte
+            assert_eq!(*encoded.last().unwrap(), expected_final, "key={key:#x}");
+        }
+    }
+
+    #[test]
+    fn invalid_csi_returns_none() {
+        // Not a mouse sequence
+        assert!(mouse::try_parse_mouse_csi(b"A").is_none()); // Arrow key
+        assert!(mouse::try_parse_mouse_csi(b"").is_none());
+    }
+
+    #[test]
+    fn incomplete_sgr_returns_none() {
+        // Missing final M/m
+        assert!(mouse::try_parse_mouse_csi(b"<0;5;").is_none());
+    }
+
+    #[test]
+    fn encode_sgr_coordinate_values() {
+        // SGR is 1-based
+        let encoded = mouse::encode_sgr_mouse(KEYC_MOUSEDOWN1, 0, 0);
+        assert_eq!(encoded, b"\x1b[<0;1;1M"); // 0+1=1, 0+1=1
+    }
+}
+
+// ============================================================
+// Extended layout/pane_at tests
+// ============================================================
+
+mod layout_extended {
+    use rmux_core::layout::{LayoutCell, layout_even_horizontal, layout_even_vertical};
+
+    #[test]
+    fn pane_at_out_of_bounds_returns_none() {
+        let layout = LayoutCell::new_pane(0, 0, 80, 24, 1);
+        assert!(layout.pane_at(80, 0).is_none());
+        assert!(layout.pane_at(0, 24).is_none());
+        assert!(layout.pane_at(100, 100).is_none());
+    }
+
+    #[test]
+    fn pane_at_single_pane_all_coords() {
+        let layout = LayoutCell::new_pane(0, 0, 10, 5, 42);
+        for y in 0..5 {
+            for x in 0..10 {
+                assert_eq!(layout.pane_at(x, y), Some(42));
+            }
+        }
+    }
+
+    #[test]
+    fn pane_at_horizontal_boundaries() {
+        let layout = layout_even_horizontal(80, 24, &[1, 2]);
+        // Check that each x coord maps to the right pane
+        let pane_0_0 = layout.pane_at(0, 0);
+        let pane_79_0 = layout.pane_at(79, 0);
+        assert_eq!(pane_0_0, Some(1));
+        assert_eq!(pane_79_0, Some(2));
+        // They should be different panes
+        assert_ne!(pane_0_0, pane_79_0);
+    }
+
+    #[test]
+    fn pane_at_vertical_boundaries() {
+        let layout = layout_even_vertical(80, 24, &[1, 2]);
+        let pane_top = layout.pane_at(0, 0);
+        let pane_bot = layout.pane_at(0, 23);
+        assert_eq!(pane_top, Some(1));
+        assert_eq!(pane_bot, Some(2));
+    }
+
+    #[test]
+    fn find_pane_returns_cell() {
+        let layout = layout_even_horizontal(80, 24, &[10, 20]);
+        let cell = layout.find_pane(10);
+        assert!(cell.is_some());
+        let cell = cell.unwrap();
+        assert_eq!(cell.pane_id, Some(10));
+    }
+
+    #[test]
+    fn find_pane_nonexistent() {
+        let layout = layout_even_horizontal(80, 24, &[1, 2]);
+        assert!(layout.find_pane(99).is_none());
+    }
+}
+
+// ============================================================
+// Full workflow / integration tests
+// ============================================================
+
+mod workflow_tests {
+    use super::*;
+
+    #[test]
+    fn set_buffer_list_paste_workflow() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Set multiple buffers
+        exec(&mut s, &["set-buffer", "-b", "buf1", "first"]).unwrap();
+        exec(&mut s, &["set-buffer", "-b", "buf2", "second"]).unwrap();
+        exec(&mut s, &["set-buffer", "-b", "buf3", "third"]).unwrap();
+
+        // List should show all three
+        let output = output_text(exec(&mut s, &["list-buffers"]));
+        assert!(output.contains("buf1"));
+        assert!(output.contains("buf2"));
+        assert!(output.contains("buf3"));
+
+        // Paste the most recent (top of stack)
+        let result = exec(&mut s, &["paste-buffer"]);
+        assert!(result.is_ok());
+
+        // Paste specific named buffer
+        let result = exec(&mut s, &["paste-buffer", "-b", "buf1"]);
+        assert!(result.is_ok());
+
+        // Delete one and verify it's gone
+        exec(&mut s, &["delete-buffer", "-b", "buf2"]).unwrap();
+        assert!(exec(&mut s, &["show-buffer", "-b", "buf2"]).is_err());
+
+        // Others still exist
+        let output = output_text(exec(&mut s, &["show-buffer", "-b", "buf1"]));
+        assert_eq!(output, "first");
+    }
+
+    #[test]
+    fn copy_mode_enter_via_command() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        assert!(!s.copy_mode_entered);
+        exec(&mut s, &["copy-mode"]).unwrap();
+        assert!(s.copy_mode_entered);
+    }
+
+    #[test]
+    fn bind_key_for_copy_mode_lookup() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Add a custom binding to copy-mode-vi
+        exec(
+            &mut s,
+            &["bind-key", "-T", "copy-mode-vi", "z", "custom-cmd"],
+        )
+        .unwrap();
+
+        // Verify via list-keys
+        let output = output_text(exec(&mut s, &["list-keys"]));
+        assert!(output.contains("copy-mode-vi"));
+        assert!(output.contains("custom-cmd"));
+    }
+
+    #[test]
+    fn unbind_key_in_copy_mode_table() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Unbind 'q' from copy-mode-vi
+        exec(&mut s, &["unbind-key", "-T", "copy-mode-vi", "q"]).unwrap();
+
+        // Verify it's gone by checking list-keys doesn't have q -> cancel
+        let output = output_text(exec(&mut s, &["list-keys"]));
+        // The binding for 'q' with 'cancel' should be gone
+        let has_q_cancel = output
+            .lines()
+            .any(|l| l.contains("copy-mode-vi") && l.contains(" q ") && l.contains("cancel"));
+        assert!(!has_q_cancel);
+    }
+
+    #[test]
+    fn list_commands_includes_phase5_commands() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["list-commands"]));
+        assert!(output.contains("copy-mode"));
+        assert!(output.contains("paste-buffer"));
+        assert!(output.contains("list-buffers"));
+        assert!(output.contains("show-buffer"));
+        assert!(output.contains("set-buffer"));
+        assert!(output.contains("delete-buffer"));
+    }
+
+    #[test]
+    fn buffer_overflow_lifo_ordering() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Add buffers and verify LIFO ordering
+        for i in 0..5 {
+            exec(&mut s, &["set-buffer", &format!("data{i}")]).unwrap();
+        }
+
+        let output = output_text(exec(&mut s, &["list-buffers"]));
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 5);
+        // Most recent should be first
+        assert!(lines[0].contains("data4"));
+    }
+
+    #[test]
+    fn copy_mode_on_pane_directly() {
+        use crate::copymode::{copy_selection, dispatch_copy_mode_action};
+        use crate::pane::Pane;
+        use rmux_core::grid::cell::GridCell;
+        use rmux_core::style::Style;
+        use rmux_core::utf8::Utf8Char;
+
+        // Create pane and write content
+        let mut pane = Pane::new(80, 24, 2000);
+        for (x, ch) in b"Hello World".iter().enumerate() {
+            pane.screen.grid.set_cell(
+                x as u32,
+                0,
+                &GridCell {
+                    data: Utf8Char::from_ascii(*ch),
+                    style: Style::DEFAULT,
+                    link: 0,
+                    flags: rmux_core::grid::cell::CellFlags::empty(),
+                },
+            );
+        }
+
+        // Enter copy mode
+        pane.enter_copy_mode("vi");
+        assert!(pane.is_in_copy_mode());
+
+        // Navigate and select
+        let cm = pane.copy_mode.as_mut().unwrap();
+        cm.cy = 0;
+        cm.cx = 0;
+
+        dispatch_copy_mode_action(&pane.screen, cm, "begin-selection");
+        cm.cx = 4;
+
+        // Copy
+        let data = copy_selection(&pane.screen, cm);
+        assert_eq!(data.unwrap(), b"Hello");
+
+        // Exit copy mode
+        pane.exit_copy_mode();
+        assert!(!pane.is_in_copy_mode());
+    }
+
+    #[test]
+    fn pasteb_alias_works() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-buffer", "-b", "x", "data"]).unwrap();
+        let result = exec(&mut s, &["pasteb", "-b", "x"]);
+        assert!(result.is_ok());
+    }
+}
+
+// ============================================================
+// Selection contains tests (e2e over selection module)
+// ============================================================
+
+mod selection_contains_tests {
+    use rmux_core::screen::selection::{Selection, SelectionType};
+
+    #[test]
+    fn normal_single_line() {
+        let sel = Selection {
+            sel_type: SelectionType::Normal,
+            start_x: 3,
+            start_y: 5,
+            end_x: 8,
+            end_y: 5,
+            active: true,
+        };
+        assert!(sel.contains(3, 5));
+        assert!(sel.contains(5, 5));
+        assert!(sel.contains(8, 5));
+        assert!(!sel.contains(2, 5));
+        assert!(!sel.contains(9, 5));
+        assert!(!sel.contains(5, 4));
+        assert!(!sel.contains(5, 6));
+    }
+
+    #[test]
+    fn normal_multiline_middle_row_full() {
+        let sel = Selection {
+            sel_type: SelectionType::Normal,
+            start_x: 5,
+            start_y: 2,
+            end_x: 10,
+            end_y: 4,
+            active: true,
+        };
+        // Middle row (y=3) should include all columns
+        assert!(sel.contains(0, 3));
+        assert!(sel.contains(100, 3));
+    }
+
+    #[test]
+    fn block_selection_strict_bounds() {
+        let sel = Selection {
+            sel_type: SelectionType::Block,
+            start_x: 3,
+            start_y: 1,
+            end_x: 7,
+            end_y: 5,
+            active: true,
+        };
+        assert!(sel.contains(3, 1));
+        assert!(sel.contains(7, 5));
+        assert!(sel.contains(5, 3));
+        assert!(!sel.contains(2, 3)); // Before left edge
+        assert!(!sel.contains(8, 3)); // After right edge
+        assert!(!sel.contains(5, 0)); // Above
+        assert!(!sel.contains(5, 6)); // Below
+    }
+
+    #[test]
+    fn line_selection_ignores_x() {
+        let sel = Selection {
+            sel_type: SelectionType::Line,
+            start_x: 10,
+            start_y: 3,
+            end_x: 20,
+            end_y: 5,
+            active: true,
+        };
+        assert!(sel.contains(0, 3));
+        assert!(sel.contains(1000, 4));
+        assert!(sel.contains(0, 5));
+        assert!(!sel.contains(0, 2));
+        assert!(!sel.contains(0, 6));
+    }
+
+    #[test]
+    fn selection_normalized_reversed() {
+        let sel = Selection {
+            sel_type: SelectionType::Normal,
+            start_x: 10,
+            start_y: 5,
+            end_x: 3,
+            end_y: 2,
+            active: true,
+        };
+        let (sx, sy, ex, ey) = sel.normalized();
+        assert_eq!((sx, sy, ex, ey), (3, 2, 10, 5));
+    }
+
+    #[test]
+    fn selection_normalized_same_line_reversed() {
+        let sel = Selection {
+            sel_type: SelectionType::Normal,
+            start_x: 10,
+            start_y: 3,
+            end_x: 2,
+            end_y: 3,
+            active: true,
+        };
+        let (sx, sy, ex, ey) = sel.normalized();
+        assert_eq!((sx, sy, ex, ey), (2, 3, 10, 3));
+    }
+}
+
+// ============================================================
+// Key input processing tests
+// ============================================================
+
+mod key_input_tests {
+    use crate::keybind::{KeyAction, KeyBindings};
+
+    #[test]
+    fn normal_char_passes_through() {
+        let mut kb = KeyBindings::default_bindings();
+        assert!(kb.process_input(b"a").is_none());
+        assert!(kb.process_input(b"z").is_none());
+        assert!(kb.process_input(b"1").is_none());
+    }
+
+    #[test]
+    fn prefix_then_unknown_key_ignored() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02"); // Prefix
+        let result = kb.process_input(b"@"); // Not bound
+        assert!(result.is_none());
+        // Prefix should be cleared after processing a key
+        // Verify by sending another key that is not prefix - should pass through
+        let result2 = kb.process_input(b"a");
+        assert!(result2.is_none()); // Not in prefix mode anymore
+    }
+
+    #[test]
+    fn double_prefix_sends_ctrl_b() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02"); // First prefix
+        let result = kb.process_input(b"\x02"); // Second prefix
+        match result {
+            Some(KeyAction::SendToPane(data)) => {
+                assert_eq!(data, vec![0x02]);
+            }
+            _ => panic!("expected SendToPane"),
+        }
+    }
+
+    #[test]
+    fn prefix_window_number_keys() {
+        let mut kb = KeyBindings::default_bindings();
+        for i in 0u8..=9 {
+            kb.process_input(b"\x02");
+            let result = kb.process_input(&[b'0' + i]);
+            match result {
+                Some(KeyAction::Command(argv)) => {
+                    assert_eq!(argv[0], "select-window");
+                    assert_eq!(argv[2], i.to_string());
+                }
+                _ => panic!("expected Command for key {i}"),
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_c_creates_window() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        match kb.process_input(b"c") {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["new-window"]);
+            }
+            _ => panic!("expected Command for new-window"),
+        }
+    }
+
+    #[test]
+    fn prefix_x_kills_pane() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        match kb.process_input(b"x") {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["kill-pane"]);
+            }
+            _ => panic!("expected Command for kill-pane"),
+        }
+    }
+
+    #[test]
+    fn prefix_colon_command_prompt() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        match kb.process_input(b":") {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["command-prompt"]);
+            }
+            _ => panic!("expected Command for command-prompt"),
+        }
+    }
+}
