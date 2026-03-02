@@ -100,26 +100,30 @@ pub async fn run_command(
     crate::connect::send_command(writer, argv).await?;
 
     // Read responses until Exit
-    let exit_code = 0;
+    let mut exit_code = 0;
     loop {
         match reader.read_message().await {
-            Ok(Some(msg)) => {
-                match msg {
-                    Message::OutputData(data) => {
-                        let mut stdout = tokio::io::stdout();
-                        stdout.write_all(&data).await.map_err(CodecError::Io)?;
-                        stdout.flush().await.map_err(CodecError::Io)?;
-                    }
-                    Message::Ready => {
-                        // Server is ready for us to attach
-                        return Ok(-1); // Signal to switch to attached mode
-                    }
-                    Message::Exit | Message::Exited => {
-                        break;
-                    }
-                    _ => {}
+            Ok(Some(msg)) => match msg {
+                Message::OutputData(data) => {
+                    let mut stdout = tokio::io::stdout();
+                    stdout.write_all(&data).await.map_err(CodecError::Io)?;
+                    stdout.flush().await.map_err(CodecError::Io)?;
                 }
-            }
+                Message::ErrorOutput(data) => {
+                    let mut stderr = tokio::io::stderr();
+                    stderr.write_all(&data).await.map_err(CodecError::Io)?;
+                    stderr.flush().await.map_err(CodecError::Io)?;
+                    exit_code = 1;
+                }
+                Message::Ready => {
+                    // Server is ready for us to attach
+                    return Ok(-1); // Signal to switch to attached mode
+                }
+                Message::Exit | Message::Exited => {
+                    break;
+                }
+                _ => {}
+            },
             Ok(None) => break,
             Err(e) => return Err(e),
         }

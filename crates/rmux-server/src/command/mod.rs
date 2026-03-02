@@ -124,6 +124,10 @@ pub trait CommandServer {
         direction: Direction,
     ) -> Result<(), ServerError>;
     fn list_panes(&self, session_id: u32, window_idx: u32) -> Vec<String>;
+    /// Get the active pane ID for a specific session's active window.
+    fn active_pane_id_for(&self, session_id: u32, window_idx: u32) -> Option<u32>;
+    /// Get the active window index for a given session.
+    fn active_window_for(&self, session_id: u32) -> Option<u32>;
 
     // --- Info ---
     fn list_clients(&self) -> Vec<String>;

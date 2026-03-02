@@ -326,7 +326,7 @@ impl Server {
             Err(e) => {
                 let err_msg = format!("{e}\n");
                 if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.send(&Message::OutputData(err_msg.into_bytes())).await.ok();
+                    client.send(&Message::ErrorOutput(err_msg.into_bytes())).await.ok();
                     client.send(&Message::Exit).await.ok();
                 }
             }
@@ -1183,6 +1183,17 @@ impl CommandServer for Server {
                 )
             })
             .collect()
+    }
+
+    fn active_window_for(&self, session_id: u32) -> Option<u32> {
+        let session = self.sessions.find_by_id(session_id)?;
+        Some(session.active_window)
+    }
+
+    fn active_pane_id_for(&self, session_id: u32, window_idx: u32) -> Option<u32> {
+        let session = self.sessions.find_by_id(session_id)?;
+        let window = session.windows.get(&window_idx)?;
+        Some(window.active_pane)
     }
 
     // --- Info ---

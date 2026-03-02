@@ -48,44 +48,32 @@ pub fn cmd_select_window(
     Ok(CommandResult::Ok)
 }
 
-/// next-window
-#[allow(clippy::unnecessary_wraps)]
+/// next-window [-t target-session]
 pub fn cmd_next_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    let session_id = server
-        .client_session_id()
-        .ok_or_else(|| ServerError::Command("no current session".into()))?;
+    let session_id = resolve_session(args, server)?;
     server.next_window(session_id)?;
     Ok(CommandResult::Ok)
 }
 
-/// previous-window
-#[allow(clippy::unnecessary_wraps)]
+/// previous-window [-t target-session]
 pub fn cmd_previous_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    let session_id = server
-        .client_session_id()
-        .ok_or_else(|| ServerError::Command("no current session".into()))?;
+    let session_id = resolve_session(args, server)?;
     server.previous_window(session_id)?;
     Ok(CommandResult::Ok)
 }
 
-/// last-window
-#[allow(clippy::unnecessary_wraps)]
+/// last-window [-t target-session]
 pub fn cmd_last_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    let session_id = server
-        .client_session_id()
-        .ok_or_else(|| ServerError::Command("no current session".into()))?;
+    let session_id = resolve_session(args, server)?;
     server.last_window(session_id)?;
     Ok(CommandResult::Ok)
 }
@@ -138,7 +126,7 @@ fn resolve_session(args: &[String], server: &dyn CommandServer) -> Result<u32, S
 fn resolve_window_idx(
     args: &[String],
     server: &dyn CommandServer,
-    _session_id: u32,
+    session_id: u32,
 ) -> Result<u32, ServerError> {
     if let Some(target) = get_option(args, "-t") {
         // Target could contain "session:window_idx"
@@ -146,19 +134,20 @@ fn resolve_window_idx(
             idx_str
                 .parse()
                 .map_err(|_| ServerError::Command(format!("invalid window index: {idx_str}")))
+        } else if target.parse::<u32>().is_ok() {
+            // Bare window index
+            Ok(target.parse().unwrap())
         } else {
-            // Try parsing as a bare window index
-            target.parse().map_err(|_| {
-                // It might be just a session name, use active window
-                server
-                    .client_active_window()
-                    .ok_or(ServerError::Command("no current window".into()))
-                    .unwrap_err()
-            })
+            // It's a session name - use the session's active window
+            server
+                .active_window_for(session_id)
+                .or_else(|| server.client_active_window())
+                .ok_or_else(|| ServerError::Command("no current window".into()))
         }
     } else {
         server
-            .client_active_window()
+            .active_window_for(session_id)
+            .or_else(|| server.client_active_window())
             .ok_or_else(|| ServerError::Command("no current window".into()))
     }
 }

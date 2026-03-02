@@ -103,6 +103,8 @@ pub enum MessageType {
     OutputData = 400,
     /// Keyboard/input data from attached client to server.
     InputData = 401,
+    /// Error output from server (written to stderr by client).
+    ErrorOutput = 402,
 }
 
 impl MessageType {
@@ -153,6 +155,7 @@ impl MessageType {
             307 => Some(Self::ReadCancel),
             400 => Some(Self::OutputData),
             401 => Some(Self::InputData),
+            402 => Some(Self::ErrorOutput),
             _ => None,
         }
     }
@@ -274,6 +277,8 @@ pub enum Message {
     OutputData(Vec<u8>),
     /// Keyboard/input data from attached client to server.
     InputData(Vec<u8>),
+    /// Error output from server (written to stderr by client).
+    ErrorOutput(Vec<u8>),
 }
 
 #[cfg(test)]

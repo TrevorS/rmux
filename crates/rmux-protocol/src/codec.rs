@@ -200,7 +200,7 @@ fn encode_message_data(msg: &Message, buf: &mut BytesMut) {
         Message::WriteClose(m) => {
             buf.put_i32_le(m.stream);
         }
-        Message::OutputData(data) | Message::InputData(data) => {
+        Message::OutputData(data) | Message::InputData(data) | Message::ErrorOutput(data) => {
             buf.put_slice(data);
         }
     }
@@ -312,6 +312,7 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
         // rmux extensions
         MessageType::OutputData => Ok(Message::OutputData(data.to_vec())),
         MessageType::InputData => Ok(Message::InputData(data.to_vec())),
+        MessageType::ErrorOutput => Ok(Message::ErrorOutput(data.to_vec())),
     }
 }
 
@@ -356,6 +357,7 @@ fn message_to_type(msg: &Message) -> MessageType {
         Message::WriteClose(_) => MessageType::WriteClose,
         Message::OutputData(_) => MessageType::OutputData,
         Message::InputData(_) => MessageType::InputData,
+        Message::ErrorOutput(_) => MessageType::ErrorOutput,
     }
 }
 

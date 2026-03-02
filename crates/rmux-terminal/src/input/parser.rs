@@ -604,8 +604,7 @@ impl InputParser {
                 }
                 23 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::ITALICS,
                 24 => {
-                    screen.cursor.style.attrs -=
-                        screen.cursor.style.attrs & Attrs::ALL_UNDERLINES;
+                    screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::ALL_UNDERLINES;
                 }
                 25 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::BLINK,
                 27 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::REVERSE,
