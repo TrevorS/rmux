@@ -273,4 +273,42 @@ mod tests {
     fn incomplete_sgr_returns_none() {
         assert!(parse_sgr_mouse(b"0;11;").is_none());
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn try_parse_mouse_csi_never_panics(data in proptest::collection::vec(any::<u8>(), 0..128)) {
+                let _ = try_parse_mouse_csi(&data);
+            }
+
+            #[test]
+            fn parse_x10_never_panics(data in proptest::collection::vec(any::<u8>(), 0..64)) {
+                let _ = parse_x10_mouse(&data);
+            }
+
+            #[test]
+            fn parse_sgr_never_panics(data in proptest::collection::vec(any::<u8>(), 0..64)) {
+                let _ = parse_sgr_mouse(&data);
+            }
+
+            #[test]
+            fn sgr_encode_decode_roundtrip(
+                x in 0u32..200,
+                y in 0u32..60,
+            ) {
+                // Encode button 1 press, then parse
+                let encoded = encode_sgr_mouse(KEYC_MOUSEDOWN1, x, y);
+                // Skip the ESC[ prefix (should be \x1b[)
+                if encoded.len() > 2 && encoded[0] == 0x1b && encoded[1] == b'[' {
+                    if let Some(parsed) = try_parse_mouse_csi(&encoded[2..]) {
+                        prop_assert_eq!(parsed.x, x);
+                        prop_assert_eq!(parsed.y, y);
+                    }
+                }
+            }
+        }
+    }
 }

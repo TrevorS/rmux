@@ -1,0 +1,35 @@
+[package]
+name = "rmux-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rmux-core = { path = "../crates/rmux-core" }
+rmux-terminal = { path = "../crates/rmux-terminal" }
+rmux-protocol = { path = "../crates/rmux-protocol" }
+bytes = "1"
+
+[[bin]]
+name = "fuzz_input_parser"
+path = "fuzz_targets/fuzz_input_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_key_parser"
+path = "fuzz_targets/fuzz_key_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_mouse_parser"
+path = "fuzz_targets/fuzz_mouse_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_protocol_codec"
+path = "fuzz_targets/fuzz_protocol_codec.rs"
+doc = false

@@ -124,4 +124,73 @@ mod tests {
         assert_eq!(state.environ.len(), 1);
         assert_eq!(state.environ[0], ("TERM".to_string(), "xterm".to_string()));
     }
+
+    #[test]
+    fn identify_flags_processed() {
+        let mut state = IdentifyState::default();
+        state.process(&Message::IdentifyFlags(0x42));
+        assert_eq!(state.flags, 0x42);
+    }
+
+    #[test]
+    fn identify_environ_parsing() {
+        let mut state = IdentifyState::default();
+        state.process(&Message::IdentifyEnviron("PATH=/usr/bin".to_string()));
+        state.process(&Message::IdentifyEnviron("HOME=/root".to_string()));
+        assert_eq!(state.environ.len(), 2);
+        assert_eq!(state.environ[0], ("PATH".to_string(), "/usr/bin".to_string()));
+        assert_eq!(state.environ[1], ("HOME".to_string(), "/root".to_string()));
+    }
+
+    #[test]
+    fn identify_environ_no_equals() {
+        let mut state = IdentifyState::default();
+        state.process(&Message::IdentifyEnviron("NOVALUE".to_string()));
+        assert_eq!(state.environ.len(), 0);
+    }
+
+    #[test]
+    fn identify_features() {
+        let mut state = IdentifyState::default();
+        state.process(&Message::IdentifyFeatures("256,RGB".to_string()));
+        assert_eq!(state.features, "256,RGB");
+    }
+
+    #[test]
+    fn identify_done_returns_true() {
+        let mut state = IdentifyState::default();
+        assert!(!state.process(&Message::IdentifyTerm("xterm".to_string())));
+        assert!(state.process(&Message::IdentifyDone));
+        assert!(state.done);
+    }
+
+    #[test]
+    fn identify_unrelated_message_ignored() {
+        let mut state = IdentifyState::default();
+        assert!(!state.process(&Message::Ready));
+        assert!(!state.done);
+    }
+
+    #[test]
+    fn build_identify_includes_environ() {
+        let msgs = build_identify_sequence(
+            0,
+            "xterm",
+            "/dev/pts/0",
+            "/home",
+            1000,
+            &[
+                ("TERM".to_string(), "xterm".to_string()),
+                ("SHELL".to_string(), "/bin/bash".to_string()),
+            ],
+        );
+        let environ_count = msgs.iter().filter(|m| matches!(m, Message::IdentifyEnviron(_))).count();
+        assert_eq!(environ_count, 2);
+    }
+
+    #[test]
+    fn build_identify_ends_with_done() {
+        let msgs = build_identify_sequence(0, "xterm", "/dev/pts/0", "/home", 1000, &[]);
+        assert!(matches!(msgs.last(), Some(Message::IdentifyDone)));
+    }
 }

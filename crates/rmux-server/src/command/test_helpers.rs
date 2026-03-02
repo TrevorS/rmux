@@ -11,7 +11,7 @@ use crate::keybind::KeyBindings;
 use crate::pane::Pane;
 use crate::paste::PasteBufferStore;
 use crate::server::ServerError;
-use crate::session::{Session, SessionManager};
+use crate::session::SessionManager;
 use crate::window::Window;
 use rmux_core::layout::{LayoutCell, layout_even_horizontal, layout_even_vertical};
 use rmux_core::options::{OptionValue, Options, default_server_options};

@@ -197,4 +197,33 @@ mod tests {
         let c = Utf8Char::from_char('R');
         assert_eq!(format!("{c}"), "R");
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn ascii_roundtrip(ch in 0x20u8..0x7f) {
+                let u = Utf8Char::from_ascii(ch);
+                let bytes = u.as_bytes();
+                prop_assert_eq!(bytes.len(), 1);
+                prop_assert_eq!(bytes[0], ch);
+            }
+
+            #[test]
+            fn width_is_nonnegative(ch in proptest::char::any()) {
+                let u = Utf8Char::from_char(ch);
+                prop_assert!(u.width() <= 2);
+            }
+
+            #[test]
+            fn from_char_roundtrip(ch in proptest::char::any().prop_filter("not null", |c| *c != '\0' && !c.is_control())) {
+                let u = Utf8Char::from_char(ch);
+                let bytes = u.as_bytes();
+                let s = std::str::from_utf8(bytes);
+                prop_assert!(s.is_ok());
+            }
+        }
+    }
 }

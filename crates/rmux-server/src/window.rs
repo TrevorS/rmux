@@ -76,4 +76,49 @@ mod tests {
         assert_eq!(w.name, "0");
         assert_eq!(w.pane_count(), 0);
     }
+
+    #[test]
+    fn active_pane_empty() {
+        let w = Window::new("empty".into(), 80, 24);
+        assert!(w.active_pane().is_none());
+    }
+
+    #[test]
+    fn active_pane_found() {
+        use crate::pane::Pane;
+        let mut w = Window::new("found".into(), 80, 24);
+        let p = Pane::new(80, 24, 0);
+        let pid = p.id;
+        w.panes.insert(pid, p);
+        w.active_pane = pid;
+        assert!(w.active_pane().is_some());
+        assert_eq!(w.active_pane().unwrap().id, pid);
+    }
+
+    #[test]
+    fn active_pane_mut_found() {
+        use crate::pane::Pane;
+        let mut w = Window::new("mutfound".into(), 80, 24);
+        let p = Pane::new(80, 24, 0);
+        let pid = p.id;
+        w.panes.insert(pid, p);
+        w.active_pane = pid;
+        let pane = w.active_pane_mut().unwrap();
+        assert_eq!(pane.id, pid);
+        pane.sx = 100;
+        assert_eq!(w.panes.get(&pid).unwrap().sx, 100);
+    }
+
+    #[test]
+    fn pane_count_multiple() {
+        use crate::pane::Pane;
+        let mut w = Window::new("multi".into(), 80, 24);
+        let p1 = Pane::new(80, 24, 0);
+        let p2 = Pane::new(80, 24, 0);
+        let p3 = Pane::new(80, 24, 0);
+        w.panes.insert(p1.id, p1);
+        w.panes.insert(p2.id, p2);
+        w.panes.insert(p3.id, p3);
+        assert_eq!(w.pane_count(), 3);
+    }
 }

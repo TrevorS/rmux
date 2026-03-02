@@ -406,4 +406,44 @@ mod tests {
         assert_eq!(event.mouse_x, 0);
         assert_eq!(event.mouse_y, 0);
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn parse_key_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+                // parse_key should return None or Some without panicking
+                let _ = parse_key(&data);
+            }
+
+            #[test]
+            fn parse_key_event_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+                let _ = parse_key_event(&data);
+            }
+
+            #[test]
+            fn ascii_roundtrip(ch in 0x20u8..0x7f) {
+                let result = parse_key(&[ch]).unwrap();
+                prop_assert_eq!(result.0, ch as KeyCode);
+                prop_assert_eq!(result.1, 1);
+            }
+
+            #[test]
+            fn key_name_to_bytes_never_panics(name in "[a-zA-Z0-9_-]{1,20}") {
+                // Should return Some or None without panicking
+                let _ = key_name_to_bytes(&name);
+            }
+
+            #[test]
+            fn ctrl_keys_produce_ctrl_modifier(ch in b'a'..=b'z') {
+                let input = [ch - b'a' + 1]; // Ctrl+a = 0x01, Ctrl+z = 0x1a
+                let (key, consumed) = parse_key(&input).unwrap();
+                prop_assert_eq!(consumed, 1);
+                prop_assert_eq!(keyc_base(key), ch as KeyCode);
+                prop_assert!(keyc_modifiers(key).contains(KeyModifiers::CTRL));
+            }
+        }
+    }
 }

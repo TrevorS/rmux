@@ -207,4 +207,109 @@ mod tests {
         mgr.remove(id);
         assert_eq!(mgr.count(), 0);
     }
+
+    #[test]
+    fn next_window_index_empty_session() {
+        let session = Session::new("empty".into(), "/".into());
+        assert_eq!(session.next_window_index(), 0);
+    }
+
+    #[test]
+    fn next_window_index_gaps() {
+        use crate::window::Window;
+        let mut session = Session::new("gaps".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        session.windows.insert(1, Window::new("w1".into(), 80, 24));
+        session.windows.insert(3, Window::new("w3".into(), 80, 24));
+        assert_eq!(session.next_window_index(), 2);
+    }
+
+    #[test]
+    fn select_window_updates_last() {
+        use crate::window::Window;
+        let mut session = Session::new("sel".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        session.windows.insert(1, Window::new("w1".into(), 80, 24));
+        session.active_window = 0;
+        assert!(session.select_window(1));
+        assert_eq!(session.active_window, 1);
+        assert_eq!(session.last_window, Some(0));
+    }
+
+    #[test]
+    fn select_window_nonexistent() {
+        use crate::window::Window;
+        let mut session = Session::new("nowin".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        session.active_window = 0;
+        assert!(!session.select_window(99));
+    }
+
+    #[test]
+    fn select_window_same() {
+        use crate::window::Window;
+        let mut session = Session::new("same".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        session.active_window = 0;
+        assert!(!session.select_window(0));
+    }
+
+    #[test]
+    fn next_window_after_wraps() {
+        use crate::window::Window;
+        let mut session = Session::new("wrap".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        session.windows.insert(1, Window::new("w1".into(), 80, 24));
+        session.windows.insert(2, Window::new("w2".into(), 80, 24));
+        // From last window (2), should wrap to first (0)
+        assert_eq!(session.next_window_after(2), Some(0));
+    }
+
+    #[test]
+    fn prev_window_before_wraps() {
+        use crate::window::Window;
+        let mut session = Session::new("wrap".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        session.windows.insert(1, Window::new("w1".into(), 80, 24));
+        session.windows.insert(2, Window::new("w2".into(), 80, 24));
+        // From first window (0), should wrap to last (2)
+        assert_eq!(session.prev_window_before(0), Some(2));
+    }
+
+    #[test]
+    fn next_window_single() {
+        use crate::window::Window;
+        let mut session = Session::new("single".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        assert_eq!(session.next_window_after(0), None);
+    }
+
+    #[test]
+    fn sorted_window_indices() {
+        use crate::window::Window;
+        let mut session = Session::new("sorted".into(), "/".into());
+        session.windows.insert(3, Window::new("w3".into(), 80, 24));
+        session.windows.insert(1, Window::new("w1".into(), 80, 24));
+        session.windows.insert(5, Window::new("w5".into(), 80, 24));
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        assert_eq!(session.sorted_window_indices(), vec![0, 1, 3, 5]);
+    }
+
+    #[test]
+    fn find_by_id() {
+        let mut mgr = SessionManager::new();
+        let session = mgr.create("findme".into(), "/".into());
+        let id = session.id;
+        assert!(mgr.find_by_id(id).is_some());
+        assert_eq!(mgr.find_by_id(id).unwrap().name, "findme");
+        assert!(mgr.find_by_id(9999).is_none());
+    }
+
+    #[test]
+    fn is_empty() {
+        let mut mgr = SessionManager::new();
+        assert!(mgr.is_empty());
+        mgr.create("notempty".into(), "/".into());
+        assert!(!mgr.is_empty());
+    }
 }

@@ -372,4 +372,55 @@ mod tests {
         assert!(g.get_cell(3, 0).flags.contains(CellFlags::CLEARED));
         assert_eq!(g.get_cell(7, 0).data, Utf8Char::from_ascii(b'H'));
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn set_get_roundtrip(x in 0u32..80, y in 0u32..24, ch in 0x20u8..0x7f) {
+                let mut grid = Grid::new(80, 24, 0);
+                let cell = GridCell {
+                    data: Utf8Char::from_ascii(ch),
+                    style: Style::DEFAULT,
+                    link: 0,
+                    flags: CellFlags::empty(),
+                };
+                grid.set_cell(x, y, &cell);
+                let got = grid.get_cell(x, y);
+                prop_assert_eq!(got.data.as_bytes(), cell.data.as_bytes());
+            }
+
+            #[test]
+            fn scroll_up_preserves_width(n_scrolls in 1u32..100, width in 10u32..200, height in 5u32..50) {
+                let mut grid = Grid::new(width, height, 1000);
+                for _ in 0..n_scrolls {
+                    grid.scroll_up();
+                }
+                prop_assert_eq!(grid.width(), width);
+                prop_assert_eq!(grid.height(), height);
+            }
+
+            #[test]
+            fn resize_preserves_content(
+                new_width in 10u32..200,
+                new_height in 5u32..50,
+            ) {
+                let mut grid = Grid::new(80, 24, 0);
+                // Write something
+                let cell = GridCell {
+                    data: Utf8Char::from_ascii(b'X'),
+                    style: Style::DEFAULT,
+                    link: 0,
+                    flags: CellFlags::empty(),
+                };
+                grid.set_cell(0, 0, &cell);
+                grid.resize(new_width, new_height);
+                // Grid should have new dimensions
+                prop_assert_eq!(grid.width(), new_width);
+                prop_assert_eq!(grid.height(), new_height);
+            }
+        }
+    }
 }

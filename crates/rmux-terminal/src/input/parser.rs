@@ -933,4 +933,57 @@ mod tests {
         parser.parse(b"\x1b[1mA", &mut screen);
         assert_eq!(parser.state(), State::Ground);
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn parse_ascii_printable_never_panics(data in proptest::collection::vec(0x20u8..0x7f, 0..1024)) {
+                let mut screen = Screen::new(80, 24, 100);
+                let mut parser = InputParser::new();
+                parser.parse(&data, &mut screen);
+                prop_assert!(screen.cursor.x <= 80);
+                prop_assert!(screen.cursor.y < 24);
+            }
+
+            #[test]
+            fn parse_ascii_ends_in_ground(data in proptest::collection::vec(0x20u8..0x7f, 0..512)) {
+                let mut screen = Screen::new(80, 24, 0);
+                let mut parser = InputParser::new();
+                parser.parse(&data, &mut screen);
+                prop_assert_eq!(parser.state(), State::Ground);
+            }
+
+            #[test]
+            fn parse_preserves_screen_dimensions(
+                data in proptest::collection::vec(0x20u8..0x7f, 0..512),
+                width in 10u32..200,
+                height in 5u32..50,
+            ) {
+                let mut screen = Screen::new(width, height, 0);
+                let mut parser = InputParser::new();
+                parser.parse(&data, &mut screen);
+                prop_assert_eq!(screen.width(), width);
+                prop_assert_eq!(screen.height(), height);
+            }
+
+            #[test]
+            fn parse_with_escapes(n_lines in 1u32..50, width in 10u32..100) {
+                let mut screen = Screen::new(width, 24, 100);
+                let mut parser = InputParser::new();
+                let mut data = Vec::new();
+                for _ in 0..n_lines {
+                    data.extend_from_slice(b"\x1b[32m");
+                    for _ in 0..width.min(79) {
+                        data.push(b'X');
+                    }
+                    data.extend_from_slice(b"\x1b[0m\r\n");
+                }
+                parser.parse(&data, &mut screen);
+                prop_assert_eq!(screen.width(), width);
+            }
+        }
+    }
 }

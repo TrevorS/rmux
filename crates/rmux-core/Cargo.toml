@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "utf8_bench"
 harness = false
+
+[[bench]]
+name = "layout_bench"
+harness = false

@@ -110,4 +110,49 @@ mod tests {
         assert_eq!(p.screen.width(), 120);
         assert_eq!(p.screen.height(), 40);
     }
+
+    #[test]
+    fn copy_mode_lifecycle() {
+        let mut p = Pane::new(80, 24, 0);
+        assert!(!p.is_in_copy_mode());
+        p.enter_copy_mode("vi");
+        assert!(p.is_in_copy_mode());
+        p.exit_copy_mode();
+        assert!(!p.is_in_copy_mode());
+    }
+
+    #[test]
+    fn dead_flag() {
+        let mut p = Pane::new(80, 24, 0);
+        assert!(!p.dead);
+        p.dead = true;
+        assert!(p.dead);
+    }
+
+    #[test]
+    fn copy_mode_enter_twice_noop() {
+        let mut p = Pane::new(80, 24, 0);
+        p.enter_copy_mode("vi");
+        assert!(p.is_in_copy_mode());
+        // Entering again should not reset state
+        p.enter_copy_mode("vi");
+        assert!(p.is_in_copy_mode());
+    }
+
+    #[test]
+    fn exit_copy_mode_clears_selection() {
+        use rmux_core::screen::selection::{Selection, SelectionType};
+        let mut p = Pane::new(80, 24, 0);
+        p.screen.selection = Some(Selection {
+            sel_type: SelectionType::Normal,
+            start_x: 0,
+            start_y: 0,
+            end_x: 5,
+            end_y: 0,
+            active: true,
+        });
+        assert!(p.screen.selection.is_some());
+        p.exit_copy_mode();
+        assert!(p.screen.selection.is_none());
+    }
 }

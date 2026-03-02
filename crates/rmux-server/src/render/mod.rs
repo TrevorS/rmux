@@ -322,4 +322,68 @@ mod tests {
         // Should contain "test" (the window name) in the status line
         assert!(output.windows(4).any(|w| w == b"test"));
     }
+
+    #[test]
+    fn render_empty_window() {
+        let window = Window::new("empty".into(), 80, 24);
+        let output = render_window(&window, "sess", 0, 80, 25);
+        // Even with no panes, the status line should produce output
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn render_multi_pane_with_content() {
+        let mut window = Window::new("multi".into(), 80, 23);
+        let mut pane1 = Pane::new(39, 23, 0);
+        let mut pane2 = Pane::new(40, 23, 0);
+        pane1.process_input(b"Hello");
+        pane2.process_input(b"World");
+        let pid1 = pane1.id;
+        let pid2 = pane2.id;
+        pane1.xoff = 0;
+        pane1.yoff = 0;
+        pane2.xoff = 40;
+        pane2.yoff = 0;
+        window.active_pane = pid1;
+        window.panes.insert(pid1, pane1);
+        window.panes.insert(pid2, pane2);
+        window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
+
+        let output = render_window(&window, "sess", 0, 80, 24);
+        assert!(output.windows(5).any(|w| w == b"Hello"));
+        assert!(output.windows(5).any(|w| w == b"World"));
+    }
+
+    #[test]
+    fn status_line_shows_copy_mode() {
+        let mut window = Window::new("cp".into(), 80, 23);
+        let mut pane = Pane::new(80, 23, 0);
+        pane.enter_copy_mode("vi");
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let output = render_window(&window, "sess", 0, 80, 24);
+        assert!(output.windows(9).any(|w| w == b"Copy mode"));
+    }
+
+    #[test]
+    fn status_line_shows_pane_count() {
+        let mut window = Window::new("cnt".into(), 80, 23);
+        let mut pane1 = Pane::new(39, 23, 0);
+        let mut pane2 = Pane::new(40, 23, 0);
+        let pid1 = pane1.id;
+        let pid2 = pane2.id;
+        pane1.xoff = 0;
+        pane1.yoff = 0;
+        pane2.xoff = 40;
+        pane2.yoff = 0;
+        window.active_pane = pid1;
+        window.panes.insert(pid1, pane1);
+        window.panes.insert(pid2, pane2);
+        window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
+
+        let output = render_window(&window, "sess", 0, 80, 24);
+        assert!(output.windows(7).any(|w| w == b"2 panes"));
+    }
 }

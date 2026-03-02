@@ -507,4 +507,216 @@ mod tests {
         let msg2 = decode_message(&mut buf).unwrap().unwrap();
         assert!(matches!(msg2, Message::Detach));
     }
+
+    #[test]
+    fn encode_decode_flags() {
+        let msg = Message::Flags(0x1234_5678_9ABC_DEF0_i64);
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::Flags(f) => assert_eq!(f, 0x1234_5678_9ABC_DEF0_i64),
+            other => panic!("expected Flags, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_identify_cwd() {
+        let msg = Message::IdentifyCwd("/home/user/projects".to_string());
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::IdentifyCwd(c) => assert_eq!(c, "/home/user/projects"),
+            other => panic!("expected IdentifyCwd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_identify_client_pid() {
+        let msg = Message::IdentifyClientPid(12345);
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::IdentifyClientPid(pid) => assert_eq!(pid, 12345),
+            other => panic!("expected IdentifyClientPid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_identify_long_flags() {
+        let msg = Message::IdentifyLongFlags(0xFF);
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::IdentifyLongFlags(f) => assert_eq!(f, 0xFF),
+            other => panic!("expected IdentifyLongFlags, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_shell() {
+        let msg = Message::Shell("/bin/bash".to_string());
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::Shell(s) => assert_eq!(s, "/bin/bash"),
+            other => panic!("expected Shell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_output_data() {
+        let data = b"Hello World\x1b[0m".to_vec();
+        let msg = Message::OutputData(data.clone());
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::OutputData(d) => assert_eq!(d, data),
+            other => panic!("expected OutputData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_input_data() {
+        let data = vec![0x1b, b'[', b'A'];
+        let msg = Message::InputData(data.clone());
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::InputData(d) => assert_eq!(d, data),
+            other => panic!("expected InputData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_simple_messages() {
+        for msg in [
+            Message::Detach,
+            Message::DetachKill,
+            Message::Exit,
+            Message::Exited,
+            Message::Exiting,
+            Message::Lock,
+            Message::Ready,
+            Message::Shutdown,
+            Message::Suspend,
+            Message::Unlock,
+            Message::Wakeup,
+        ] {
+            let mut buf = BytesMut::new();
+            encode_message(&msg, &mut buf).unwrap();
+            let decoded = decode_message(&mut buf).unwrap().unwrap();
+            // Just verify we can roundtrip without errors
+            assert!(!format!("{decoded:?}").is_empty());
+        }
+    }
+
+    #[test]
+    fn unknown_message_type_returns_error() {
+        let mut buf = BytesMut::new();
+        // Manually write a header with an unknown message type
+        buf.put_u32_le(9999); // type
+        buf.put_u16_le(IMSG_HEADER_SIZE as u16); // len = header only
+        buf.put_u16_le(0); // flags
+        buf.put_u32_le(0); // peerid
+        buf.put_u32_le(0); // pid
+        let result = decode_message(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_cstring_nul_terminated() {
+        assert_eq!(decode_cstring(b"hello\x00world"), "hello");
+    }
+
+    #[test]
+    fn decode_cstring_no_nul() {
+        assert_eq!(decode_cstring(b"hello"), "hello");
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn version_roundtrip(version in 0u32..1000) {
+                let msg = Message::Version { version };
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::Version { version: v } => prop_assert_eq!(v, version),
+                    other => prop_assert!(false, "expected Version, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn identify_term_roundtrip(term in "[a-zA-Z0-9_-]{1,100}") {
+                let msg = Message::IdentifyTerm(term.clone());
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::IdentifyTerm(t) => prop_assert_eq!(t, term),
+                    other => prop_assert!(false, "expected IdentifyTerm, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn resize_roundtrip(sx in 1u32..10000, sy in 1u32..10000, xpixel in 0u32..10000, ypixel in 0u32..10000) {
+                let msg = Message::Resize { sx, sy, xpixel, ypixel };
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::Resize { sx: s, sy: t, xpixel: xp, ypixel: yp } => {
+                        prop_assert_eq!(s, sx);
+                        prop_assert_eq!(t, sy);
+                        prop_assert_eq!(xp, xpixel);
+                        prop_assert_eq!(yp, ypixel);
+                    }
+                    other => prop_assert!(false, "expected Resize, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn command_roundtrip(
+                args in proptest::collection::vec("[a-zA-Z0-9_-]{1,50}", 1..5)
+            ) {
+                let msg = Message::Command(MsgCommand {
+                    argc: args.len() as i32,
+                    argv: args.clone(),
+                });
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::Command(cmd) => {
+                        prop_assert_eq!(cmd.argc, args.len() as i32);
+                        prop_assert_eq!(cmd.argv, args);
+                    }
+                    other => prop_assert!(false, "expected Command, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn flags_roundtrip(flags in proptest::num::i64::ANY) {
+                let msg = Message::Flags(flags);
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::Flags(f) => prop_assert_eq!(f, flags),
+                    other => prop_assert!(false, "expected Flags, got {:?}", other),
+                }
+            }
+        }
+    }
 }
