@@ -30,6 +30,31 @@ fn output_text(
     }
 }
 
+/// Build a screen pre-populated with ASCII text lines.
+/// Shared across copy-mode test modules to avoid duplication.
+fn make_screen(width: u32, height: u32, lines: &[&str]) -> rmux_core::screen::Screen {
+    use rmux_core::grid::cell::{CellFlags, GridCell};
+    use rmux_core::style::Style;
+    use rmux_core::utf8::Utf8Char;
+
+    let mut screen = rmux_core::screen::Screen::new(width, height, 2000);
+    for (y, line) in lines.iter().enumerate() {
+        for (x, ch) in line.bytes().enumerate() {
+            screen.grid.set_cell(
+                x as u32,
+                y as u32,
+                &GridCell {
+                    data: Utf8Char::from_ascii(ch),
+                    style: Style::DEFAULT,
+                    link: 0,
+                    flags: CellFlags::empty(),
+                },
+            );
+        }
+    }
+    screen
+}
+
 // ============================================================
 // Paste buffer store
 // ============================================================
@@ -222,31 +247,10 @@ mod paste_command_tests {
 // ============================================================
 
 mod copy_mode_tests {
+    use super::make_screen;
     use crate::copymode::{CopyModeAction, CopyModeState, copy_selection, dispatch_copy_mode_action};
-    use rmux_core::grid::cell::GridCell;
     use rmux_core::screen::Screen;
     use rmux_core::screen::selection::SelectionType;
-    use rmux_core::style::Style;
-    use rmux_core::utf8::Utf8Char;
-
-    fn make_screen(width: u32, height: u32, lines: &[&str]) -> Screen {
-        let mut screen = Screen::new(width, height, 2000);
-        for (y, line) in lines.iter().enumerate() {
-            for (x, ch) in line.bytes().enumerate() {
-                screen.grid.set_cell(
-                    x as u32,
-                    y as u32,
-                    &GridCell {
-                        data: Utf8Char::from_ascii(ch),
-                        style: Style::DEFAULT,
-                        link: 0,
-                        flags: rmux_core::grid::cell::CellFlags::empty(),
-                    },
-                );
-            }
-        }
-        screen
-    }
 
     #[test]
     fn enter_vi_mode() {
@@ -951,7 +955,7 @@ mod paste_buffer_store_extended {
     fn large_buffer_data() {
         let mut store = PasteBufferStore::new(50);
         let big = vec![b'X'; 100_000];
-        store.add(big.clone());
+        store.add(big);
         assert_eq!(store.get_top().unwrap().data.len(), 100_000);
     }
 
@@ -1037,7 +1041,9 @@ mod paste_command_extended {
 
         exec(&mut s, &["delete-buffer", "-b", "b"]).unwrap();
         let output = output_text(exec(&mut s, &["list-buffers"]));
-        assert!(!output.contains("b:") || output.contains("a:"));
+        assert!(!output.contains("b:"));
+        assert!(output.contains("a:"));
+        assert!(output.contains("c:"));
 
         // show-buffer for deleted should fail
         assert!(exec(&mut s, &["show-buffer", "-b", "b"]).is_err());
@@ -1079,30 +1085,9 @@ mod paste_command_extended {
 // ============================================================
 
 mod copy_mode_navigation_extended {
+    use super::make_screen;
     use crate::copymode::CopyModeState;
-    use rmux_core::grid::cell::GridCell;
     use rmux_core::screen::Screen;
-    use rmux_core::style::Style;
-    use rmux_core::utf8::Utf8Char;
-
-    fn make_screen(width: u32, height: u32, lines: &[&str]) -> Screen {
-        let mut screen = Screen::new(width, height, 2000);
-        for (y, line) in lines.iter().enumerate() {
-            for (x, ch) in line.bytes().enumerate() {
-                screen.grid.set_cell(
-                    x as u32,
-                    y as u32,
-                    &GridCell {
-                        data: Utf8Char::from_ascii(ch),
-                        style: Style::DEFAULT,
-                        link: 0,
-                        flags: rmux_core::grid::cell::CellFlags::empty(),
-                    },
-                );
-            }
-        }
-        screen
-    }
 
     #[test]
     fn cursor_up_scrolls_into_history_and_back() {
@@ -1252,31 +1237,10 @@ mod copy_mode_navigation_extended {
 // ============================================================
 
 mod copy_mode_selection_extended {
+    use super::make_screen;
     use crate::copymode::{CopyModeState, copy_selection};
-    use rmux_core::grid::cell::GridCell;
     use rmux_core::screen::Screen;
     use rmux_core::screen::selection::SelectionType;
-    use rmux_core::style::Style;
-    use rmux_core::utf8::Utf8Char;
-
-    fn make_screen(width: u32, height: u32, lines: &[&str]) -> Screen {
-        let mut screen = Screen::new(width, height, 2000);
-        for (y, line) in lines.iter().enumerate() {
-            for (x, ch) in line.bytes().enumerate() {
-                screen.grid.set_cell(
-                    x as u32,
-                    y as u32,
-                    &GridCell {
-                        data: Utf8Char::from_ascii(ch),
-                        style: Style::DEFAULT,
-                        link: 0,
-                        flags: rmux_core::grid::cell::CellFlags::empty(),
-                    },
-                );
-            }
-        }
-        screen
-    }
 
     #[test]
     fn single_char_selection() {
