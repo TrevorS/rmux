@@ -21,11 +21,7 @@ pub enum CoreError {
 
     /// Option type mismatch.
     #[error("option type mismatch for '{key}': expected {expected}, got {got}")]
-    OptionTypeMismatch {
-        key: String,
-        expected: &'static str,
-        got: &'static str,
-    },
+    OptionTypeMismatch { key: String, expected: &'static str, got: &'static str },
 }
 
 /// Convenience type alias for core operations.

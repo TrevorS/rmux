@@ -98,12 +98,7 @@ pub struct ExtendedCell {
 
 impl Default for ExtendedCell {
     fn default() -> Self {
-        Self {
-            data: Utf8Char::SPACE,
-            style: Style::DEFAULT,
-            link: 0,
-            flags: CellFlags::empty(),
-        }
+        Self { data: Utf8Char::SPACE, style: Style::DEFAULT, link: 0, flags: CellFlags::empty() }
     }
 }
 
@@ -125,12 +120,8 @@ pub struct GridCell {
 
 impl GridCell {
     /// A cleared cell (space with default style).
-    pub const CLEARED: Self = Self {
-        data: Utf8Char::SPACE,
-        style: Style::DEFAULT,
-        link: 0,
-        flags: CellFlags::CLEARED,
-    };
+    pub const CLEARED: Self =
+        Self { data: Utf8Char::SPACE, style: Style::DEFAULT, link: 0, flags: CellFlags::CLEARED };
 
     /// Whether this cell is a padding cell (right half of a wide character).
     #[must_use]
@@ -141,11 +132,7 @@ impl GridCell {
     /// The display width of this cell (0, 1, or 2).
     #[must_use]
     pub fn width(&self) -> u8 {
-        if self.is_padding() {
-            0
-        } else {
-            self.data.width()
-        }
+        if self.is_padding() { 0 } else { self.data.width() }
     }
 
     /// Pack this cell into compact form if possible, or return extended.
@@ -177,11 +164,7 @@ impl GridCell {
             };
             (compact, Some(extended))
         } else {
-            let byte = if self.data.is_empty() {
-                b' '
-            } else {
-                self.data.as_bytes()[0]
-            };
+            let byte = if self.data.is_empty() { b' ' } else { self.data.as_bytes()[0] };
 
             let mut flags = self.flags;
             let fg = match self.style.fg {
@@ -217,12 +200,7 @@ impl GridCell {
     #[must_use]
     pub fn unpack(compact: &CompactCell, extended: Option<&ExtendedCell>) -> Self {
         if let Some(ext) = extended {
-            GridCell {
-                data: ext.data,
-                style: ext.style,
-                link: ext.link,
-                flags: ext.flags,
-            }
+            GridCell { data: ext.data, style: ext.style, link: ext.link, flags: ext.flags }
         } else {
             let fg = if compact.flags.contains(CellFlags::FG256) {
                 Color::Palette(compact.fg)
@@ -242,12 +220,7 @@ impl GridCell {
 
             GridCell {
                 data: Utf8Char::from_ascii(compact.data),
-                style: Style {
-                    fg,
-                    bg,
-                    us: Color::Default,
-                    attrs,
-                },
+                style: Style { fg, bg, us: Color::Default, attrs },
                 link: 0,
                 flags: compact.flags & !CellFlags::FG256 & !CellFlags::BG256,
             }
@@ -319,14 +292,7 @@ mod tests {
     fn pack_rgb_needs_extended() {
         let cell = GridCell {
             data: Utf8Char::from_ascii(b'A'),
-            style: Style {
-                fg: Color::Rgb {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                },
-                ..Style::DEFAULT
-            },
+            style: Style { fg: Color::Rgb { r: 255, g: 0, b: 0 }, ..Style::DEFAULT },
             link: 0,
             flags: CellFlags::empty(),
         };
@@ -359,17 +325,9 @@ mod tests {
         let cell = GridCell {
             data: Utf8Char::from_char('世'),
             style: Style {
-                fg: Color::Rgb {
-                    r: 100,
-                    g: 200,
-                    b: 50,
-                },
+                fg: Color::Rgb { r: 100, g: 200, b: 50 },
                 bg: Color::Palette(42),
-                us: Color::Rgb {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                },
+                us: Color::Rgb { r: 255, g: 0, b: 0 },
                 attrs: Attrs::ITALICS,
             },
             link: 42,

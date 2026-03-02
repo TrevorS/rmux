@@ -125,11 +125,7 @@ fn main() {
     };
 
     // Default command: if no command given, try "new-session"
-    let command_args = if command_args.is_empty() {
-        vec!["new-session"]
-    } else {
-        command_args
-    };
+    let command_args = if command_args.is_empty() { vec!["new-session"] } else { command_args };
 
     // Run the async client
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -137,19 +133,15 @@ fn main() {
         .build()
         .expect("failed to create tokio runtime");
 
-    let exit_code = rt.block_on(async {
-        run_client(&path, &command_args).await
-    });
+    let exit_code = rt.block_on(async { run_client(&path, &command_args).await });
 
     process::exit(exit_code);
 }
 
 async fn run_client(socket_path: &std::path::Path, command_args: &[&str]) -> i32 {
     // Check if we need to start the server
-    let needs_server = matches!(
-        command_args.first().copied(),
-        Some("new-session") | Some("new") | None
-    );
+    let needs_server =
+        matches!(command_args.first().copied(), Some("new-session") | Some("new") | None);
 
     // Try to connect
     let stream = match connect::connect(socket_path).await {

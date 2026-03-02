@@ -45,17 +45,8 @@ impl Grid {
     /// Create a new grid with the given dimensions and history limit.
     #[must_use]
     pub fn new(sx: u32, sy: u32, history_limit: u32) -> Self {
-        let flags = if history_limit > 0 {
-            GridFlags::HISTORY
-        } else {
-            GridFlags::empty()
-        };
-        Self {
-            sx,
-            sy,
-            history: GridHistory::new(sy, history_limit),
-            flags,
-        }
+        let flags = if history_limit > 0 { GridFlags::HISTORY } else { GridFlags::empty() };
+        Self { sx, sy, history: GridHistory::new(sy, history_limit), flags }
     }
 
     /// Grid width (columns).
@@ -174,10 +165,9 @@ impl Grid {
         // This is a more complex operation for partial scroll regions
         // For now, clear the top line and shift others up
         for y in top..bottom {
-            if let (Some(src), Some(dst)) = (
-                self.history.visible_line(y + 1).cloned(),
-                self.history.visible_line_mut(y),
-            ) {
+            if let (Some(src), Some(dst)) =
+                (self.history.visible_line(y + 1).cloned(), self.history.visible_line_mut(y))
+            {
                 *dst = src;
             }
         }
@@ -192,10 +182,9 @@ impl Grid {
             return;
         }
         for y in (top + 1..=bottom).rev() {
-            if let (Some(src), Some(dst)) = (
-                self.history.visible_line(y - 1).cloned(),
-                self.history.visible_line_mut(y),
-            ) {
+            if let (Some(src), Some(dst)) =
+                (self.history.visible_line(y - 1).cloned(), self.history.visible_line_mut(y))
+            {
                 *dst = src;
             }
         }

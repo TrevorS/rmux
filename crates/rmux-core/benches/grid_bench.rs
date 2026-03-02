@@ -3,9 +3,9 @@
 //! These benchmarks measure the hot-path operations on the grid:
 //! cell read/write, scroll, history management.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rmux_core::grid::cell::{CellFlags, GridCell};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use rmux_core::grid::Grid;
+use rmux_core::grid::cell::{CellFlags, GridCell};
 use rmux_core::style::{Attrs, Color, Style};
 use rmux_core::utf8::Utf8Char;
 

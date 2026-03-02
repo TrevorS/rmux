@@ -8,7 +8,7 @@ use crate::terminal;
 use rmux_protocol::codec::{CodecError, MessageReader, MessageWriter};
 use rmux_protocol::message::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 
 /// Run the attached client loop.
 ///
@@ -19,25 +19,19 @@ pub async fn run_attached(
     reader: &mut MessageReader,
     writer: &mut MessageWriter,
 ) -> Result<(), CodecError> {
-    let _raw = terminal::RawTerminal::enter()
-        .map_err(|e| CodecError::Io(std::io::Error::other(e)))?;
+    let _raw =
+        terminal::RawTerminal::enter().map_err(|e| CodecError::Io(std::io::Error::other(e)))?;
 
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     let mut input_buf = vec![0u8; 4096];
 
     // Set up SIGWINCH handler
-    let mut sigwinch = signal(SignalKind::window_change())
-        .map_err(CodecError::Io)?;
+    let mut sigwinch = signal(SignalKind::window_change()).map_err(CodecError::Io)?;
 
     // Send initial size
     let (sx, sy) = terminal::get_terminal_size();
-    writer.write_message(&Message::Resize {
-        sx,
-        sy,
-        xpixel: 0,
-        ypixel: 0,
-    }).await?;
+    writer.write_message(&Message::Resize { sx, sy, xpixel: 0, ypixel: 0 }).await?;
 
     loop {
         tokio::select! {

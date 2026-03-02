@@ -89,10 +89,7 @@ impl Options {
     /// Create options with a parent for inheritance.
     #[must_use]
     pub fn with_parent(parent: Options) -> Self {
-        Self {
-            values: HashMap::new(),
-            parent: Some(Box::new(parent)),
-        }
+        Self { values: HashMap::new(), parent: Some(Box::new(parent)) }
     }
 
     /// Set an option value.
@@ -103,9 +100,7 @@ impl Options {
     /// Get an option value, searching up the parent chain.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&OptionValue> {
-        self.values
-            .get(key)
-            .or_else(|| self.parent.as_ref().and_then(|p| p.get(key)))
+        self.values.get(key).or_else(|| self.parent.as_ref().and_then(|p| p.get(key)))
     }
 
     /// Get a string option.
@@ -185,20 +180,11 @@ pub fn default_session_options() -> Options {
     let mut opts = Options::new();
     opts.set("base-index", OptionValue::Number(0));
     opts.set("default-shell", OptionValue::String("/bin/sh".into()));
-    opts.set(
-        "default-command",
-        OptionValue::String(String::new()),
-    );
+    opts.set("default-command", OptionValue::String(String::new()));
     opts.set("prefix", OptionValue::String("C-b".into()));
     opts.set("status", OptionValue::Flag(true));
-    opts.set(
-        "status-left",
-        OptionValue::String("[#{session_name}] ".into()),
-    );
-    opts.set(
-        "status-right",
-        OptionValue::String("\"#{=21:pane_title}\" %H:%M %d-%b-%y".into()),
-    );
+    opts.set("status-left", OptionValue::String("[#{session_name}] ".into()));
+    opts.set("status-right", OptionValue::String("\"#{=21:pane_title}\" %H:%M %d-%b-%y".into()));
     opts.set("mouse", OptionValue::Flag(false));
     opts.set("renumber-windows", OptionValue::Flag(false));
     opts
@@ -214,10 +200,7 @@ pub fn default_window_options() -> Options {
     opts.set("allow-rename", OptionValue::Flag(true));
     opts.set("monitor-activity", OptionValue::Flag(false));
     opts.set("pane-border-style", OptionValue::String("default".into()));
-    opts.set(
-        "pane-active-border-style",
-        OptionValue::String("fg=green".into()),
-    );
+    opts.set("pane-active-border-style", OptionValue::String("fg=green".into()));
     opts
 }
 

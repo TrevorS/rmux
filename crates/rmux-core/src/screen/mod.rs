@@ -56,10 +56,7 @@ impl ScrollRegion {
     /// Create a scroll region covering the full screen height.
     #[must_use]
     pub fn full(height: u32) -> Self {
-        Self {
-            top: 0,
-            bottom: height.saturating_sub(1),
-        }
+        Self { top: 0, bottom: height.saturating_sub(1) }
     }
 
     /// Whether this region covers the full visible height.
@@ -153,10 +150,7 @@ impl Screen {
         }
         let saved_grid = self.grid.clone();
         let saved_cursor = SavedCursor::from(&self.cursor);
-        self.alternate = Some(AlternateScreen {
-            grid: saved_grid,
-            cursor: saved_cursor,
-        });
+        self.alternate = Some(AlternateScreen { grid: saved_grid, cursor: saved_cursor });
         // Create a fresh grid for the alternate screen (no history)
         self.grid = Grid::new(self.width(), self.height(), 0);
         self.cursor = Cursor::default();

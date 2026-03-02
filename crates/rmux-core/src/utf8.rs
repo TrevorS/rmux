@@ -28,11 +28,7 @@ pub struct Utf8Char {
 
 impl Utf8Char {
     /// An empty character (zero width, zero bytes).
-    pub const EMPTY: Self = Self {
-        data: [0; UTF8_MAX_BYTES],
-        size: 0,
-        width: 0,
-    };
+    pub const EMPTY: Self = Self { data: [0; UTF8_MAX_BYTES], size: 0, width: 0 };
 
     /// A space character.
     pub const SPACE: Self = Self {
@@ -51,11 +47,7 @@ impl Utf8Char {
         debug_assert!(byte.is_ascii(), "byte {byte:#x} is not ASCII");
         let mut data = [0u8; UTF8_MAX_BYTES];
         data[0] = byte;
-        Self {
-            data,
-            size: 1,
-            width: if byte >= 0x20 && byte != 0x7f { 1 } else { 0 },
-        }
+        Self { data, size: 1, width: if byte >= 0x20 && byte != 0x7f { 1 } else { 0 } }
     }
 
     /// Create from a Unicode character.
@@ -82,11 +74,7 @@ impl Utf8Char {
             .and_then(|s| s.chars().next())
             .and_then(UnicodeWidthChar::width)
             .unwrap_or(0) as u8;
-        Some(Self {
-            data,
-            size: bytes.len() as u8,
-            width,
-        })
+        Some(Self { data, size: bytes.len() as u8, width })
     }
 
     /// Set the display width explicitly (for tab characters, combining chars, etc.).

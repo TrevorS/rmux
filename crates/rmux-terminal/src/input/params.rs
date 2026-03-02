@@ -19,10 +19,7 @@ pub struct Params {
 impl Params {
     /// Create empty params.
     pub const fn new() -> Self {
-        Self {
-            values: [-1; MAX_PARAMS],
-            count: 0,
-        }
+        Self { values: [-1; MAX_PARAMS], count: 0 }
     }
 
     /// Reset to empty.
@@ -79,11 +76,7 @@ impl Params {
     /// Get parameter at index, returning the default value if omitted or out of bounds.
     #[must_use]
     pub fn get(&self, index: usize, default: i32) -> i32 {
-        if index < self.count && self.values[index] >= 0 {
-            self.values[index]
-        } else {
-            default
-        }
+        if index < self.count && self.values[index] >= 0 { self.values[index] } else { default }
     }
 
     /// Get parameter at index as u32, with a default.

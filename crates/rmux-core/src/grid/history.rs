@@ -35,13 +35,7 @@ impl GridHistory {
         for _ in 0..visible {
             lines.push_back(GridLine::new());
         }
-        Self {
-            lines,
-            history_size: 0,
-            visible_size: visible,
-            limit,
-            scrolled: 0,
-        }
+        Self { lines, history_size: 0, visible_size: visible, limit, scrolled: 0 }
     }
 
     /// Total number of lines (history + visible).

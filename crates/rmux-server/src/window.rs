@@ -2,7 +2,7 @@
 
 use crate::pane::Pane;
 use rmux_core::layout::LayoutCell;
-use rmux_core::options::{default_window_options, Options};
+use rmux_core::options::{Options, default_window_options};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 

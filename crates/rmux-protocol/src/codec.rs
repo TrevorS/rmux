@@ -44,9 +44,7 @@ pub fn encode_message(msg: &Message, buf: &mut BytesMut) -> Result<usize, CodecE
 
     let total_len = buf.len() - header_pos;
     if total_len - IMSG_HEADER_SIZE > IMSG_MAX_DATA {
-        return Err(CodecError::TooLarge {
-            size: total_len - IMSG_HEADER_SIZE,
-        });
+        return Err(CodecError::TooLarge { size: total_len - IMSG_HEADER_SIZE });
     }
 
     // Fill in the header
@@ -79,8 +77,7 @@ pub fn decode_message(buf: &mut BytesMut) -> Result<Option<Message>, CodecError>
 
     if msg_len < IMSG_HEADER_SIZE {
         return Err(CodecError::InvalidData {
-            msg_type: MessageType::from_raw(msg_type_raw)
-                .unwrap_or(MessageType::Version),
+            msg_type: MessageType::from_raw(msg_type_raw).unwrap_or(MessageType::Version),
         });
     }
 
@@ -88,16 +85,15 @@ pub fn decode_message(buf: &mut BytesMut) -> Result<Option<Message>, CodecError>
         return Ok(None); // Need more data
     }
 
-    let msg_type = MessageType::from_raw(msg_type_raw)
-        .ok_or(CodecError::UnknownType(msg_type_raw))?;
+    let msg_type =
+        MessageType::from_raw(msg_type_raw).ok_or(CodecError::UnknownType(msg_type_raw))?;
 
     // Extract data portion
     let _ = buf.split_to(IMSG_HEADER_SIZE); // Skip header
     let data_len = msg_len - IMSG_HEADER_SIZE;
     let data = buf.split_to(data_len);
 
-    decode_message_data(msg_type, &data)
-        .map(Some)
+    decode_message_data(msg_type, &data).map(Some)
 }
 
 fn encode_message_data(msg: &Message, buf: &mut BytesMut) {
@@ -145,12 +141,7 @@ fn encode_message_data(msg: &Message, buf: &mut BytesMut) {
                 buf.put_u8(0);
             }
         }
-        Message::Resize {
-            sx,
-            sy,
-            xpixel,
-            ypixel,
-        } => {
+        Message::Resize { sx, sy, xpixel, ypixel } => {
             buf.put_u32_le(*sx);
             buf.put_u32_le(*sy);
             buf.put_u32_le(*xpixel);
@@ -232,15 +223,9 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
             let flags = i64::from_le_bytes(data[..8].try_into().map_err(|_| err())?);
             Ok(Message::IdentifyFlags(flags))
         }
-        MessageType::IdentifyTerm => {
-            Ok(Message::IdentifyTerm(decode_cstring(data)))
-        }
-        MessageType::IdentifyTtyName => {
-            Ok(Message::IdentifyTtyName(decode_cstring(data)))
-        }
-        MessageType::IdentifyEnviron => {
-            Ok(Message::IdentifyEnviron(decode_cstring(data)))
-        }
+        MessageType::IdentifyTerm => Ok(Message::IdentifyTerm(decode_cstring(data))),
+        MessageType::IdentifyTtyName => Ok(Message::IdentifyTtyName(decode_cstring(data))),
+        MessageType::IdentifyEnviron => Ok(Message::IdentifyEnviron(decode_cstring(data))),
         MessageType::IdentifyDone => Ok(Message::IdentifyDone),
         MessageType::IdentifyStdin => Ok(Message::IdentifyStdin),
         MessageType::IdentifyStdout => Ok(Message::IdentifyStdout),
@@ -251,12 +236,8 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
             let pid = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
             Ok(Message::IdentifyClientPid(pid))
         }
-        MessageType::IdentifyCwd => {
-            Ok(Message::IdentifyCwd(decode_cstring(data)))
-        }
-        MessageType::IdentifyFeatures => {
-            Ok(Message::IdentifyFeatures(decode_cstring(data)))
-        }
+        MessageType::IdentifyCwd => Ok(Message::IdentifyCwd(decode_cstring(data))),
+        MessageType::IdentifyFeatures => Ok(Message::IdentifyFeatures(decode_cstring(data))),
         MessageType::IdentifyLongFlags => {
             if data.len() < 8 {
                 return Err(err());
@@ -264,9 +245,7 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
             let flags = i64::from_le_bytes(data[..8].try_into().map_err(|_| err())?);
             Ok(Message::IdentifyLongFlags(flags))
         }
-        MessageType::IdentifyTerminfo => {
-            Ok(Message::IdentifyTerminfo(data.to_vec()))
-        }
+        MessageType::IdentifyTerminfo => Ok(Message::IdentifyTerminfo(data.to_vec())),
         MessageType::Command => {
             if data.len() < 4 {
                 return Err(err());
@@ -394,10 +373,7 @@ pub struct MessageReader {
 impl MessageReader {
     /// Create a new reader from a stream read half.
     pub fn new(stream: OwnedReadHalf) -> Self {
-        Self {
-            stream,
-            buf: BytesMut::with_capacity(8192),
-        }
+        Self { stream, buf: BytesMut::with_capacity(8192) }
     }
 
     /// Read the next message from the stream.
@@ -411,8 +387,7 @@ impl MessageReader {
             }
 
             // Read more data
-            let n = self.stream.read_buf(&mut self.buf).await
-                .map_err(CodecError::Io)?;
+            let n = self.stream.read_buf(&mut self.buf).await.map_err(CodecError::Io)?;
             if n == 0 {
                 return Ok(None); // EOF
             }
@@ -429,10 +404,7 @@ pub struct MessageWriter {
 impl MessageWriter {
     /// Create a new writer from a stream write half.
     pub fn new(stream: OwnedWriteHalf) -> Self {
-        Self {
-            stream,
-            buf: BytesMut::with_capacity(8192),
-        }
+        Self { stream, buf: BytesMut::with_capacity(8192) }
     }
 
     /// Write a message to the stream.
@@ -461,9 +433,7 @@ mod tests {
 
     #[test]
     fn encode_decode_version() {
-        let msg = Message::Version {
-            version: PROTOCOL_VERSION,
-        };
+        let msg = Message::Version { version: PROTOCOL_VERSION };
         let mut buf = BytesMut::new();
         encode_message(&msg, &mut buf).unwrap();
         let decoded = decode_message(&mut buf).unwrap().unwrap();
@@ -489,11 +459,7 @@ mod tests {
     fn encode_decode_command() {
         let msg = Message::Command(MsgCommand {
             argc: 3,
-            argv: vec![
-                "new-session".to_string(),
-                "-s".to_string(),
-                "test".to_string(),
-            ],
+            argv: vec!["new-session".to_string(), "-s".to_string(), "test".to_string()],
         });
         let mut buf = BytesMut::new();
         encode_message(&msg, &mut buf).unwrap();
@@ -509,22 +475,12 @@ mod tests {
 
     #[test]
     fn encode_decode_resize() {
-        let msg = Message::Resize {
-            sx: 120,
-            sy: 40,
-            xpixel: 960,
-            ypixel: 640,
-        };
+        let msg = Message::Resize { sx: 120, sy: 40, xpixel: 960, ypixel: 640 };
         let mut buf = BytesMut::new();
         encode_message(&msg, &mut buf).unwrap();
         let decoded = decode_message(&mut buf).unwrap().unwrap();
         match decoded {
-            Message::Resize {
-                sx,
-                sy,
-                xpixel,
-                ypixel,
-            } => {
+            Message::Resize { sx, sy, xpixel, ypixel } => {
                 assert_eq!((sx, sy, xpixel, ypixel), (120, 40, 960, 640));
             }
             other => panic!("expected Resize, got {other:?}"),

@@ -37,16 +37,9 @@ pub enum Action {
     /// Execute a C0 control character.
     Execute(u8),
     /// CSI sequence dispatched.
-    CsiDispatch {
-        params: Params,
-        intermediates: SmallVec<[u8; 4]>,
-        final_byte: u8,
-    },
+    CsiDispatch { params: Params, intermediates: SmallVec<[u8; 4]>, final_byte: u8 },
     /// ESC sequence dispatched.
-    EscDispatch {
-        intermediates: SmallVec<[u8; 4]>,
-        final_byte: u8,
-    },
+    EscDispatch { intermediates: SmallVec<[u8; 4]>, final_byte: u8 },
     /// OSC string completed.
     OscDispatch(Vec<u8>),
     /// DCS string completed.
@@ -211,20 +204,18 @@ impl InputParser {
                     }
                 }
             }
-            State::EscapeIntermediate => {
-                match byte {
-                    0x20..=0x2F => {
-                        self.intermediates.push(byte);
-                    }
-                    0x30..=0x7E => {
-                        self.handle_esc_dispatch(byte, screen);
-                        self.transition(State::Ground);
-                    }
-                    _ => {
-                        self.transition(State::Ground);
-                    }
+            State::EscapeIntermediate => match byte {
+                0x20..=0x2F => {
+                    self.intermediates.push(byte);
                 }
-            }
+                0x30..=0x7E => {
+                    self.handle_esc_dispatch(byte, screen);
+                    self.transition(State::Ground);
+                }
+                _ => {
+                    self.transition(State::Ground);
+                }
+            },
             State::CsiEntry => {
                 match byte {
                     0x30..=0x3B => {
@@ -250,43 +241,39 @@ impl InputParser {
                     }
                 }
             }
-            State::CsiParam => {
-                match byte {
-                    0x30..=0x3B => {
-                        self.param_buf.push(byte);
-                    }
-                    0x20..=0x2F => {
-                        self.intermediates.push(byte);
-                        self.transition(State::CsiIntermediate);
-                    }
-                    0x40..=0x7E => {
-                        self.params.parse(&self.param_buf);
-                        self.handle_csi_dispatch(byte, screen);
-                        self.transition(State::Ground);
-                    }
-                    0x3C..=0x3F => {
-                        self.transition(State::CsiIgnore);
-                    }
-                    _ => {
-                        self.transition(State::CsiIgnore);
-                    }
+            State::CsiParam => match byte {
+                0x30..=0x3B => {
+                    self.param_buf.push(byte);
                 }
-            }
-            State::CsiIntermediate => {
-                match byte {
-                    0x20..=0x2F => {
-                        self.intermediates.push(byte);
-                    }
-                    0x40..=0x7E => {
-                        self.params.parse(&self.param_buf);
-                        self.handle_csi_dispatch(byte, screen);
-                        self.transition(State::Ground);
-                    }
-                    _ => {
-                        self.transition(State::CsiIgnore);
-                    }
+                0x20..=0x2F => {
+                    self.intermediates.push(byte);
+                    self.transition(State::CsiIntermediate);
                 }
-            }
+                0x40..=0x7E => {
+                    self.params.parse(&self.param_buf);
+                    self.handle_csi_dispatch(byte, screen);
+                    self.transition(State::Ground);
+                }
+                0x3C..=0x3F => {
+                    self.transition(State::CsiIgnore);
+                }
+                _ => {
+                    self.transition(State::CsiIgnore);
+                }
+            },
+            State::CsiIntermediate => match byte {
+                0x20..=0x2F => {
+                    self.intermediates.push(byte);
+                }
+                0x40..=0x7E => {
+                    self.params.parse(&self.param_buf);
+                    self.handle_csi_dispatch(byte, screen);
+                    self.transition(State::Ground);
+                }
+                _ => {
+                    self.transition(State::CsiIgnore);
+                }
+            },
             State::CsiIgnore => {
                 if (0x40..=0x7E).contains(&byte) {
                     self.transition(State::Ground);
@@ -316,35 +303,31 @@ impl InputParser {
                     }
                 }
             }
-            State::DcsEntry | State::DcsParam | State::DcsIntermediate => {
-                match byte {
-                    0x40..=0x7E => self.transition(State::DcsPassthrough),
-                    0x30..=0x3F => {
-                        self.param_buf.push(byte);
-                        self.state = State::DcsParam;
-                    }
-                    0x20..=0x2F => {
-                        self.intermediates.push(byte);
-                        self.state = State::DcsIntermediate;
-                    }
-                    _ => self.transition(State::DcsIgnore),
+            State::DcsEntry | State::DcsParam | State::DcsIntermediate => match byte {
+                0x40..=0x7E => self.transition(State::DcsPassthrough),
+                0x30..=0x3F => {
+                    self.param_buf.push(byte);
+                    self.state = State::DcsParam;
                 }
-            }
-            State::DcsPassthrough => {
-                match byte {
-                    0x9C => {
-                        self.handle_dcs_dispatch(screen);
-                        self.transition(State::Ground);
-                    }
-                    0x1B => {
-                        self.handle_dcs_dispatch(screen);
-                        self.transition(State::Escape);
-                    }
-                    _ => {
-                        self.dcs_data.push(byte);
-                    }
+                0x20..=0x2F => {
+                    self.intermediates.push(byte);
+                    self.state = State::DcsIntermediate;
                 }
-            }
+                _ => self.transition(State::DcsIgnore),
+            },
+            State::DcsPassthrough => match byte {
+                0x9C => {
+                    self.handle_dcs_dispatch(screen);
+                    self.transition(State::Ground);
+                }
+                0x1B => {
+                    self.handle_dcs_dispatch(screen);
+                    self.transition(State::Escape);
+                }
+                _ => {
+                    self.dcs_data.push(byte);
+                }
+            },
             State::DcsIgnore => {
                 if byte == 0x9C || byte == 0x1B {
                     self.transition(State::Ground);
@@ -404,12 +387,8 @@ impl InputParser {
         let bytes = &self.utf8_buf[..self.utf8_len as usize];
         if let Some(data) = Utf8Char::from_bytes(bytes) {
             let width = data.width();
-            let cell = GridCell {
-                data,
-                style: screen.cursor.style,
-                link: 0,
-                flags: CellFlags::empty(),
-            };
+            let cell =
+                GridCell { data, style: screen.cursor.style, link: 0, flags: CellFlags::empty() };
             write_cell(screen, &cell);
 
             // For wide characters, add a padding cell
@@ -469,10 +448,9 @@ impl InputParser {
             b'M' => {
                 // RI - reverse index
                 if screen.cursor.y == screen.scroll_region.top {
-                    screen.grid.scroll_region_down(
-                        screen.scroll_region.top,
-                        screen.scroll_region.bottom,
-                    );
+                    screen
+                        .grid
+                        .scroll_region_down(screen.scroll_region.top, screen.scroll_region.bottom);
                 } else if screen.cursor.y > 0 {
                     screen.cursor.y -= 1;
                 }
@@ -530,9 +508,7 @@ impl InputParser {
                     }
                     1 => {
                         // Erase from start to cursor
-                        screen
-                            .grid
-                            .clear_region(0, 0, screen.cursor.x, screen.cursor.y);
+                        screen.grid.clear_region(0, 0, screen.cursor.x, screen.cursor.y);
                     }
                     2 | 3 => {
                         // Erase entire display
@@ -547,12 +523,7 @@ impl InputParser {
                 let y = screen.cursor.y;
                 match mode {
                     0 => {
-                        screen.grid.clear_region(
-                            screen.cursor.x,
-                            y,
-                            screen.width() - 1,
-                            y,
-                        );
+                        screen.grid.clear_region(screen.cursor.x, y, screen.width() - 1, y);
                     }
                     1 => {
                         screen.grid.clear_region(0, y, screen.cursor.x, y);
@@ -567,20 +538,14 @@ impl InputParser {
                 // IL - insert lines
                 let n = self.params.get_u32(0, 1).max(1);
                 for _ in 0..n {
-                    screen.grid.scroll_region_down(
-                        screen.cursor.y,
-                        screen.scroll_region.bottom,
-                    );
+                    screen.grid.scroll_region_down(screen.cursor.y, screen.scroll_region.bottom);
                 }
             }
             (b'M', None) => {
                 // DL - delete lines
                 let n = self.params.get_u32(0, 1).max(1);
                 for _ in 0..n {
-                    screen.grid.scroll_region_up(
-                        screen.cursor.y,
-                        screen.scroll_region.bottom,
-                    );
+                    screen.grid.scroll_region_up(screen.cursor.y, screen.scroll_region.bottom);
                 }
             }
             (b'm', None) => {
@@ -590,11 +555,7 @@ impl InputParser {
             (b'r', None) => {
                 // DECSTBM - set scroll region
                 let top = self.params.get_u32(0, 1).max(1) - 1;
-                let bottom = self
-                    .params
-                    .get_u32(1, screen.height())
-                    .min(screen.height())
-                    - 1;
+                let bottom = self.params.get_u32(1, screen.height()).min(screen.height()) - 1;
                 if top < bottom {
                     screen.scroll_region.top = top;
                     screen.scroll_region.bottom = bottom;
@@ -638,10 +599,14 @@ impl InputParser {
                 9 => screen.cursor.style.attrs |= Attrs::STRIKETHROUGH,
                 21 => screen.cursor.style.attrs |= Attrs::DOUBLE_UNDERSCORE,
                 22 => {
-                    screen.cursor.style.attrs -= screen.cursor.style.attrs & (Attrs::BOLD | Attrs::DIM);
+                    screen.cursor.style.attrs -=
+                        screen.cursor.style.attrs & (Attrs::BOLD | Attrs::DIM);
                 }
                 23 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::ITALICS,
-                24 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::ALL_UNDERLINES,
+                24 => {
+                    screen.cursor.style.attrs -=
+                        screen.cursor.style.attrs & Attrs::ALL_UNDERLINES;
+                }
                 25 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::BLINK,
                 27 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::REVERSE,
                 28 => screen.cursor.style.attrs -= screen.cursor.style.attrs & Attrs::HIDDEN,
@@ -749,10 +714,8 @@ impl InputParser {
             (&self.osc_data[..], &[][..])
         };
 
-        let num: i32 = std::str::from_utf8(num_bytes)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(-1);
+        let num: i32 =
+            std::str::from_utf8(num_bytes).ok().and_then(|s| s.parse().ok()).unwrap_or(-1);
 
         match num {
             0 | 2 => {
@@ -812,10 +775,7 @@ fn write_cell(screen: &mut Screen, cell: &GridCell) {
 /// Handle line feed (move cursor down, scroll if at bottom of scroll region).
 fn handle_linefeed(screen: &mut Screen) {
     if screen.cursor.y == screen.scroll_region.bottom {
-        screen.grid.scroll_region_up(
-            screen.scroll_region.top,
-            screen.scroll_region.bottom,
-        );
+        screen.grid.scroll_region_up(screen.scroll_region.top, screen.scroll_region.bottom);
     } else if screen.cursor.y < screen.height() - 1 {
         screen.cursor.y += 1;
     }
@@ -884,14 +844,7 @@ mod tests {
         let mut parser = InputParser::new();
         parser.parse(b"\x1b[38;2;100;200;50mG", &mut screen);
         let cell = screen.grid.get_cell(0, 0);
-        assert_eq!(
-            cell.style.fg,
-            Color::Rgb {
-                r: 100,
-                g: 200,
-                b: 50
-            }
-        );
+        assert_eq!(cell.style.fg, Color::Rgb { r: 100, g: 200, b: 50 });
     }
 
     #[test]

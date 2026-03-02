@@ -64,12 +64,7 @@ pub struct SavedCursor {
 
 impl From<&Cursor> for SavedCursor {
     fn from(c: &Cursor) -> Self {
-        Self {
-            x: c.x,
-            y: c.y,
-            style: c.style,
-            origin_mode: c.origin_mode,
-        }
+        Self { x: c.x, y: c.y, style: c.style, origin_mode: c.origin_mode }
     }
 }
 

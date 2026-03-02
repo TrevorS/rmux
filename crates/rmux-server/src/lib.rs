@@ -23,6 +23,7 @@ pub mod command;
 pub mod config;
 pub mod format;
 pub mod keybind;
+pub mod navigate;
 pub mod notify;
 pub mod pane;
 pub mod render;

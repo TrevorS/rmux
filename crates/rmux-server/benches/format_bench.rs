@@ -1,6 +1,6 @@
 //! Format string expansion benchmarks.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn bench_placeholder(_c: &mut Criterion) {
     // Format expansion benchmarks will be added when the format module is implemented

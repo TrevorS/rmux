@@ -41,10 +41,7 @@ pub async fn send_identify(
 }
 
 /// Send a command to the server.
-pub async fn send_command(
-    writer: &mut MessageWriter,
-    argv: &[&str],
-) -> Result<(), CodecError> {
+pub async fn send_command(writer: &mut MessageWriter, argv: &[&str]) -> Result<(), CodecError> {
     let msg = Message::Command(rmux_protocol::message::MsgCommand {
         #[allow(clippy::cast_possible_wrap)]
         argc: argv.len() as i32,

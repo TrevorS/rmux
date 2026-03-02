@@ -36,12 +36,7 @@ impl GridLine {
     /// Create a new empty line.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            cells: Vec::new(),
-            extended: Vec::new(),
-            flags: LineFlags::empty(),
-            time: 0,
-        }
+        Self { cells: Vec::new(), extended: Vec::new(), flags: LineFlags::empty(), time: 0 }
     }
 
     /// Create a new line with the given capacity.
@@ -187,9 +182,9 @@ impl GridLine {
     /// Returns true if the line has no meaningful content.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.cells.iter().all(|c| {
-            !c.is_extended() && c.data == b' ' && c.attrs == 0 && c.fg == 8 && c.bg == 8
-        })
+        self.cells
+            .iter()
+            .all(|c| !c.is_extended() && c.data == b' ' && c.attrs == 0 && c.fg == 8 && c.bg == 8)
     }
 
     /// Get raw compact cells slice (for benchmarking/testing).
@@ -223,10 +218,7 @@ mod tests {
         let mut line = GridLine::new();
         let cell = GridCell {
             data: Utf8Char::from_ascii(b'H'),
-            style: Style {
-                fg: Color::RED,
-                ..Style::DEFAULT
-            },
+            style: Style { fg: Color::RED, ..Style::DEFAULT },
             link: 0,
             flags: CellFlags::empty(),
         };
@@ -246,10 +238,7 @@ mod tests {
     #[test]
     fn set_cell_extends_line() {
         let mut line = GridLine::new();
-        let cell = GridCell {
-            data: Utf8Char::from_ascii(b'X'),
-            ..GridCell::CLEARED
-        };
+        let cell = GridCell { data: Utf8Char::from_ascii(b'X'), ..GridCell::CLEARED };
         line.set_cell(5, &cell);
         assert_eq!(line.cell_count(), 6);
         // Cells 0-4 should be cleared
@@ -277,10 +266,7 @@ mod tests {
         for i in 0..10u32 {
             let cell = GridCell {
                 data: Utf8Char::from_ascii(b'A' + i as u8),
-                style: Style {
-                    fg: Color::RED,
-                    ..Style::DEFAULT
-                },
+                style: Style { fg: Color::RED, ..Style::DEFAULT },
                 link: 0,
                 flags: CellFlags::empty(),
             };
@@ -296,10 +282,7 @@ mod tests {
     #[test]
     fn fill_to_width() {
         let mut line = GridLine::new();
-        line.set_cell(0, &GridCell {
-            data: Utf8Char::from_ascii(b'A'),
-            ..GridCell::CLEARED
-        });
+        line.set_cell(0, &GridCell { data: Utf8Char::from_ascii(b'A'), ..GridCell::CLEARED });
         line.fill_to(80);
         assert_eq!(line.cell_count(), 80);
     }

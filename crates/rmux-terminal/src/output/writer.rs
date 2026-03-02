@@ -16,10 +16,7 @@ impl TermWriter {
     /// Create a new writer with a buffer of the given capacity.
     #[must_use]
     pub fn new(capacity: usize) -> Self {
-        Self {
-            buf: BytesMut::with_capacity(capacity),
-            current_style: Style::DEFAULT,
-        }
+        Self { buf: BytesMut::with_capacity(capacity), current_style: Style::DEFAULT }
     }
 
     /// Get the output buffer.
@@ -186,10 +183,7 @@ mod tests {
     #[test]
     fn style_bold() {
         let mut w = TermWriter::new(256);
-        let style = Style {
-            attrs: Attrs::BOLD,
-            ..Style::DEFAULT
-        };
+        let style = Style { attrs: Attrs::BOLD, ..Style::DEFAULT };
         w.set_style(&style);
         assert!(w.buffer().windows(4).any(|w| w == b"\x1b[1m"));
     }
@@ -204,10 +198,7 @@ mod tests {
     #[test]
     fn fg_color() {
         let mut w = TermWriter::new(256);
-        let style = Style {
-            fg: Color::RED,
-            ..Style::DEFAULT
-        };
+        let style = Style { fg: Color::RED, ..Style::DEFAULT };
         w.set_style(&style);
         assert!(w.buffer().windows(5).any(|w| w == b"\x1b[31m"));
     }

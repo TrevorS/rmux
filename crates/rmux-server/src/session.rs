@@ -1,7 +1,7 @@
 //! Session management.
 
 use crate::window::Window;
-use rmux_core::options::{default_session_options, Options};
+use rmux_core::options::{Options, default_session_options};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -20,6 +20,8 @@ pub struct Session {
     pub windows: HashMap<u32, Window>,
     /// Active window index.
     pub active_window: u32,
+    /// Last active window index (for `last-window` command).
+    pub last_window: Option<u32>,
     /// Session options.
     pub options: Options,
     /// Number of attached clients.
@@ -36,6 +38,7 @@ impl Session {
             cwd,
             windows: HashMap::new(),
             active_window: 0,
+            last_window: None,
             options: default_session_options(),
             attached: 0,
         }
@@ -55,15 +58,51 @@ impl Session {
     /// Next available window index.
     #[must_use]
     pub fn next_window_index(&self) -> u32 {
-        let base = self
-            .options
-            .get_number("base-index")
-            .unwrap_or(0) as u32;
+        let base = self.options.get_number("base-index").unwrap_or(0) as u32;
         let mut idx = base;
         while self.windows.contains_key(&idx) {
             idx += 1;
         }
         idx
+    }
+
+    /// Switch to a window by index, updating last_window.
+    pub fn select_window(&mut self, idx: u32) -> bool {
+        if !self.windows.contains_key(&idx) || idx == self.active_window {
+            return false;
+        }
+        self.last_window = Some(self.active_window);
+        self.active_window = idx;
+        true
+    }
+
+    /// Get sorted window indices.
+    pub fn sorted_window_indices(&self) -> Vec<u32> {
+        let mut indices: Vec<u32> = self.windows.keys().copied().collect();
+        indices.sort_unstable();
+        indices
+    }
+
+    /// Get the next window index (wrapping around).
+    pub fn next_window_after(&self, current: u32) -> Option<u32> {
+        let indices = self.sorted_window_indices();
+        if indices.len() < 2 {
+            return None;
+        }
+        let pos = indices.iter().position(|&i| i == current)?;
+        let next = (pos + 1) % indices.len();
+        Some(indices[next])
+    }
+
+    /// Get the previous window index (wrapping around).
+    pub fn prev_window_before(&self, current: u32) -> Option<u32> {
+        let indices = self.sorted_window_indices();
+        if indices.len() < 2 {
+            return None;
+        }
+        let pos = indices.iter().position(|&i| i == current)?;
+        let prev = if pos == 0 { indices.len() - 1 } else { pos - 1 };
+        Some(indices[prev])
     }
 }
 

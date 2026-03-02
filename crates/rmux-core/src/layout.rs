@@ -57,15 +57,7 @@ impl LayoutCell {
     #[must_use]
     pub fn new_split(cell_type: LayoutType, x: u32, y: u32, sx: u32, sy: u32) -> Self {
         debug_assert!(cell_type != LayoutType::Pane);
-        Self {
-            cell_type,
-            x_off: x,
-            y_off: y,
-            sx,
-            sy,
-            pane_id: None,
-            children: Vec::new(),
-        }
+        Self { cell_type, x_off: x, y_off: y, sx, sy, pane_id: None, children: Vec::new() }
     }
 
     /// Whether this is a leaf (pane) node.
@@ -85,13 +77,8 @@ impl LayoutCell {
         let old_pane_id = self.pane_id.take();
         let half = self.sx / 2;
 
-        let left = LayoutCell::new_pane(
-            self.x_off,
-            self.y_off,
-            half,
-            self.sy,
-            old_pane_id.unwrap_or(0),
-        );
+        let left =
+            LayoutCell::new_pane(self.x_off, self.y_off, half, self.sy, old_pane_id.unwrap_or(0));
         let right = LayoutCell::new_pane(
             self.x_off + half + 1, // +1 for separator
             self.y_off,
@@ -114,13 +101,8 @@ impl LayoutCell {
         let old_pane_id = self.pane_id.take();
         let half = self.sy / 2;
 
-        let top = LayoutCell::new_pane(
-            self.x_off,
-            self.y_off,
-            self.sx,
-            half,
-            old_pane_id.unwrap_or(0),
-        );
+        let top =
+            LayoutCell::new_pane(self.x_off, self.y_off, self.sx, half, old_pane_id.unwrap_or(0));
         let bottom = LayoutCell::new_pane(
             self.x_off,
             self.y_off + half + 1, // +1 for separator
@@ -151,11 +133,7 @@ impl LayoutCell {
     /// Count the number of panes in this layout subtree.
     #[must_use]
     pub fn pane_count(&self) -> usize {
-        if self.is_pane() {
-            1
-        } else {
-            self.children.iter().map(LayoutCell::pane_count).sum()
-        }
+        if self.is_pane() { 1 } else { self.children.iter().map(LayoutCell::pane_count).sum() }
     }
 
     /// Collect all pane IDs in this layout.
@@ -193,8 +171,7 @@ pub fn layout_even_horizontal(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell 
     let mut x = 0;
     for (i, &pane_id) in pane_ids.iter().enumerate() {
         let w = base_width + if i < extra { 1 } else { 0 };
-        root.children
-            .push(LayoutCell::new_pane(x, 0, w, sy, pane_id));
+        root.children.push(LayoutCell::new_pane(x, 0, w, sy, pane_id));
         x += w + 1; // +1 for separator
     }
     root
@@ -217,8 +194,7 @@ pub fn layout_even_vertical(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
     let mut y = 0;
     for (i, &pane_id) in pane_ids.iter().enumerate() {
         let h = base_height + if i < extra { 1 } else { 0 };
-        root.children
-            .push(LayoutCell::new_pane(0, y, sx, h, pane_id));
+        root.children.push(LayoutCell::new_pane(0, y, sx, h, pane_id));
         y += h + 1;
     }
     root

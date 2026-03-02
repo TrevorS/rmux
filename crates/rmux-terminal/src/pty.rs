@@ -3,8 +3,8 @@
 //! Creates and manages pseudo-terminals for pane processes.
 
 use nix::libc;
-use nix::pty::{openpty, OpenptyResult, Winsize};
-use nix::unistd::{fork, ForkResult, Pid};
+use nix::pty::{OpenptyResult, Winsize, openpty};
+use nix::unistd::{ForkResult, Pid, fork};
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -37,12 +37,7 @@ pub struct SpawnedProcess {
 impl SpawnedProcess {
     /// Resize the PTY.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        let winsize = Winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
+        let winsize = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
         // SAFETY: master fd is valid and winsize is a valid struct.
         unsafe {
             let ret = libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
@@ -63,12 +58,7 @@ impl SpawnedProcess {
 impl Pty {
     /// Create a new PTY pair with the given initial size.
     pub fn open(cols: u16, rows: u16) -> Result<Self, PtyError> {
-        let winsize = Winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
+        let winsize = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
 
         let OpenptyResult { master, slave } = openpty(&winsize, None)?;
 
@@ -78,12 +68,7 @@ impl Pty {
 
     /// Resize the PTY.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        let winsize = Winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
+        let winsize = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
         // SAFETY: master fd is valid and we're passing a valid Winsize struct.
         unsafe {
             let ret = libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
@@ -104,6 +89,19 @@ impl Pty {
     #[must_use]
     pub fn slave_fd(&self) -> i32 {
         self.slave.as_raw_fd()
+    }
+
+    /// Resize a PTY given its raw file descriptor.
+    pub fn resize_fd(fd: i32, cols: u16, rows: u16) -> Result<(), PtyError> {
+        let winsize = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        // SAFETY: fd is a valid PTY master fd, winsize is a valid struct.
+        unsafe {
+            let ret = libc::ioctl(fd, libc::TIOCSWINSZ, &winsize);
+            if ret < 0 {
+                return Err(PtyError::Create(nix::Error::last()));
+            }
+        }
+        Ok(())
     }
 
     /// Spawn a shell process in this PTY.
@@ -172,8 +170,7 @@ impl Pty {
                     libc::signal(libc::SIGHUP, libc::SIG_DFL);
 
                     // Exec the shell as a login shell
-                    let argv: [*const libc::c_char; 2] =
-                        [login_cstr.as_ptr(), std::ptr::null()];
+                    let argv: [*const libc::c_char; 2] = [login_cstr.as_ptr(), std::ptr::null()];
                     libc::execvp(shell_cstr.as_ptr(), argv.as_ptr());
 
                     // execvp only returns on failure
@@ -192,7 +189,7 @@ impl Pty {
 
 /// Set a file descriptor to non-blocking mode.
 pub fn set_nonblocking(fd: i32) -> Result<(), PtyError> {
-    use nix::fcntl::{fcntl, FcntlArg, OFlag};
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
     let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(PtyError::Create)?;
     let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
     fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(PtyError::Create)?;
@@ -241,7 +238,7 @@ mod tests {
         assert!(n.is_ok(), "read failed: {n:?}");
 
         // Wait for child to finish
-        use nix::sys::wait::{waitpid, WaitPidFlag};
+        use nix::sys::wait::{WaitPidFlag, waitpid};
         waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG)).ok();
     }
 
@@ -256,7 +253,7 @@ mod tests {
         // Wait for child to exit
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        use nix::sys::wait::{waitpid, WaitPidFlag};
+        use nix::sys::wait::{WaitPidFlag, waitpid};
         let status = waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG));
         assert!(status.is_ok());
     }
@@ -276,7 +273,7 @@ mod tests {
         // Clean up
         nix::unistd::write(&spawned.master, b"exit\n").ok();
         std::thread::sleep(std::time::Duration::from_millis(100));
-        use nix::sys::wait::{waitpid, WaitPidFlag};
+        use nix::sys::wait::{WaitPidFlag, waitpid};
         waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG)).ok();
     }
 }

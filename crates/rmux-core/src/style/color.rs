@@ -108,22 +108,14 @@ mod tests {
 
     #[test]
     fn rgb_color_roundtrip() {
-        let c = Color::Rgb {
-            r: 0xAB,
-            g: 0xCD,
-            b: 0xEF,
-        };
+        let c = Color::Rgb { r: 0xAB, g: 0xCD, b: 0xEF };
         assert_eq!(Color::from_tmux_raw(c.to_tmux_raw()), c);
     }
 
     #[test]
     fn rgb_extremes() {
         let black = Color::Rgb { r: 0, g: 0, b: 0 };
-        let white = Color::Rgb {
-            r: 255,
-            g: 255,
-            b: 255,
-        };
+        let white = Color::Rgb { r: 255, g: 255, b: 255 };
         assert_eq!(Color::from_tmux_raw(black.to_tmux_raw()), black);
         assert_eq!(Color::from_tmux_raw(white.to_tmux_raw()), white);
     }

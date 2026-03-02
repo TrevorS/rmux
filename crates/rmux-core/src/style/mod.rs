@@ -26,12 +26,8 @@ pub struct Style {
 
 impl Style {
     /// A completely default style (default colors, no attributes).
-    pub const DEFAULT: Self = Self {
-        fg: Color::Default,
-        bg: Color::Default,
-        us: Color::Default,
-        attrs: Attrs::empty(),
-    };
+    pub const DEFAULT: Self =
+        Self { fg: Color::Default, bg: Color::Default, us: Color::Default, attrs: Attrs::empty() };
 
     /// Returns true if this style has no colors set and no attributes.
     #[must_use]
@@ -45,7 +41,10 @@ impl Style {
     /// Returns true if two styles look the same visually (ignoring non-visual flags).
     #[must_use]
     pub fn looks_equal(&self, other: &Self) -> bool {
-        self.fg == other.fg && self.bg == other.bg && self.us == other.us && self.attrs == other.attrs
+        self.fg == other.fg
+            && self.bg == other.bg
+            && self.us == other.us
+            && self.attrs == other.attrs
     }
 }
 
@@ -66,20 +65,14 @@ mod tests {
 
     #[test]
     fn style_with_fg_not_default() {
-        let s = Style {
-            fg: Color::RED,
-            ..Style::DEFAULT
-        };
+        let s = Style { fg: Color::RED, ..Style::DEFAULT };
         assert!(!s.is_default());
     }
 
     #[test]
     fn looks_equal_works() {
-        let s1 = Style {
-            fg: Color::Rgb { r: 1, g: 2, b: 3 },
-            attrs: Attrs::BOLD,
-            ..Style::DEFAULT
-        };
+        let s1 =
+            Style { fg: Color::Rgb { r: 1, g: 2, b: 3 }, attrs: Attrs::BOLD, ..Style::DEFAULT };
         let s2 = s1;
         assert!(s1.looks_equal(&s2));
     }

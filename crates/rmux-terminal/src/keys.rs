@@ -59,7 +59,7 @@ fn parse_csi_key(data: &[u8]) -> Option<(KeyCode, usize)> {
     let mut i = 0;
     while i < data.len() {
         match data[i] {
-            0x40..=0x7E => break,    // Final byte
+            0x40..=0x7E => break,  // Final byte
             0x20..=0x3F => i += 1, // Parameter/intermediate
             _ => return Some((KEYC_UNKNOWN, i + 1)),
         }

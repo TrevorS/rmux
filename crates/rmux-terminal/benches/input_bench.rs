@@ -3,7 +3,7 @@
 //! Measures throughput for various types of terminal output:
 //! pure ASCII, colored text, escape-heavy output.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rmux_core::screen::Screen;
 use rmux_terminal::input::InputParser;
 
@@ -69,17 +69,13 @@ fn bench_pure_ascii(c: &mut Criterion) {
     for &size in &[1024, 65536, 1_048_576] {
         let data = make_ascii_data(size);
         group.throughput(Throughput::Bytes(data.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{size}")),
-            &data,
-            |b, data| {
-                b.iter(|| {
-                    let mut screen = Screen::new(80, 24, 0);
-                    let mut parser = InputParser::new();
-                    parser.parse(black_box(data), &mut screen);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{size}")), &data, |b, data| {
+            b.iter(|| {
+                let mut screen = Screen::new(80, 24, 0);
+                let mut parser = InputParser::new();
+                parser.parse(black_box(data), &mut screen);
+            });
+        });
     }
     group.finish();
 }
@@ -90,17 +86,13 @@ fn bench_colored_text(c: &mut Criterion) {
     for &size in &[1024, 65536, 1_048_576] {
         let data = make_colored_data(size);
         group.throughput(Throughput::Bytes(data.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{size}")),
-            &data,
-            |b, data| {
-                b.iter(|| {
-                    let mut screen = Screen::new(80, 24, 0);
-                    let mut parser = InputParser::new();
-                    parser.parse(black_box(data), &mut screen);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{size}")), &data, |b, data| {
+            b.iter(|| {
+                let mut screen = Screen::new(80, 24, 0);
+                let mut parser = InputParser::new();
+                parser.parse(black_box(data), &mut screen);
+            });
+        });
     }
     group.finish();
 }
@@ -111,25 +103,16 @@ fn bench_escape_heavy(c: &mut Criterion) {
     for &size in &[1024, 65536, 1_048_576] {
         let data = make_escape_heavy_data(size);
         group.throughput(Throughput::Bytes(data.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{size}")),
-            &data,
-            |b, data| {
-                b.iter(|| {
-                    let mut screen = Screen::new(200, 50, 0);
-                    let mut parser = InputParser::new();
-                    parser.parse(black_box(data), &mut screen);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{size}")), &data, |b, data| {
+            b.iter(|| {
+                let mut screen = Screen::new(200, 50, 0);
+                let mut parser = InputParser::new();
+                parser.parse(black_box(data), &mut screen);
+            });
+        });
     }
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_pure_ascii,
-    bench_colored_text,
-    bench_escape_heavy
-);
+criterion_group!(benches, bench_pure_ascii, bench_colored_text, bench_escape_heavy);
 criterion_main!(benches);

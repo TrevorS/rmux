@@ -20,7 +20,7 @@ pub struct KeyBindings {
     prefix: KeyCode,
     /// Whether we're waiting for a key after the prefix.
     in_prefix: bool,
-    /// Key → command bindings for prefix mode.
+    /// Key -> command bindings for prefix mode.
     bindings: HashMap<KeyCode, Vec<String>>,
 }
 
@@ -29,22 +29,44 @@ impl KeyBindings {
     pub fn default_bindings() -> Self {
         let prefix = keyc_build(b'b'.into(), KeyModifiers::CTRL);
 
-        let mut bindings = HashMap::new();
+        let mut bindings: HashMap<KeyCode, Vec<String>> = HashMap::new();
 
-        // d - detach
+        // Detach
         bindings.insert(b'd' as KeyCode, vec!["detach-client".into()]);
 
-        // c - new window (not yet implemented, placeholder)
+        // Window management
         bindings.insert(b'c' as KeyCode, vec!["new-window".into()]);
+        bindings.insert(b'n' as KeyCode, vec!["next-window".into()]);
+        bindings.insert(b'p' as KeyCode, vec!["previous-window".into()]);
+        bindings.insert(b'l' as KeyCode, vec!["last-window".into()]);
+        bindings.insert(b'&' as KeyCode, vec!["kill-window".into()]);
 
-        // : - command prompt (not yet implemented)
+        // Pane splitting
+        bindings.insert(b'"' as KeyCode, vec!["split-window".into()]);
+        bindings.insert(b'%' as KeyCode, vec!["split-window".into(), "-h".into()]);
+
+        // Pane navigation
+        bindings.insert(b'o' as KeyCode, vec!["select-pane".into(), "-t".into(), "+".into()]);
+        bindings.insert(b'x' as KeyCode, vec!["kill-pane".into()]);
+
+        // Arrow key pane navigation
+        bindings.insert(KEYC_UP, vec!["select-pane".into(), "-U".into()]);
+        bindings.insert(KEYC_DOWN, vec!["select-pane".into(), "-D".into()]);
+        bindings.insert(KEYC_LEFT, vec!["select-pane".into(), "-L".into()]);
+        bindings.insert(KEYC_RIGHT, vec!["select-pane".into(), "-R".into()]);
+
+        // Window selection by number (0-9)
+        for i in 0u8..=9 {
+            bindings.insert(
+                (b'0' + i) as KeyCode,
+                vec!["select-window".into(), "-t".into(), i.to_string()],
+            );
+        }
+
+        // Command prompt
         bindings.insert(b':' as KeyCode, vec!["command-prompt".into()]);
 
-        Self {
-            prefix,
-            in_prefix: false,
-            bindings,
-        }
+        Self { prefix, in_prefix: false, bindings }
     }
 
     /// Process input bytes and return the action to take.
@@ -89,6 +111,64 @@ impl KeyBindings {
         // Not handled - pass through to pane
         None
     }
+
+    /// List all key bindings as human-readable strings.
+    pub fn list_bindings(&self) -> Vec<String> {
+        let mut result: Vec<String> = self
+            .bindings
+            .iter()
+            .map(|(&key, argv)| {
+                let key_name = key_to_string(key);
+                let cmd = argv.join(" ");
+                format!("bind-key -T prefix {key_name} {cmd}")
+            })
+            .collect();
+        result.sort();
+        result
+    }
+}
+
+/// Convert a key code to a human-readable string.
+fn key_to_string(key: KeyCode) -> String {
+    let base = keyc_base(key);
+    let mods = keyc_modifiers(key);
+
+    let mut pfx = String::new();
+    if mods.contains(KeyModifiers::CTRL) {
+        pfx.push_str("C-");
+    }
+    if mods.contains(KeyModifiers::META) {
+        pfx.push_str("M-");
+    }
+    if mods.contains(KeyModifiers::SHIFT) {
+        pfx.push_str("S-");
+    }
+
+    let name = match base {
+        KEYC_UP => "Up".to_string(),
+        KEYC_DOWN => "Down".to_string(),
+        KEYC_LEFT => "Left".to_string(),
+        KEYC_RIGHT => "Right".to_string(),
+        KEYC_HOME => "Home".to_string(),
+        KEYC_END => "End".to_string(),
+        KEYC_INSERT => "IC".to_string(),
+        KEYC_PPAGE => "PPage".to_string(),
+        KEYC_NPAGE => "NPage".to_string(),
+        KEYC_BACKSPACE => "BSpace".to_string(),
+        KEYC_TAB => "Tab".to_string(),
+        KEYC_RETURN => "Enter".to_string(),
+        KEYC_ESCAPE => "Escape".to_string(),
+        KEYC_SPACE => "Space".to_string(),
+        KEYC_DELETE => "DC".to_string(),
+        b if (KEYC_F1..=KEYC_F12).contains(&b) => format!("F{}", b - KEYC_F1 + 1),
+        b if b < 128 => {
+            let ch = b as u8 as char;
+            if ch.is_ascii_graphic() || ch == ' ' { ch.to_string() } else { format!("0x{b:02x}") }
+        }
+        other => format!("0x{other:x}"),
+    };
+
+    format!("{pfx}{name}")
 }
 
 #[cfg(test)]
@@ -123,9 +203,72 @@ mod tests {
     }
 
     #[test]
+    fn prefix_percent_splits_horizontal() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        let result = kb.process_input(b"%");
+        match result {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["split-window", "-h"]);
+            }
+            _ => panic!("expected Command"),
+        }
+    }
+
+    #[test]
+    fn prefix_quote_splits_vertical() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        let result = kb.process_input(b"\"");
+        match result {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["split-window"]);
+            }
+            _ => panic!("expected Command"),
+        }
+    }
+
+    #[test]
+    fn prefix_n_next_window() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        let result = kb.process_input(b"n");
+        match result {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["next-window"]);
+            }
+            _ => panic!("expected Command"),
+        }
+    }
+
+    #[test]
+    fn prefix_0_selects_window_0() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        let result = kb.process_input(b"0");
+        match result {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["select-window", "-t", "0"]);
+            }
+            _ => panic!("expected Command"),
+        }
+    }
+
+    #[test]
     fn normal_input_passes_through() {
         let mut kb = KeyBindings::default_bindings();
         let result = kb.process_input(b"a");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn list_bindings_returns_sorted() {
+        let kb = KeyBindings::default_bindings();
+        let bindings = kb.list_bindings();
+        assert!(!bindings.is_empty());
+        // Should be sorted
+        let mut sorted = bindings.clone();
+        sorted.sort();
+        assert_eq!(bindings, sorted);
     }
 }

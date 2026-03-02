@@ -147,10 +147,7 @@ mod tests {
     fn key_code_roundtrip() {
         let key = keyc_build(KEYC_F5, KeyModifiers::CTRL | KeyModifiers::SHIFT);
         assert_eq!(keyc_base(key), KEYC_F5);
-        assert_eq!(
-            keyc_modifiers(key),
-            KeyModifiers::CTRL | KeyModifiers::SHIFT
-        );
+        assert_eq!(keyc_modifiers(key), KeyModifiers::CTRL | KeyModifiers::SHIFT);
     }
 
     #[test]

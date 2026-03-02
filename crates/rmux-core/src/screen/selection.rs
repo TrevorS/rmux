@@ -32,22 +32,13 @@ impl Selection {
     /// Create a new selection starting at the given position.
     #[must_use]
     pub fn new(x: u32, y: u32, sel_type: SelectionType) -> Self {
-        Self {
-            sel_type,
-            start_x: x,
-            start_y: y,
-            end_x: x,
-            end_y: y,
-            active: true,
-        }
+        Self { sel_type, start_x: x, start_y: y, end_x: x, end_y: y, active: true }
     }
 
     /// Normalize the selection so start <= end.
     #[must_use]
     pub fn normalized(&self) -> (u32, u32, u32, u32) {
-        if self.start_y < self.end_y
-            || (self.start_y == self.end_y && self.start_x <= self.end_x)
-        {
+        if self.start_y < self.end_y || (self.start_y == self.end_y && self.start_x <= self.end_x) {
             (self.start_x, self.start_y, self.end_x, self.end_y)
         } else {
             (self.end_x, self.end_y, self.start_x, self.start_y)
