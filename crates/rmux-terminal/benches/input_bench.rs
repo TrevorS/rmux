@@ -51,11 +51,10 @@ fn make_escape_heavy_data(size: usize) -> Vec<u8> {
     while produced < size {
         // Simulate colored diff output
         // Move cursor, set color, print, reset
-        let chunk = format!(
-            "\x1b[1;32m+\x1b[0m line content here with some text\x1b[K\r\n\
+        let chunk = "\x1b[1;32m+\x1b[0m line content here with some text\x1b[K\r\n\
              \x1b[1;31m-\x1b[0m old line removed from the file\x1b[K\r\n\
              \x1b[36m@@\x1b[0m -10,5 +10,7 @@ function_name\r\n"
-        );
+            .to_string();
         data.extend_from_slice(chunk.as_bytes());
         produced += chunk.len();
     }

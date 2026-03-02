@@ -144,7 +144,7 @@ impl Pty {
                     libc::setsid();
 
                     // Set the slave as the controlling terminal
-                    libc::ioctl(slave_raw, libc::TIOCSCTTY, 0);
+                    libc::ioctl(slave_raw, libc::TIOCSCTTY.into(), 0);
 
                     // Redirect stdin/stdout/stderr to the slave PTY
                     libc::dup2(slave_raw, libc::STDIN_FILENO);
