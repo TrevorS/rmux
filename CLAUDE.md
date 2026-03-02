@@ -17,7 +17,7 @@ cargo fmt --check                        # Check formatting
 cargo clippy --all-targets --all-features  # Lint (zero warnings required)
 cargo bench -p rmux-core                 # Run benchmarks for a crate
 
-# Fuzzing (requires nightly)
+# Fuzzing (requires nightly) — 7 targets in fuzz/fuzz_targets/
 cd fuzz && cargo +nightly fuzz run fuzz_input_parser
 ```
 
@@ -37,13 +37,33 @@ rmux-client     CLI parsing (tmux-compatible flags), server auto-start, attached
 
 ## Architecture
 
-**Client-server over Unix domain sockets.** Client connects, sends identification sequence (term type, cwd, env), then sends a command (argc/argv). Server responds with Ready (attach) or Exit. In attached mode, bidirectional InputData/OutputData messages flow between client stdin/stdout and server PTY fds.
+**Client-server over Unix domain sockets.** Socket path: `$TMPDIR/rmux-$UID/default` (uses `getuid()`, not PID). Client connects, sends identification sequence (term type, cwd, env), then sends a command (argc/argv). Server responds with Ready (attach) or Exit. In attached mode, bidirectional InputData/OutputData messages flow between client stdin/stdout and server PTY fds.
 
-**Pane data flow:** PTY fd → raw bytes → `InputParser` (VT100 state machine) → `Screen` operations → `Grid` updated → `render_window()` via `TermWriter` → OutputData message → client stdout.
+**Server event loop** (`server.rs`) — single-threaded tokio `select!` over four event sources:
+1. New client connections (UnixListener accept)
+2. PTY output from panes (mpsc channel, one reader task per pane)
+3. Client messages (mpsc channel, one reader task per client)
+4. Periodic redraw tick (16ms / ~60fps)
+
+**Command dispatch** — Commands register as `CommandEntry` structs in `command/builtins/mod.rs` with name, handler fn, usage. Handlers receive `(&[String], &mut dyn CommandServer)` and return `CommandResult`. The `CommandServer` trait abstracts all server state mutations so commands are decoupled from the `Server` struct. Command lookup supports exact match and unambiguous prefix matching (tmux-compatible).
+
+**Pane lifecycle** — PTY reader tasks send an empty-vec EOF sentinel when the shell exits. `handle_pane_exit()` cascades: removes pane → removes window if last pane → removes session and detaches clients if last window.
+
+**Render pipeline:** PTY fd → raw bytes → `InputParser` (VT100 state machine) → `Screen` operations → `Grid` updated → `render_window()` via `TermWriter` → OutputData message → client stdout. The renderer receives the full window list (for the status bar) and optional prompt state (for command prompt mode). Status line shows `[session] 0:bash* 1:vim 2:logs` with `*` marking active window.
 
 **Grid cell optimization:** Compact 8-byte cell for ASCII + 256-color (common case), extended cell for non-ASCII/RGB/hyperlinks. Mirrors tmux's `grid_cell_entry`/`grid_extd_entry` split.
 
-**Options hierarchy:** Server → Session → Window → Pane, each level inherits/overrides parent.
+**Options hierarchy:** Server → Session → Window → Pane, each level inherits/overrides parent. `Options` is a HashMap with typed getters (`get_string`, `get_number`, `get_flag`).
+
+**Key bindings** — Named tables: `prefix`, `root`, `copy-mode-vi`, `copy-mode-emacs`. Prefix key (Ctrl-b) enters the prefix table for the next keystroke. `KeyBindings::process_input()` returns `KeyAction::SendToPane(bytes)` or `KeyAction::Command(argv)`.
+
+## Important Patterns
+
+**Attached vs non-attached clients.** Command errors must not disconnect attached clients (tmux shows errors in the status line). Only non-attached clients get `ErrorOutput` + `Exit` on command failure.
+
+**Target resolution** (`-t` flag). Targets use tmux syntax: `session:window.pane`. Bare numbers are window indices (use current session), not session names. The `resolve_session`/`resolve_window_idx` helpers in `command/builtins/window.rs` handle this.
+
+**Tests** are inline `#[cfg(test)]` modules. Command integration tests live in `command/phase4_tests.rs` and `phase5_tests.rs` using mock helpers from `command/test_helpers.rs`.
 
 ## Code Standards (from AGENTS.md)
 

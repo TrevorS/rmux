@@ -125,7 +125,7 @@ impl Server {
     /// Get the default socket path (matching tmux's convention).
     pub fn default_socket_path() -> PathBuf {
         let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-        let uid = nix::unistd::getpid();
+        let uid = nix::unistd::getuid();
         PathBuf::from(format!("{tmpdir}/rmux-{uid}/default"))
     }
 
@@ -164,7 +164,7 @@ impl Server {
 
                 // PTY output from any pane
                 Some((pane_id, data)) = self.pty_rx.recv() => {
-                    self.handle_pty_output(pane_id, &data);
+                    self.handle_pty_output(pane_id, &data).await;
                 }
 
                 // Client events (messages or disconnections)
@@ -214,7 +214,13 @@ impl Server {
         tracing::info!("client {client_id} connected");
     }
 
-    fn handle_pty_output(&mut self, pane_id: u32, data: &[u8]) {
+    async fn handle_pty_output(&mut self, pane_id: u32, data: &[u8]) {
+        if data.is_empty() {
+            // EOF sentinel: the pane's process exited.
+            self.handle_pane_exit(pane_id).await;
+            return;
+        }
+
         // Find the pane and feed data through its parser
         for session in self.sessions.iter_mut() {
             for window in session.windows.values_mut() {
@@ -230,6 +236,73 @@ impl Server {
                 }
             }
         }
+    }
+
+    /// Handle a pane whose process has exited.
+    async fn handle_pane_exit(&mut self, pane_id: u32) {
+        tracing::info!("pane {pane_id} process exited");
+
+        // Find which session/window owns this pane
+        let location = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.iter().map(move |(&widx, w)| (s.id, widx, w)))
+            .find(|(_, _, w)| w.panes.contains_key(&pane_id))
+            .map(|(sid, widx, w)| (sid, widx, w.panes.len()));
+
+        let Some((session_id, window_idx, pane_count)) = location else {
+            // Orphan pane, just clean up
+            self.cleanup_pane(pane_id);
+            return;
+        };
+
+        self.cleanup_pane(pane_id);
+
+        if pane_count <= 1 {
+            // Last pane in window — remove the window
+            if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                session.windows.remove(&window_idx);
+
+                if session.windows.is_empty() {
+                    // Last window in session — remove session and detach clients
+                    let sid = session_id;
+                    self.sessions.remove(sid);
+                    self.detach_session_clients(sid).await;
+                    return;
+                }
+
+                // Switch to another window if the active one was closed
+                if session.active_window == window_idx {
+                    if let Some(&next_idx) = session.windows.keys().next() {
+                        session.active_window = next_idx;
+                    }
+                }
+            }
+        } else {
+            // Remove just this pane from the window
+            if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                if let Some(window) = session.windows.get_mut(&window_idx) {
+                    window.panes.remove(&pane_id);
+                    if window.active_pane == pane_id {
+                        if let Some(&next) = window.panes.keys().next() {
+                            window.active_pane = next;
+                        }
+                    }
+                    // Rebuild layout
+                    let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+                    if pane_ids.len() > 1 {
+                        window.layout =
+                            Some(layout_even_horizontal(window.sx, window.sy, &pane_ids));
+                    } else {
+                        window.layout = pane_ids.first().map(|&pid| {
+                            rmux_core::layout::LayoutCell::new_pane(0, 0, window.sx, window.sy, pid)
+                        });
+                    }
+                }
+            }
+        }
+
+        self.mark_clients_redraw(session_id);
     }
 
     async fn handle_client_event(&mut self, client_id: u64, event: ClientEvent) {
@@ -353,8 +426,14 @@ impl Server {
             Err(e) => {
                 let err_msg = format!("{e}\n");
                 if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.send(&Message::ErrorOutput(err_msg.into_bytes())).await.ok();
-                    client.send(&Message::Exit).await.ok();
+                    if client.is_attached() {
+                        // For attached clients, log the error but don't disconnect.
+                        // tmux shows errors in the status line; we just log for now.
+                        tracing::warn!("command error for attached client {client_id}: {e}");
+                    } else {
+                        client.send(&Message::ErrorOutput(err_msg.into_bytes())).await.ok();
+                        client.send(&Message::Exit).await.ok();
+                    }
                 }
             }
         }
@@ -985,29 +1064,47 @@ impl Server {
         }
     }
 
+    /// Detach all clients attached to a session (e.g. when session is destroyed).
+    async fn detach_session_clients(&mut self, session_id: u32) {
+        let client_ids: Vec<u64> = self
+            .clients
+            .values()
+            .filter(|c| c.session_id == Some(session_id) && c.is_attached())
+            .map(|c| c.id)
+            .collect();
+
+        for cid in client_ids {
+            if let Some(client) = self.clients.get_mut(&cid) {
+                client.detach();
+                client.send(&Message::Exited).await.ok();
+            }
+        }
+    }
+
     async fn render_clients(&mut self) {
-        // Collect client IDs that need redraw, along with their session IDs and sizes
-        let to_render: Vec<(u64, u32, u32, u32)> = self
+        // Collect client IDs that need redraw, along with their session IDs, sizes, and prompt
+        let to_render: Vec<(u64, u32, u32, u32, Option<String>)> = self
             .clients
             .values_mut()
             .filter_map(|c| {
                 if c.needs_redraw() {
-                    c.session_id.map(|sid| (c.id, sid, c.sx, c.sy))
+                    let prompt = c.prompt.as_ref().map(|p| p.buffer.clone());
+                    c.session_id.map(|sid| (c.id, sid, c.sx, c.sy, prompt))
                 } else {
                     None
                 }
             })
             .collect();
 
-        for (client_id, session_id, sx, sy) in to_render {
-            let output = self.render_session(session_id, sx, sy);
+        for (client_id, session_id, sx, sy, prompt) in to_render {
+            let output = self.render_session(session_id, sx, sy, prompt.as_deref());
             if let Some(client) = self.clients.get_mut(&client_id) {
                 client.send(&Message::OutputData(output)).await.ok();
             }
         }
     }
 
-    fn render_session(&self, session_id: u32, sx: u32, sy: u32) -> Vec<u8> {
+    fn render_session(&self, session_id: u32, sx: u32, sy: u32, prompt: Option<&str>) -> Vec<u8> {
         let Some(session) = self.sessions.find_by_id(session_id) else {
             return Vec::new();
         };
@@ -1015,7 +1112,19 @@ impl Server {
             return Vec::new();
         };
 
-        render::render_window(window, &session.name, session.active_window, sx, sy)
+        // Build window list for status line
+        let mut window_list: Vec<render::WindowInfo> = session
+            .windows
+            .iter()
+            .map(|(&idx, w)| render::WindowInfo {
+                idx,
+                name: w.name.clone(),
+                is_active: idx == session.active_window,
+            })
+            .collect();
+        window_list.sort_by_key(|w| w.idx);
+
+        render::render_window(window, &session.name, sx, sy, &window_list, prompt)
     }
 
     /// Spawn a shell process for a pane.
@@ -1106,6 +1215,8 @@ async fn pty_read_task(raw_fd: i32, pane_id: u32, tx: mpsc::Sender<(u32, Vec<u8>
         }
     }
 
+    // Notify the server that this pane's process exited (empty vec = EOF sentinel).
+    tx.send((pane_id, Vec::new())).await.ok();
     tracing::debug!("PTY read task for pane {pane_id} exiting");
 }
 

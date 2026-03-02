@@ -120,7 +120,7 @@ fn main() {
         PathBuf::from(p)
     } else {
         let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-        let uid = nix::unistd::getpid();
+        let uid = nix::unistd::getuid();
         PathBuf::from(format!("{tmpdir}/rmux-{uid}/{socket_name}"))
     };
 
@@ -152,14 +152,24 @@ async fn run_client(socket_path: &std::path::Path, command_args: &[&str]) -> i32
                 eprintln!("rmux: failed to start server: {e}");
                 return 1;
             }
-            // Wait a bit for the server to start
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-            // Retry connection
-            match connect::connect(socket_path).await {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("rmux: failed to connect to server: {e}");
+            // Retry with backoff — server needs time to bind the socket
+            let mut connected = None;
+            for attempt in 0..10 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50 * (attempt + 1))).await;
+                match connect::connect(socket_path).await {
+                    Ok(s) => {
+                        connected = Some(s);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            match connected {
+                Some(s) => s,
+                None => {
+                    eprintln!("rmux: failed to connect to server (timed out)");
                     return 1;
                 }
             }

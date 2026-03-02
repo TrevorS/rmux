@@ -202,13 +202,29 @@ pub fn cmd_respawn_window(
 }
 
 /// Resolve the session ID from -t argument or current client session.
+///
+/// Target format: `[session_name:]window_idx` or `session_name`.
+/// A bare number (e.g. "1") is treated as a window index, not a session name,
+/// so we fall back to the current session.
 fn resolve_session(args: &[String], server: &dyn CommandServer) -> Result<u32, ServerError> {
     if let Some(target) = get_option(args, "-t") {
-        // Target could be "session_name" or "session_name:window_idx"
-        let session_name = target.split(':').next().unwrap_or(target);
-        server
-            .find_session_id(session_name)
-            .ok_or_else(|| ServerError::Command(format!("session not found: {session_name}")))
+        if target.contains(':') {
+            // Explicit "session:window" form
+            let session_name = target.split(':').next().unwrap_or(target);
+            server
+                .find_session_id(session_name)
+                .ok_or_else(|| ServerError::Command(format!("session not found: {session_name}")))
+        } else if target.parse::<u32>().is_ok() {
+            // Bare number — treat as window index, use current session
+            server
+                .client_session_id()
+                .ok_or_else(|| ServerError::Command("no current session".into()))
+        } else {
+            // Non-numeric string — treat as session name
+            server
+                .find_session_id(target)
+                .ok_or_else(|| ServerError::Command(format!("session not found: {target}")))
+        }
     } else {
         server.client_session_id().ok_or_else(|| ServerError::Command("no current session".into()))
     }

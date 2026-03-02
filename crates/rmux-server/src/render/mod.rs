@@ -8,15 +8,23 @@ use rmux_core::layout::{LayoutCell, LayoutType};
 use rmux_core::style::{Attrs, Color, Style};
 use rmux_terminal::output::writer::TermWriter;
 
+/// Info about each window in the session, for rendering the status line.
+pub struct WindowInfo {
+    pub idx: u32,
+    pub name: String,
+    pub is_active: bool,
+}
+
 /// Render a window's contents to raw terminal output bytes.
 ///
 /// Returns the bytes that should be written to the client's terminal.
 pub fn render_window(
     window: &Window,
     session_name: &str,
-    window_idx: u32,
     sx: u32,
     sy: u32,
+    window_list: &[WindowInfo],
+    prompt: Option<&str>,
 ) -> Vec<u8> {
     let mut writer = TermWriter::new(sx as usize * sy as usize * 4);
     let status_row = sy.saturating_sub(1);
@@ -38,8 +46,12 @@ pub fn render_window(
         render_panes_with_borders(&mut writer, window, sx, status_row);
     }
 
-    // Status line
-    render_status_line(&mut writer, session_name, window_idx, window, sx, status_row);
+    // Status line (or command prompt)
+    if let Some(prompt_buf) = prompt {
+        render_prompt_line(&mut writer, prompt_buf, sx, status_row);
+    } else {
+        render_status_line(&mut writer, session_name, window, window_list, sx, status_row);
+    }
 
     // Position cursor at active pane (copy mode cursor if in copy mode)
     if let Some(pane) = window.active_pane() {
@@ -226,8 +238,8 @@ fn is_pane_in_subtree(cell: &LayoutCell, pane_id: u32) -> bool {
 fn render_status_line(
     writer: &mut TermWriter,
     session_name: &str,
-    window_idx: u32,
     window: &Window,
+    window_list: &[WindowInfo],
     width: u32,
     y: u32,
 ) {
@@ -238,12 +250,23 @@ fn render_status_line(
         Style { fg: Color::BLACK, bg: Color::GREEN, us: Color::Default, attrs: Attrs::empty() };
     writer.set_style(&status_style);
 
+    // Build window list: "[session] 0:bash 1:vim* 2:logs-"
+    let mut status = format!("[{session_name}] ");
+    for (i, winfo) in window_list.iter().enumerate() {
+        if i > 0 {
+            status.push(' ');
+        }
+        write!(status, "{}:{}", winfo.idx, winfo.name).ok();
+        if winfo.is_active {
+            status.push('*');
+        }
+    }
+
+    // Show pane count if multi-pane
     let pane_count = window.pane_count();
-    let mut status = if pane_count > 1 {
-        format!("[{session_name}] {window_idx}:{} ({pane_count} panes)", window.name)
-    } else {
-        format!("[{session_name}] {window_idx}:{}", window.name)
-    };
+    if pane_count > 1 {
+        write!(status, " ({pane_count} panes)").ok();
+    }
 
     // Show copy mode indicator if active pane is in copy mode
     if let Some(pane) = window.active_pane() {
@@ -263,11 +286,36 @@ fn render_status_line(
     writer.set_style(&Style::DEFAULT);
 }
 
+/// Render the command prompt line (replaces the status line when in prompt mode).
+fn render_prompt_line(writer: &mut TermWriter, buffer: &str, width: u32, y: u32) {
+    writer.cursor_position(0, y);
+    let style =
+        Style { fg: Color::Default, bg: Color::Default, us: Color::Default, attrs: Attrs::empty() };
+    writer.set_style(&style);
+
+    let prompt = format!(":{buffer}");
+    writer.write_raw(prompt.as_bytes());
+
+    // Fill rest with spaces
+    let remaining = (width as usize).saturating_sub(prompt.len());
+    for _ in 0..remaining {
+        writer.write_raw(b" ");
+    }
+
+    // Position cursor right after the typed text
+    let cursor_x = prompt.len().min(width as usize);
+    writer.cursor_position(cursor_x as u32, y);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pane::Pane;
     use rmux_core::layout::layout_even_horizontal;
+
+    fn single_window_list(idx: u32, name: &str) -> Vec<WindowInfo> {
+        vec![WindowInfo { idx, name: name.to_string(), is_active: true }]
+    }
 
     #[test]
     fn render_single_pane() {
@@ -277,7 +325,8 @@ mod tests {
         window.active_pane = pid;
         window.panes.insert(pid, pane);
 
-        let output = render_window(&window, "main", 0, 80, 25);
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 25, &wl, None);
         assert!(!output.is_empty());
     }
 
@@ -301,7 +350,8 @@ mod tests {
         window.panes.insert(pid2, p2);
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
-        let output = render_window(&window, "main", 0, 80, 24);
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 24, &wl, None);
         // Should contain the vertical border character (│ = 0xe2 0x94 0x82 in UTF-8)
         assert!(output.windows(3).any(|w| w == [0xe2, 0x94, 0x82]));
     }
@@ -314,7 +364,8 @@ mod tests {
         window.active_pane = pid;
         window.panes.insert(pid, pane);
 
-        let output = render_window(&window, "main", 0, 80, 24);
+        let wl = single_window_list(0, "test");
+        let output = render_window(&window, "main", 80, 24, &wl, None);
         // Should contain "test" (the window name) in the status line
         assert!(output.windows(4).any(|w| w == b"test"));
     }
@@ -322,7 +373,8 @@ mod tests {
     #[test]
     fn render_empty_window() {
         let window = Window::new("empty".into(), 80, 24);
-        let output = render_window(&window, "sess", 0, 80, 25);
+        let wl = single_window_list(0, "empty");
+        let output = render_window(&window, "sess", 80, 25, &wl, None);
         // Even with no panes, the status line should produce output
         assert!(!output.is_empty());
     }
@@ -345,7 +397,8 @@ mod tests {
         window.panes.insert(pid2, pane2);
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
-        let output = render_window(&window, "sess", 0, 80, 24);
+        let wl = single_window_list(0, "multi");
+        let output = render_window(&window, "sess", 80, 24, &wl, None);
         assert!(output.windows(5).any(|w| w == b"Hello"));
         assert!(output.windows(5).any(|w| w == b"World"));
     }
@@ -359,7 +412,8 @@ mod tests {
         window.active_pane = pid;
         window.panes.insert(pid, pane);
 
-        let output = render_window(&window, "sess", 0, 80, 24);
+        let wl = single_window_list(0, "cp");
+        let output = render_window(&window, "sess", 80, 24, &wl, None);
         assert!(output.windows(9).any(|w| w == b"Copy mode"));
     }
 
@@ -379,7 +433,30 @@ mod tests {
         window.panes.insert(pid2, pane2);
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
-        let output = render_window(&window, "sess", 0, 80, 24);
+        let wl = single_window_list(0, "cnt");
+        let output = render_window(&window, "sess", 80, 24, &wl, None);
         assert!(output.windows(7).any(|w| w == b"2 panes"));
+    }
+
+    #[test]
+    fn status_line_shows_multiple_windows() {
+        let mut window = Window::new("bash".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![
+            WindowInfo { idx: 0, name: "bash".to_string(), is_active: true },
+            WindowInfo { idx: 1, name: "vim".to_string(), is_active: false },
+            WindowInfo { idx: 2, name: "logs".to_string(), is_active: false },
+        ];
+        let output = render_window(&window, "sess", 80, 24, &wl, None);
+        // Should contain all window names
+        assert!(output.windows(6).any(|w| w == b"0:bash"));
+        assert!(output.windows(5).any(|w| w == b"1:vim"));
+        assert!(output.windows(6).any(|w| w == b"2:logs"));
+        // Active window should have *
+        assert!(output.windows(7).any(|w| w == b"0:bash*"));
     }
 }

@@ -289,9 +289,16 @@ pub trait CommandServer {
     fn mark_clients_redraw(&mut self, session_id: u32);
 }
 
-/// Look up a command by name.
+/// Look up a command by name or unambiguous prefix (matching tmux behavior).
 pub fn find_command(name: &str) -> Option<&'static CommandEntry> {
-    builtins::COMMANDS.iter().find(|cmd| cmd.name == name)
+    // Exact match first
+    if let Some(cmd) = builtins::COMMANDS.iter().find(|cmd| cmd.name == name) {
+        return Some(cmd);
+    }
+    // Unambiguous prefix match
+    let matches: Vec<_> =
+        builtins::COMMANDS.iter().filter(|cmd| cmd.name.starts_with(name)).collect();
+    if matches.len() == 1 { Some(matches[0]) } else { None }
 }
 
 /// Execute a command given its arguments.

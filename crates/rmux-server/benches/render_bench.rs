@@ -5,7 +5,7 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use rmux_core::layout::{LayoutCell, LayoutType, layout_even_horizontal};
 use rmux_server::pane::Pane;
-use rmux_server::render::render_window;
+use rmux_server::render::{WindowInfo, render_window};
 use rmux_server::window::Window;
 
 /// Create a window with a single pane of the given dimensions.
@@ -96,11 +96,16 @@ fn make_four_pane_grid_window(sx: u32, sy: u32) -> Window {
     window
 }
 
+fn bench_window_list(name: &str) -> Vec<WindowInfo> {
+    vec![WindowInfo { idx: 0, name: name.to_string(), is_active: true }]
+}
+
 fn bench_render_single_pane(c: &mut Criterion) {
     let mut group = c.benchmark_group("render_single_pane");
 
     for &(sx, sy) in &[(80u32, 24u32), (200u32, 50u32)] {
         let window = make_single_pane_window(sx, sy);
+        let wl = bench_window_list("bench");
         group.bench_with_input(
             BenchmarkId::new("size", format!("{sx}x{sy}")),
             &(sx, sy),
@@ -109,9 +114,10 @@ fn bench_render_single_pane(c: &mut Criterion) {
                     black_box(render_window(
                         black_box(&window),
                         black_box("main"),
-                        black_box(0),
                         black_box(sx),
                         black_box(sy),
+                        black_box(&wl),
+                        None,
                     ));
                 });
             },
@@ -122,14 +128,16 @@ fn bench_render_single_pane(c: &mut Criterion) {
 
 fn bench_render_two_pane_horizontal(c: &mut Criterion) {
     let window = make_two_pane_horizontal_window(80, 24);
+    let wl = bench_window_list("bench2");
     c.bench_function("render_2pane_horizontal_80x24", |b| {
         b.iter(|| {
             black_box(render_window(
                 black_box(&window),
                 black_box("main"),
-                black_box(0),
                 black_box(80),
                 black_box(24),
+                black_box(&wl),
+                None,
             ));
         });
     });
@@ -137,14 +145,16 @@ fn bench_render_two_pane_horizontal(c: &mut Criterion) {
 
 fn bench_render_four_pane_grid(c: &mut Criterion) {
     let window = make_four_pane_grid_window(80, 24);
+    let wl = bench_window_list("bench4");
     c.bench_function("render_4pane_grid_80x24", |b| {
         b.iter(|| {
             black_box(render_window(
                 black_box(&window),
                 black_box("main"),
-                black_box(0),
                 black_box(80),
                 black_box(24),
+                black_box(&wl),
+                None,
             ));
         });
     });
