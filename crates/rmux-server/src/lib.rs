@@ -21,11 +21,13 @@
 pub mod client;
 pub mod command;
 pub mod config;
+pub mod copymode;
 pub mod format;
 pub mod keybind;
 pub mod navigate;
 pub mod notify;
 pub mod pane;
+pub mod paste;
 pub mod render;
 pub mod server;
 pub mod session;

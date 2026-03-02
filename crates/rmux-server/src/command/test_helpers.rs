@@ -9,6 +9,7 @@
 use crate::command::{CommandServer, Direction};
 use crate::keybind::KeyBindings;
 use crate::pane::Pane;
+use crate::paste::PasteBufferStore;
 use crate::server::ServerError;
 use crate::session::{Session, SessionManager};
 use crate::window::Window;
@@ -34,6 +35,10 @@ pub struct MockCommandServer {
     pub prompt_entered: bool,
     /// Redraw calls for tracking.
     pub redraw_sessions: Vec<u32>,
+    /// Paste buffer store for testing.
+    pub paste_buffers: PasteBufferStore,
+    /// Whether copy mode was entered.
+    pub copy_mode_entered: bool,
 }
 
 impl MockCommandServer {
@@ -50,6 +55,8 @@ impl MockCommandServer {
             pane_writes: HashMap::new(),
             prompt_entered: false,
             redraw_sessions: Vec::new(),
+            paste_buffers: PasteBufferStore::default(),
+            copy_mode_entered: false,
         }
     }
 
@@ -978,6 +985,84 @@ impl CommandServer for MockCommandServer {
 
     fn enter_command_prompt(&mut self) {
         self.prompt_entered = true;
+    }
+
+    // --- Copy mode ---
+
+    fn enter_copy_mode(&mut self) -> Result<(), ServerError> {
+        self.copy_mode_entered = true;
+        let session_id = self.client_session_id
+            .ok_or(ServerError::Command("no session".into()))?;
+        let mode_keys = self.pane_mode_keys();
+        let session = self.sessions.find_by_id_mut(session_id)
+            .ok_or(ServerError::Command("session not found".into()))?;
+        let window = session.windows.values_mut().next()
+            .ok_or(ServerError::Command("no window".into()))?;
+        let pane = window.panes.values_mut().next()
+            .ok_or(ServerError::Command("no pane".into()))?;
+        pane.enter_copy_mode(&mode_keys);
+        Ok(())
+    }
+
+    fn pane_mode_keys(&self) -> String {
+        if let Some(session_id) = self.client_session_id {
+            if let Some(session) = self.sessions.find_by_id(session_id) {
+                if let Some(window) = session.windows.values().next() {
+                    if let Some(val) = window.options.get("mode-keys") {
+                        if let Some(s) = val.as_str() {
+                            return s.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        "emacs".to_string()
+    }
+
+    // --- Paste buffers ---
+
+    fn paste_buffer_add(&mut self, data: Vec<u8>) {
+        self.paste_buffers.add(data);
+    }
+
+    fn paste_buffer(&self, name: Option<&str>) -> Result<(), ServerError> {
+        let buf = if let Some(name) = name {
+            self.paste_buffers.get_by_name(name)
+        } else {
+            self.paste_buffers.get_top()
+        };
+        buf.ok_or(ServerError::Command("no buffers".into()))?;
+        Ok(())
+    }
+
+    fn list_buffers(&self) -> Vec<String> {
+        self.paste_buffers.list().iter()
+            .map(|b| {
+                let preview: String = String::from_utf8_lossy(
+                    &b.data[..b.data.len().min(50)]
+                ).into();
+                format!("{}: {} bytes: \"{}\"", b.name, b.data.len(), preview)
+            })
+            .collect()
+    }
+
+    fn show_buffer(&self, name: &str) -> Result<String, ServerError> {
+        let buf = self.paste_buffers.get_by_name(name)
+            .ok_or(ServerError::Command(format!("buffer not found: {name}")))?;
+        Ok(String::from_utf8_lossy(&buf.data).into_owned())
+    }
+
+    fn delete_buffer(&mut self, name: &str) -> Result<(), ServerError> {
+        if self.paste_buffers.delete(name) {
+            Ok(())
+        } else {
+            Err(ServerError::Command(format!("buffer not found: {name}")))
+        }
+    }
+
+    fn set_buffer(&mut self, name: &str, data: &str) -> Result<(), ServerError> {
+        self.paste_buffers.set(name, data.as_bytes().to_vec());
+        Ok(())
     }
 
     // --- Info ---

@@ -41,12 +41,20 @@ pub fn render_window(
     // Status line
     render_status_line(&mut writer, session_name, window_idx, window, sx, status_row);
 
-    // Position cursor at active pane
+    // Position cursor at active pane (copy mode cursor if in copy mode)
     if let Some(pane) = window.active_pane() {
-        let cx = pane.xoff + pane.screen.cursor.x;
-        let cy = pane.yoff + pane.screen.cursor.y;
-        if cx < sx && cy < status_row {
-            writer.cursor_position(cx, cy);
+        if let Some(cm) = &pane.copy_mode {
+            let cx = pane.xoff + cm.cx;
+            let cy = pane.yoff + cm.cy;
+            if cx < sx && cy < status_row {
+                writer.cursor_position(cx, cy);
+            }
+        } else {
+            let cx = pane.xoff + pane.screen.cursor.x;
+            let cy = pane.yoff + pane.screen.cursor.y;
+            if cx < sx && cy < status_row {
+                writer.cursor_position(cx, cy);
+            }
         }
     }
 
@@ -68,14 +76,58 @@ fn render_pane_at(
     let pane_w = pane.sx.min(max_width.saturating_sub(xoff));
     let pane_h = pane.sy.min(max_height.saturating_sub(yoff));
 
+    // Build selection for hit testing if in copy mode
+    let selection = pane
+        .copy_mode
+        .as_ref()
+        .and_then(|cm| cm.current_selection(screen.grid.history_size()));
+
+    let oy = pane.copy_mode.as_ref().map_or(0, |cm| cm.oy);
+
     for y in 0..pane_h {
         writer.cursor_position(xoff, yoff + y);
+
+        // In copy mode with scroll offset, read from history
+        let abs_y = if oy > 0 {
+            let hs = screen.grid.history_size();
+            hs.saturating_sub(oy) + y
+        } else {
+            screen.grid.history_size() + y
+        };
+
         for x in 0..pane_w {
-            let cell = screen.grid.get_cell(x, y);
+            let cell = if oy > 0 {
+                // Reading from absolute position (may be history)
+                if let Some(line) = screen.grid.get_line_absolute(abs_y) {
+                    if x < line.cell_count() {
+                        line.get_cell(x)
+                    } else {
+                        rmux_core::grid::cell::GridCell::CLEARED
+                    }
+                } else {
+                    rmux_core::grid::cell::GridCell::CLEARED
+                }
+            } else {
+                screen.grid.get_cell(x, y)
+            };
+
             if cell.is_padding() {
                 continue;
             }
-            writer.set_style(&cell.style);
+
+            // Check if this cell is in the selection (reverse video)
+            let in_selection = selection
+                .as_ref()
+                .is_some_and(|sel| sel.contains(x, abs_y));
+
+            if in_selection {
+                let mut style = cell.style;
+                style.attrs ^= Attrs::REVERSE;
+                writer.set_style(&style);
+            } else {
+                writer.set_style(&cell.style);
+            }
+
             let bytes = cell.data.as_bytes();
             if bytes.is_empty() || bytes == [b' '] {
                 writer.write_raw(b" ");
@@ -183,17 +235,28 @@ fn render_status_line(
     width: u32,
     y: u32,
 ) {
+    use std::fmt::Write;
+
     writer.cursor_position(0, y);
     let status_style =
         Style { fg: Color::BLACK, bg: Color::GREEN, us: Color::Default, attrs: Attrs::empty() };
     writer.set_style(&status_style);
 
     let pane_count = window.pane_count();
-    let status = if pane_count > 1 {
+    let mut status = if pane_count > 1 {
         format!("[{session_name}] {window_idx}:{} ({pane_count} panes)", window.name)
     } else {
         format!("[{session_name}] {window_idx}:{}", window.name)
     };
+
+    // Show copy mode indicator if active pane is in copy mode
+    if let Some(pane) = window.active_pane() {
+        if let Some(cm) = &pane.copy_mode {
+            let hs = pane.screen.grid.history_size();
+            write!(status, " [Copy mode - {}/{hs}]", cm.oy).ok();
+        }
+    }
+
     writer.write_raw(status.as_bytes());
 
     // Fill rest with spaces

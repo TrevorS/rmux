@@ -5,6 +5,7 @@
 
 use crate::client::{ClientFlags, PromptState, ServerClient};
 use crate::command::{self, CommandResult, CommandServer, Direction};
+use crate::copymode::{self, CopyModeAction};
 use crate::keybind::{KeyBindings, string_to_key};
 use crate::navigate;
 use crate::pane::Pane;
@@ -92,6 +93,8 @@ pub struct Server {
     command_client: u64,
     /// Server-level options.
     pub options: rmux_core::options::Options,
+    /// Global paste buffer storage.
+    paste_buffers: crate::paste::PasteBufferStore,
 }
 
 impl Server {
@@ -115,6 +118,7 @@ impl Server {
             shutdown: false,
             command_client: 0,
             options: rmux_core::options::default_server_options(),
+            paste_buffers: crate::paste::PasteBufferStore::default(),
         }
     }
 
@@ -371,7 +375,27 @@ impl Server {
             return;
         };
 
-        // Check for prefix key
+        // Check if client is in command prompt mode
+        if client.prompt.is_some() {
+            self.handle_prompt_input(client_id, data);
+            return;
+        }
+
+        // Check for mouse events early (before copy mode or keybinding processing)
+        if let Some(event) = rmux_terminal::keys::parse_key_event(data) {
+            if rmux_core::key::keyc_is_mouse(event.key) {
+                self.handle_mouse_event(client_id, session_id, &event);
+                return;
+            }
+        }
+
+        // Check if active pane is in copy mode
+        if self.is_active_pane_in_copy_mode(session_id) {
+            self.handle_copy_mode_input(client_id, session_id, data);
+            return;
+        }
+
+        // Normal mode: check for prefix key
         if let Some(key_data) = self.keybindings.process_input(data) {
             match key_data {
                 crate::keybind::KeyAction::SendToPane(bytes) => {
@@ -380,21 +404,482 @@ impl Server {
                     }
                 }
                 crate::keybind::KeyAction::Command(argv) => {
-                    // Queue command execution via the event channel
-                    let tx = self.client_tx.clone();
-                    let msg = Message::Command(rmux_protocol::message::MsgCommand {
-                        #[allow(clippy::cast_possible_wrap)]
-                        argc: argv.len() as i32,
-                        argv,
-                    });
-                    tokio::spawn(async move {
-                        tx.send((client_id, ClientEvent::Message(msg))).await.ok();
-                    });
+                    self.queue_command(client_id, argv);
                 }
             }
         } else {
             // No prefix handling, send directly to pane
             self.write_to_active_pane(session_id, data);
+        }
+    }
+
+    /// Queue a command for execution via the event channel.
+    fn queue_command(&self, client_id: u64, argv: Vec<String>) {
+        let tx = self.client_tx.clone();
+        let msg = Message::Command(rmux_protocol::message::MsgCommand {
+            #[allow(clippy::cast_possible_wrap)]
+            argc: argv.len() as i32,
+            argv,
+        });
+        tokio::spawn(async move {
+            tx.send((client_id, ClientEvent::Message(msg))).await.ok();
+        });
+    }
+
+    /// Handle a mouse event from a client.
+    fn handle_mouse_event(
+        &mut self,
+        client_id: u64,
+        session_id: u32,
+        event: &rmux_terminal::keys::KeyEvent,
+    ) {
+        use rmux_core::key::*;
+
+        // Check if the `mouse` option is enabled
+        let mouse_enabled = self
+            .options
+            .get_flag("mouse")
+            .ok()
+            .unwrap_or(false);
+
+        if !mouse_enabled {
+            // Mouse disabled: forward to PTY if the pane has mouse mode flags
+            // (for vim, htop, etc.)
+            let forward = self.pane_wants_mouse(session_id);
+            if forward {
+                // Re-encode as SGR and forward to the active pane
+                let encoded =
+                    rmux_terminal::mouse::encode_sgr_mouse(event.key, event.mouse_x, event.mouse_y);
+                self.write_to_active_pane(session_id, &encoded);
+            }
+            return;
+        }
+
+        let base = keyc_base(event.key);
+        let mx = event.mouse_x;
+        let my = event.mouse_y;
+
+        match base {
+            KEYC_MOUSEDOWN1 => {
+                // Click: select pane at position, or position cursor in copy mode
+                if self.is_active_pane_in_copy_mode(session_id) {
+                    // In copy mode: position cursor
+                    self.copy_mode_position_cursor(session_id, mx, my);
+                } else {
+                    // Select the pane at the click position
+                    self.select_pane_at_position(session_id, mx, my);
+                }
+                self.mark_clients_redraw(session_id);
+            }
+            KEYC_MOUSEDRAG1 => {
+                // Drag: begin/extend selection in copy mode
+                if !self.is_active_pane_in_copy_mode(session_id) {
+                    // Enter copy mode first
+                    self.enter_copy_mode_for_active_pane(session_id);
+                }
+                self.copy_mode_drag_selection(session_id, mx, my);
+                self.mark_clients_redraw(session_id);
+            }
+            KEYC_MOUSEUP1 => {
+                // Release after drag: copy selection if any
+                if self.is_active_pane_in_copy_mode(session_id) {
+                    self.copy_mode_finish_selection(session_id);
+                    self.mark_clients_redraw(session_id);
+                }
+            }
+            KEYC_WHEELUP => {
+                if !self.is_active_pane_in_copy_mode(session_id) {
+                    self.enter_copy_mode_for_active_pane(session_id);
+                }
+                // Scroll up 3 lines
+                self.copy_mode_scroll_up(session_id, 3);
+                self.mark_clients_redraw(session_id);
+            }
+            KEYC_WHEELDOWN => {
+                if self.is_active_pane_in_copy_mode(session_id) {
+                    self.copy_mode_scroll_down(session_id, 3);
+                    // If we scrolled back to the bottom, exit copy mode
+                    self.maybe_exit_copy_mode_at_bottom(session_id);
+                    self.mark_clients_redraw(session_id);
+                }
+            }
+            _ => {
+                // Other mouse events (middle/right click, etc.) - ignore for now
+            }
+        }
+
+        // Suppress unused warning for client_id; may be needed for per-client mouse state later
+        let _ = client_id;
+    }
+
+    /// Check if the active pane's screen has mouse mode flags (for vim/htop forwarding).
+    fn pane_wants_mouse(&self, session_id: u32) -> bool {
+        use rmux_core::screen::ModeFlags;
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return false;
+        };
+        let Some(window) = session.active_window() else {
+            return false;
+        };
+        let Some(pane) = window.active_pane() else {
+            return false;
+        };
+        let mode = pane.screen.mode;
+        mode.intersects(
+            ModeFlags::MOUSE_STANDARD
+                | ModeFlags::MOUSE_BUTTON
+                | ModeFlags::MOUSE_ANY
+                | ModeFlags::MOUSE_SGR,
+        )
+    }
+
+    /// Select the pane at screen coordinates.
+    fn select_pane_at_position(&mut self, session_id: u32, x: u32, y: u32) {
+        let pane_id = {
+            let Some(session) = self.sessions.find_by_id(session_id) else {
+                return;
+            };
+            let Some(window) = session.active_window() else {
+                return;
+            };
+            let Some(layout) = &window.layout else {
+                return;
+            };
+            layout.pane_at(x, y)
+        };
+
+        if let Some(pid) = pane_id {
+            if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                if let Some(window) = session.active_window_mut() {
+                    if window.panes.contains_key(&pid) {
+                        window.last_active_pane = Some(window.active_pane);
+                        window.active_pane = pid;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Enter copy mode on the active pane of a session.
+    fn enter_copy_mode_for_active_pane(&mut self, session_id: u32) {
+        let mode_keys = self
+            .options
+            .get_string("mode-keys")
+            .ok()
+            .unwrap_or("emacs")
+            .to_string();
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    if !pane.is_in_copy_mode() {
+                        pane.enter_copy_mode(&mode_keys);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Position the copy mode cursor at screen coordinates.
+    fn copy_mode_position_cursor(&mut self, session_id: u32, x: u32, y: u32) {
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    // Convert screen coords to pane-local coords
+                    let px = x.saturating_sub(pane.xoff);
+                    let py = y.saturating_sub(pane.yoff);
+                    if let Some(cm) = &mut pane.copy_mode {
+                        cm.cx = px.min(pane.sx.saturating_sub(1));
+                        cm.cy = py.min(pane.sy.saturating_sub(1));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Extend selection during mouse drag in copy mode.
+    fn copy_mode_drag_selection(&mut self, session_id: u32, x: u32, y: u32) {
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    let px = x.saturating_sub(pane.xoff);
+                    let py = y.saturating_sub(pane.yoff);
+                    if let Some(cm) = &mut pane.copy_mode {
+                        if !cm.selecting {
+                            // Start selection at current position
+                            let hs = pane.screen.grid.history_size();
+                            cm.begin_selection(hs);
+                        }
+                        // Update cursor to drag position (extends selection)
+                        cm.cx = px.min(pane.sx.saturating_sub(1));
+                        cm.cy = py.min(pane.sy.saturating_sub(1));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Finish mouse selection and copy to paste buffer.
+    fn copy_mode_finish_selection(&mut self, session_id: u32) {
+        let copy_data = {
+            let Some(session) = self.sessions.find_by_id(session_id) else {
+                return;
+            };
+            let Some(window) = session.active_window() else {
+                return;
+            };
+            let Some(pane) = window.active_pane() else {
+                return;
+            };
+            let Some(cm) = &pane.copy_mode else {
+                return;
+            };
+            if cm.selecting {
+                copymode::copy_selection(&pane.screen, cm)
+            } else {
+                None
+            }
+        };
+
+        if let Some(data) = copy_data {
+            self.paste_buffers.add(data);
+        }
+
+        // Exit copy mode
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    pane.exit_copy_mode();
+                }
+            }
+        }
+    }
+
+    /// Scroll up in copy mode.
+    fn copy_mode_scroll_up(&mut self, session_id: u32, lines: u32) {
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    if let Some(cm) = &mut pane.copy_mode {
+                        let max_oy = pane.screen.grid.history_size();
+                        cm.oy = (cm.oy + lines).min(max_oy);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Scroll down in copy mode.
+    fn copy_mode_scroll_down(&mut self, session_id: u32, lines: u32) {
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    if let Some(cm) = &mut pane.copy_mode {
+                        cm.oy = cm.oy.saturating_sub(lines);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Exit copy mode if scrolled back to the live screen.
+    fn maybe_exit_copy_mode_at_bottom(&mut self, session_id: u32) {
+        let should_exit = {
+            let Some(session) = self.sessions.find_by_id(session_id) else {
+                return;
+            };
+            let Some(window) = session.active_window() else {
+                return;
+            };
+            let Some(pane) = window.active_pane() else {
+                return;
+            };
+            pane.copy_mode.as_ref().is_some_and(|cm| cm.oy == 0 && !cm.selecting)
+        };
+
+        if should_exit {
+            if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                if let Some(window) = session.active_window_mut() {
+                    if let Some(pane) = window.active_pane_mut() {
+                        pane.exit_copy_mode();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if the active pane of a session is in copy mode.
+    fn is_active_pane_in_copy_mode(&self, session_id: u32) -> bool {
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return false;
+        };
+        let Some(window) = session.active_window() else {
+            return false;
+        };
+        let Some(pane) = window.active_pane() else {
+            return false;
+        };
+        pane.is_in_copy_mode()
+    }
+
+    /// Handle input when the active pane is in copy mode.
+    fn handle_copy_mode_input(&mut self, _client_id: u64, session_id: u32, data: &[u8]) {
+        use rmux_terminal::keys::parse_key;
+
+        // Parse the raw input into a key code
+        let Some((key, _consumed)) = parse_key(data) else {
+            return;
+        };
+
+        // Get the key table name from the copy mode state
+        let key_table = {
+            let Some(session) = self.sessions.find_by_id(session_id) else {
+                return;
+            };
+            let Some(window) = session.active_window() else {
+                return;
+            };
+            let Some(pane) = window.active_pane() else {
+                return;
+            };
+            let Some(cm) = &pane.copy_mode else {
+                return;
+            };
+            cm.key_table.clone()
+        };
+
+        // Look up the key in the copy mode key table
+        let base = rmux_core::key::keyc_base(key);
+        let action_name = self
+            .keybindings
+            .lookup_in_table(&key_table, base)
+            .or_else(|| self.keybindings.lookup_in_table(&key_table, key))
+            .map(|argv| argv[0].clone());
+
+        let Some(action_name) = action_name else {
+            // Key not bound in copy mode — ignore
+            return;
+        };
+
+        // Dispatch the action on the pane's copy mode state
+        let action = {
+            let Some(session) = self.sessions.find_by_id_mut(session_id) else {
+                return;
+            };
+            let Some(window) = session.active_window_mut() else {
+                return;
+            };
+            let Some(pane) = window.active_pane_mut() else {
+                return;
+            };
+            let Some(cm) = &mut pane.copy_mode else {
+                return;
+            };
+            copymode::dispatch_copy_mode_action(&pane.screen, cm, &action_name)
+        };
+
+        match action {
+            CopyModeAction::Handled => {
+                // Redraw needed
+                self.mark_clients_redraw(session_id);
+            }
+            CopyModeAction::Exit { copy_data } => {
+                // Add copied data to paste buffer store
+                if let Some(data) = copy_data {
+                    self.paste_buffers.add(data);
+                }
+                // Exit copy mode on the pane
+                if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                    if let Some(window) = session.active_window_mut() {
+                        if let Some(pane) = window.active_pane_mut() {
+                            pane.exit_copy_mode();
+                        }
+                    }
+                }
+                self.mark_clients_redraw(session_id);
+            }
+            CopyModeAction::Unhandled => {
+                // Not recognized — ignore
+            }
+        }
+    }
+
+    /// Handle input when the client is in command prompt mode.
+    fn handle_prompt_input(&mut self, client_id: u64, data: &[u8]) {
+        use rmux_terminal::keys::parse_key;
+
+        let Some((key, _)) = parse_key(data) else {
+            return;
+        };
+
+        let base = rmux_core::key::keyc_base(key);
+
+        // Handle special keys
+        if base == rmux_core::key::KEYC_RETURN {
+            // Execute the prompt buffer as a command
+            let cmd_str = {
+                let Some(client) = self.clients.get_mut(&client_id) else {
+                    return;
+                };
+                let cmd = client
+                    .prompt
+                    .as_ref()
+                    .map(|p| p.buffer.clone())
+                    .unwrap_or_default();
+                client.prompt = None;
+                cmd
+            };
+            if !cmd_str.is_empty() {
+                // Parse and execute the command
+                let argv: Vec<String> = cmd_str.split_whitespace().map(String::from).collect();
+                self.queue_command(client_id, argv);
+            }
+            let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
+            if let Some(sid) = session_id {
+                self.mark_clients_redraw(sid);
+            }
+            return;
+        }
+
+        if base == rmux_core::key::KEYC_ESCAPE {
+            // Cancel prompt
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.prompt = None;
+            }
+            let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
+            if let Some(sid) = session_id {
+                self.mark_clients_redraw(sid);
+            }
+            return;
+        }
+
+        if base == rmux_core::key::KEYC_BACKSPACE {
+            // Delete last character
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                if let Some(prompt) = &mut client.prompt {
+                    prompt.buffer.pop();
+                }
+            }
+            let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
+            if let Some(sid) = session_id {
+                self.mark_clients_redraw(sid);
+            }
+            return;
+        }
+
+        // Printable character: append to buffer
+        if base < 128 {
+            let ch = base as u8;
+            if ch.is_ascii_graphic() || ch == b' ' {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    if let Some(prompt) = &mut client.prompt {
+                        prompt.buffer.push(ch as char);
+                    }
+                }
+                let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
+                if let Some(sid) = session_id {
+                    self.mark_clients_redraw(sid);
+                }
+            }
         }
     }
 
@@ -1997,6 +2482,127 @@ impl CommandServer for Server {
         if let Some(client) = self.clients.get_mut(&self.command_client) {
             client.prompt = Some(PromptState::default());
         }
+    }
+
+    // --- Copy mode ---
+
+    fn enter_copy_mode(&mut self) -> Result<(), ServerError> {
+        let session_id =
+            self.client_session_id().ok_or(ServerError::Command("no session".into()))?;
+        let mode_keys = self.pane_mode_keys();
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or(ServerError::Command("session not found".into()))?;
+        let window = session
+            .active_window_mut()
+            .ok_or(ServerError::Command("no active window".into()))?;
+        let pane = window
+            .active_pane_mut()
+            .ok_or(ServerError::Command("no active pane".into()))?;
+        pane.enter_copy_mode(&mode_keys);
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    fn pane_mode_keys(&self) -> String {
+        let Some(session_id) = self.client_session_id() else {
+            return "emacs".to_string();
+        };
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return "emacs".to_string();
+        };
+        let Some(window) = session.active_window() else {
+            return "emacs".to_string();
+        };
+        window
+            .options
+            .get("mode-keys")
+            .and_then(|v| v.as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "emacs".to_string())
+    }
+
+    // --- Paste buffers ---
+
+    fn paste_buffer_add(&mut self, data: Vec<u8>) {
+        self.paste_buffers.add(data);
+    }
+
+    fn paste_buffer(&self, name: Option<&str>) -> Result<(), ServerError> {
+        let buf = if let Some(name) = name {
+            self.paste_buffers.get_by_name(name)
+        } else {
+            self.paste_buffers.get_top()
+        };
+        let buf = buf.ok_or(ServerError::Command("no buffers".into()))?;
+        let data = buf.data.clone();
+
+        // Write to active pane's PTY
+        let session_id =
+            self.client_session_id().ok_or(ServerError::Command("no session".into()))?;
+        let session = self
+            .sessions
+            .find_by_id(session_id)
+            .ok_or(ServerError::Command("session not found".into()))?;
+        let window = session
+            .active_window()
+            .ok_or(ServerError::Command("no active window".into()))?;
+        let pane = window
+            .active_pane()
+            .ok_or(ServerError::Command("no active pane".into()))?;
+
+        // Wrap with bracketed paste if the pane has BRACKETPASTE mode
+        if pane
+            .screen
+            .mode
+            .contains(rmux_core::screen::ModeFlags::BRACKETPASTE)
+        {
+            let mut wrapped = Vec::with_capacity(data.len() + 12);
+            wrapped.extend_from_slice(b"\x1b[200~");
+            wrapped.extend_from_slice(&data);
+            wrapped.extend_from_slice(b"\x1b[201~");
+            self.write_to_pane(session_id, session.active_window, pane.id, &wrapped)?;
+        } else {
+            self.write_to_pane(session_id, session.active_window, pane.id, &data)?;
+        }
+        Ok(())
+    }
+
+    fn list_buffers(&self) -> Vec<String> {
+        self.paste_buffers
+            .list()
+            .iter()
+            .map(|b| {
+                let preview: String = String::from_utf8_lossy(
+                    &b.data[..b.data.len().min(50)],
+                )
+                .into();
+                format!("{}: {} bytes: \"{}\"", b.name, b.data.len(), preview)
+            })
+            .collect()
+    }
+
+    fn show_buffer(&self, name: &str) -> Result<String, ServerError> {
+        let buf = self
+            .paste_buffers
+            .get_by_name(name)
+            .ok_or(ServerError::Command(format!("buffer not found: {name}")))?;
+        Ok(String::from_utf8_lossy(&buf.data).into_owned())
+    }
+
+    fn delete_buffer(&mut self, name: &str) -> Result<(), ServerError> {
+        if self.paste_buffers.delete(name) {
+            Ok(())
+        } else {
+            Err(ServerError::Command(format!(
+                "buffer not found: {name}"
+            )))
+        }
+    }
+
+    fn set_buffer(&mut self, name: &str, data: &str) -> Result<(), ServerError> {
+        self.paste_buffers.set(name, data.as_bytes().to_vec());
+        Ok(())
     }
 }
 

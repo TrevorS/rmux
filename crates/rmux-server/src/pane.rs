@@ -1,5 +1,6 @@
 //! Pane management.
 
+use crate::copymode::CopyModeState;
 use rmux_core::screen::Screen;
 use rmux_terminal::input::InputParser;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,6 +30,8 @@ pub struct Pane {
     pub yoff: u32,
     /// Whether the pane's process has exited.
     pub dead: bool,
+    /// Copy mode state (Some = pane is in copy mode).
+    pub copy_mode: Option<CopyModeState>,
 }
 
 impl Pane {
@@ -46,6 +49,7 @@ impl Pane {
             xoff: 0,
             yoff: 0,
             dead: false,
+            copy_mode: None,
         }
     }
 
@@ -59,6 +63,24 @@ impl Pane {
         self.sx = sx;
         self.sy = sy;
         self.screen.resize(sx, sy);
+    }
+
+    /// Enter copy mode on this pane.
+    pub fn enter_copy_mode(&mut self, mode_keys: &str) {
+        if self.copy_mode.is_none() {
+            self.copy_mode = Some(CopyModeState::enter(&self.screen, mode_keys));
+        }
+    }
+
+    /// Exit copy mode on this pane.
+    pub fn exit_copy_mode(&mut self) {
+        self.copy_mode = None;
+        self.screen.selection = None;
+    }
+
+    /// Whether this pane is in copy mode.
+    pub fn is_in_copy_mode(&self) -> bool {
+        self.copy_mode.is_some()
     }
 }
 

@@ -7,6 +7,8 @@ pub mod builtins;
 mod test_helpers;
 #[cfg(test)]
 mod phase4_tests;
+#[cfg(test)]
+mod phase5_tests;
 
 use crate::server::ServerError;
 
@@ -257,6 +259,26 @@ pub trait CommandServer {
     // --- Command prompt ---
     /// Put the current client into command prompt mode.
     fn enter_command_prompt(&mut self);
+
+    // --- Copy mode ---
+    /// Enter copy mode on the active pane.
+    fn enter_copy_mode(&mut self) -> Result<(), ServerError>;
+    /// Get the mode-keys setting for the active pane's window.
+    fn pane_mode_keys(&self) -> String;
+
+    // --- Paste buffers ---
+    /// Add data to the paste buffer store (automatic naming).
+    fn paste_buffer_add(&mut self, data: Vec<u8>);
+    /// Paste the top buffer (or named buffer) to the active pane.
+    fn paste_buffer(&self, name: Option<&str>) -> Result<(), ServerError>;
+    /// List all paste buffers as human-readable strings.
+    fn list_buffers(&self) -> Vec<String>;
+    /// Get a buffer's contents by name.
+    fn show_buffer(&self, name: &str) -> Result<String, ServerError>;
+    /// Delete a buffer by name.
+    fn delete_buffer(&mut self, name: &str) -> Result<(), ServerError>;
+    /// Set a buffer's contents by name.
+    fn set_buffer(&mut self, name: &str, data: &str) -> Result<(), ServerError>;
 
     // --- Info ---
     fn list_clients(&self) -> Vec<String>;

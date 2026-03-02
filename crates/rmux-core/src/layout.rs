@@ -130,6 +130,29 @@ impl LayoutCell {
         None
     }
 
+    /// Find the pane ID at screen coordinates (x, y).
+    ///
+    /// Returns the pane ID of the leaf cell whose region contains (x, y), or `None`.
+    #[must_use]
+    pub fn pane_at(&self, x: u32, y: u32) -> Option<u32> {
+        if self.is_pane() {
+            if x >= self.x_off
+                && x < self.x_off + self.sx
+                && y >= self.y_off
+                && y < self.y_off + self.sy
+            {
+                return self.pane_id;
+            }
+            return None;
+        }
+        for child in &self.children {
+            if let Some(pid) = child.pane_at(x, y) {
+                return Some(pid);
+            }
+        }
+        None
+    }
+
     /// Count the number of panes in this layout subtree.
     #[must_use]
     pub fn pane_count(&self) -> usize {

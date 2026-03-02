@@ -230,6 +230,27 @@ impl Grid {
         self.history.collect_if_needed(false);
     }
 
+    /// Get a line by absolute index.
+    ///
+    /// Index 0 is the oldest history line. `history_size()` is the first
+    /// visible line. `history_size() + height() - 1` is the last visible line.
+    #[must_use]
+    pub fn get_line_absolute(&self, abs_y: u32) -> Option<&GridLine> {
+        let hs = self.history_size();
+        if abs_y < hs {
+            self.get_history_line(abs_y)
+        } else {
+            let vis_y = abs_y - hs;
+            self.get_line(vis_y)
+        }
+    }
+
+    /// Total number of lines (history + visible).
+    #[must_use]
+    pub fn total_lines(&self) -> u32 {
+        self.history_size() + self.sy
+    }
+
     /// Compare two grids for equality (visible area only).
     #[must_use]
     pub fn compare(&self, other: &Grid) -> bool {

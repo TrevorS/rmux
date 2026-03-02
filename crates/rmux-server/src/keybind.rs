@@ -1,6 +1,7 @@
 //! Key binding tables and prefix mode handling.
 //!
-//! Implements tmux-compatible key bindings with a prefix key (default: Ctrl-b).
+//! Implements tmux-compatible key bindings with a prefix key (default: Ctrl-b)
+//! and named key tables (prefix, root, copy-mode-vi, copy-mode-emacs).
 
 use rmux_core::key::*;
 use rmux_terminal::keys::parse_key;
@@ -20,10 +21,8 @@ pub struct KeyBindings {
     prefix: KeyCode,
     /// Whether we're waiting for a key after the prefix.
     in_prefix: bool,
-    /// Key -> command bindings for prefix mode.
-    bindings: HashMap<KeyCode, Vec<String>>,
-    /// Key -> command bindings for root table (no prefix needed).
-    root_bindings: HashMap<KeyCode, Vec<String>>,
+    /// Named key tables: "prefix", "root", "copy-mode-vi", "copy-mode-emacs".
+    tables: HashMap<String, HashMap<KeyCode, Vec<String>>>,
 }
 
 impl KeyBindings {
@@ -31,60 +30,80 @@ impl KeyBindings {
     pub fn default_bindings() -> Self {
         let prefix = keyc_build(b'b'.into(), KeyModifiers::CTRL);
 
-        let mut bindings: HashMap<KeyCode, Vec<String>> = HashMap::new();
+        let mut prefix_table: HashMap<KeyCode, Vec<String>> = HashMap::new();
 
         // Detach
-        bindings.insert(b'd' as KeyCode, vec!["detach-client".into()]);
+        prefix_table.insert(b'd' as KeyCode, vec!["detach-client".into()]);
 
         // Window management
-        bindings.insert(b'c' as KeyCode, vec!["new-window".into()]);
-        bindings.insert(b'n' as KeyCode, vec!["next-window".into()]);
-        bindings.insert(b'p' as KeyCode, vec!["previous-window".into()]);
-        bindings.insert(b'l' as KeyCode, vec!["last-window".into()]);
-        bindings.insert(b'&' as KeyCode, vec!["kill-window".into()]);
+        prefix_table.insert(b'c' as KeyCode, vec!["new-window".into()]);
+        prefix_table.insert(b'n' as KeyCode, vec!["next-window".into()]);
+        prefix_table.insert(b'p' as KeyCode, vec!["previous-window".into()]);
+        prefix_table.insert(b'l' as KeyCode, vec!["last-window".into()]);
+        prefix_table.insert(b'&' as KeyCode, vec!["kill-window".into()]);
 
         // Pane splitting
-        bindings.insert(b'"' as KeyCode, vec!["split-window".into()]);
-        bindings.insert(b'%' as KeyCode, vec!["split-window".into(), "-h".into()]);
+        prefix_table.insert(b'"' as KeyCode, vec!["split-window".into()]);
+        prefix_table.insert(b'%' as KeyCode, vec!["split-window".into(), "-h".into()]);
 
         // Pane navigation
-        bindings.insert(b'o' as KeyCode, vec!["select-pane".into(), "-t".into(), "+".into()]);
-        bindings.insert(b'x' as KeyCode, vec!["kill-pane".into()]);
+        prefix_table.insert(
+            b'o' as KeyCode,
+            vec!["select-pane".into(), "-t".into(), "+".into()],
+        );
+        prefix_table.insert(b'x' as KeyCode, vec!["kill-pane".into()]);
 
         // Arrow key pane navigation
-        bindings.insert(KEYC_UP, vec!["select-pane".into(), "-U".into()]);
-        bindings.insert(KEYC_DOWN, vec!["select-pane".into(), "-D".into()]);
-        bindings.insert(KEYC_LEFT, vec!["select-pane".into(), "-L".into()]);
-        bindings.insert(KEYC_RIGHT, vec!["select-pane".into(), "-R".into()]);
+        prefix_table.insert(KEYC_UP, vec!["select-pane".into(), "-U".into()]);
+        prefix_table.insert(KEYC_DOWN, vec!["select-pane".into(), "-D".into()]);
+        prefix_table.insert(KEYC_LEFT, vec!["select-pane".into(), "-L".into()]);
+        prefix_table.insert(KEYC_RIGHT, vec!["select-pane".into(), "-R".into()]);
 
         // Window selection by number (0-9)
         for i in 0u8..=9 {
-            bindings.insert(
+            prefix_table.insert(
                 (b'0' + i) as KeyCode,
                 vec!["select-window".into(), "-t".into(), i.to_string()],
             );
         }
 
         // Command prompt
-        bindings.insert(b':' as KeyCode, vec!["command-prompt".into()]);
+        prefix_table.insert(b':' as KeyCode, vec!["command-prompt".into()]);
 
-        Self { prefix, in_prefix: false, bindings, root_bindings: HashMap::new() }
+        // Copy mode
+        prefix_table.insert(b'[' as KeyCode, vec!["copy-mode".into()]);
+        // Paste buffer
+        prefix_table.insert(b']' as KeyCode, vec!["paste-buffer".into()]);
+
+        let mut tables = HashMap::new();
+        tables.insert("prefix".to_string(), prefix_table);
+        tables.insert("root".to_string(), HashMap::new());
+        tables.insert("copy-mode-vi".to_string(), default_copy_mode_vi());
+        tables.insert("copy-mode-emacs".to_string(), default_copy_mode_emacs());
+
+        Self { prefix, in_prefix: false, tables }
     }
 
     /// Add a key binding to the given table.
     pub fn add_binding(&mut self, table: &str, key: KeyCode, argv: Vec<String>) {
-        match table {
-            "root" => { self.root_bindings.insert(key, argv); }
-            _ => { self.bindings.insert(key, argv); }
-        }
+        self.tables
+            .entry(table.to_string())
+            .or_default()
+            .insert(key, argv);
     }
 
     /// Remove a key binding from the given table.
     pub fn remove_binding(&mut self, table: &str, key: KeyCode) -> bool {
-        match table {
-            "root" => self.root_bindings.remove(&key).is_some(),
-            _ => self.bindings.remove(&key).is_some(),
-        }
+        self.tables
+            .get_mut(table)
+            .is_some_and(|t| t.remove(&key).is_some())
+    }
+
+    /// Look up a binding in a specific table.
+    pub fn lookup_in_table(&self, table: &str, key: KeyCode) -> Option<&Vec<String>> {
+        let t = self.tables.get(table)?;
+        let base = keyc_base(key);
+        t.get(&base).or_else(|| t.get(&key))
     }
 
     /// Process input bytes and return the action to take.
@@ -104,9 +123,13 @@ impl KeyBindings {
         if self.in_prefix {
             self.in_prefix = false;
 
-            // Check if this key has a binding
+            // Check if this key has a binding in the prefix table
             let base = keyc_base(key);
-            if let Some(argv) = self.bindings.get(&base) {
+            if let Some(argv) = self
+                .tables
+                .get("prefix")
+                .and_then(|t| t.get(&base))
+            {
                 return Some(KeyAction::Command(argv.clone()));
             }
 
@@ -122,7 +145,11 @@ impl KeyBindings {
 
         // Check root table bindings (no prefix needed)
         let base = keyc_base(key);
-        if let Some(argv) = self.root_bindings.get(&base).or_else(|| self.root_bindings.get(&key)) {
+        if let Some(argv) = self
+            .tables
+            .get("root")
+            .and_then(|t| t.get(&base).or_else(|| t.get(&key)))
+        {
             return Some(KeyAction::Command(argv.clone()));
         }
 
@@ -138,25 +165,174 @@ impl KeyBindings {
 
     /// List all key bindings as human-readable strings.
     pub fn list_bindings(&self) -> Vec<String> {
-        let mut result: Vec<String> = self
-            .bindings
-            .iter()
-            .map(|(&key, argv)| {
+        let mut result = Vec::new();
+
+        for (table_name, table) in &self.tables {
+            for (&key, argv) in table {
                 let key_name = key_to_string(key);
                 let cmd = argv.join(" ");
-                format!("bind-key -T prefix {key_name} {cmd}")
-            })
-            .collect();
-
-        for (&key, argv) in &self.root_bindings {
-            let key_name = key_to_string(key);
-            let cmd = argv.join(" ");
-            result.push(format!("bind-key -T root {key_name} {cmd}"));
+                result.push(format!("bind-key -T {table_name} {key_name} {cmd}"));
+            }
         }
 
         result.sort();
         result
     }
+}
+
+/// Default copy-mode-vi key bindings.
+fn default_copy_mode_vi() -> HashMap<KeyCode, Vec<String>> {
+    let mut m = HashMap::new();
+
+    // Navigation
+    m.insert(b'h' as KeyCode, vec!["cursor-left".into()]);
+    m.insert(b'j' as KeyCode, vec!["cursor-down".into()]);
+    m.insert(b'k' as KeyCode, vec!["cursor-up".into()]);
+    m.insert(b'l' as KeyCode, vec!["cursor-right".into()]);
+    m.insert(KEYC_UP, vec!["cursor-up".into()]);
+    m.insert(KEYC_DOWN, vec!["cursor-down".into()]);
+    m.insert(KEYC_LEFT, vec!["cursor-left".into()]);
+    m.insert(KEYC_RIGHT, vec!["cursor-right".into()]);
+
+    // Page movement
+    m.insert(KEYC_PPAGE, vec!["page-up".into()]);
+    m.insert(KEYC_NPAGE, vec!["page-down".into()]);
+    m.insert(
+        keyc_build(b'b'.into(), KeyModifiers::CTRL),
+        vec!["page-up".into()],
+    );
+    m.insert(
+        keyc_build(b'f'.into(), KeyModifiers::CTRL),
+        vec!["page-down".into()],
+    );
+
+    // Half page
+    m.insert(
+        keyc_build(b'u'.into(), KeyModifiers::CTRL),
+        vec!["halfpage-up".into()],
+    );
+    m.insert(
+        keyc_build(b'd'.into(), KeyModifiers::CTRL),
+        vec!["halfpage-down".into()],
+    );
+
+    // Top/bottom
+    m.insert(b'g' as KeyCode, vec!["history-top".into()]);
+    m.insert(b'G' as KeyCode, vec!["history-bottom".into()]);
+
+    // Line movement
+    m.insert(b'0' as KeyCode, vec!["start-of-line".into()]);
+    m.insert(b'$' as KeyCode, vec!["end-of-line".into()]);
+    m.insert(b'^' as KeyCode, vec!["back-to-indentation".into()]);
+    m.insert(KEYC_HOME, vec!["start-of-line".into()]);
+    m.insert(KEYC_END, vec!["end-of-line".into()]);
+
+    // Word movement
+    m.insert(b'w' as KeyCode, vec!["next-word".into()]);
+    m.insert(b'b' as KeyCode, vec!["previous-word".into()]);
+    m.insert(b'e' as KeyCode, vec!["next-word-end".into()]);
+
+    // Selection
+    m.insert(b'v' as KeyCode, vec!["begin-selection".into()]);
+    m.insert(KEYC_SPACE, vec!["begin-selection".into()]);
+    m.insert(b'V' as KeyCode, vec!["select-line".into()]);
+    m.insert(
+        keyc_build(b'v'.into(), KeyModifiers::CTRL),
+        vec!["rectangle-toggle".into()],
+    );
+
+    // Copy/exit
+    m.insert(
+        KEYC_RETURN,
+        vec!["copy-selection-and-cancel".into()],
+    );
+    m.insert(b'y' as KeyCode, vec!["copy-selection-and-cancel".into()]);
+
+    // Cancel
+    m.insert(b'q' as KeyCode, vec!["cancel".into()]);
+    m.insert(KEYC_ESCAPE, vec!["cancel".into()]);
+
+    m
+}
+
+/// Default copy-mode-emacs key bindings.
+fn default_copy_mode_emacs() -> HashMap<KeyCode, Vec<String>> {
+    let mut m = HashMap::new();
+
+    // Navigation
+    m.insert(KEYC_UP, vec!["cursor-up".into()]);
+    m.insert(KEYC_DOWN, vec!["cursor-down".into()]);
+    m.insert(KEYC_LEFT, vec!["cursor-left".into()]);
+    m.insert(KEYC_RIGHT, vec!["cursor-right".into()]);
+    m.insert(
+        keyc_build(b'p'.into(), KeyModifiers::CTRL),
+        vec!["cursor-up".into()],
+    );
+    m.insert(
+        keyc_build(b'n'.into(), KeyModifiers::CTRL),
+        vec!["cursor-down".into()],
+    );
+    m.insert(
+        keyc_build(b'b'.into(), KeyModifiers::CTRL),
+        vec!["cursor-left".into()],
+    );
+    m.insert(
+        keyc_build(b'f'.into(), KeyModifiers::CTRL),
+        vec!["cursor-right".into()],
+    );
+
+    // Page movement
+    m.insert(KEYC_PPAGE, vec!["page-up".into()]);
+    m.insert(KEYC_NPAGE, vec!["page-down".into()]);
+    m.insert(
+        keyc_build(b'v'.into(), KeyModifiers::META),
+        vec!["page-up".into()],
+    );
+    m.insert(
+        keyc_build(b'v'.into(), KeyModifiers::CTRL),
+        vec!["page-down".into()],
+    );
+
+    // Line movement
+    m.insert(
+        keyc_build(b'a'.into(), KeyModifiers::CTRL),
+        vec!["start-of-line".into()],
+    );
+    m.insert(
+        keyc_build(b'e'.into(), KeyModifiers::CTRL),
+        vec!["end-of-line".into()],
+    );
+
+    // Word movement
+    m.insert(
+        keyc_build(b'f'.into(), KeyModifiers::META),
+        vec!["next-word".into()],
+    );
+    m.insert(
+        keyc_build(b'b'.into(), KeyModifiers::META),
+        vec!["previous-word".into()],
+    );
+
+    // Selection
+    m.insert(
+        keyc_build(KEYC_SPACE, KeyModifiers::CTRL),
+        vec!["begin-selection".into()],
+    );
+
+    // Copy
+    m.insert(
+        keyc_build(b'w'.into(), KeyModifiers::META),
+        vec!["copy-selection-and-cancel".into()],
+    );
+
+    // Cancel
+    m.insert(
+        keyc_build(b'g'.into(), KeyModifiers::CTRL),
+        vec!["cancel".into()],
+    );
+    m.insert(KEYC_ESCAPE, vec!["cancel".into()]);
+
+    m
 }
 
 /// Convert a key name string to a KeyCode.
@@ -250,7 +426,11 @@ fn key_to_string(key: KeyCode) -> String {
         b if (KEYC_F1..=KEYC_F12).contains(&b) => format!("F{}", b - KEYC_F1 + 1),
         b if b < 128 => {
             let ch = b as u8 as char;
-            if ch.is_ascii_graphic() || ch == ' ' { ch.to_string() } else { format!("0x{b:02x}") }
+            if ch.is_ascii_graphic() || ch == ' ' {
+                ch.to_string()
+            } else {
+                format!("0x{b:02x}")
+            }
         }
         other => format!("0x{other:x}"),
     };
@@ -357,5 +537,55 @@ mod tests {
         let mut sorted = bindings.clone();
         sorted.sort();
         assert_eq!(bindings, sorted);
+    }
+
+    #[test]
+    fn copy_mode_vi_bindings_exist() {
+        let kb = KeyBindings::default_bindings();
+        // Check key lookups for copy-mode-vi
+        let action = kb.lookup_in_table("copy-mode-vi", b'h' as KeyCode);
+        assert_eq!(action, Some(&vec!["cursor-left".to_string()]));
+
+        let action = kb.lookup_in_table("copy-mode-vi", b'q' as KeyCode);
+        assert_eq!(action, Some(&vec!["cancel".to_string()]));
+
+        let action = kb.lookup_in_table("copy-mode-vi", b'y' as KeyCode);
+        assert_eq!(
+            action,
+            Some(&vec!["copy-selection-and-cancel".to_string()])
+        );
+    }
+
+    #[test]
+    fn copy_mode_emacs_bindings_exist() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("copy-mode-emacs", KEYC_ESCAPE);
+        assert_eq!(action, Some(&vec!["cancel".to_string()]));
+    }
+
+    #[test]
+    fn prefix_bracket_enters_copy_mode() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        let result = kb.process_input(b"[");
+        match result {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["copy-mode"]);
+            }
+            _ => panic!("expected Command for copy-mode"),
+        }
+    }
+
+    #[test]
+    fn prefix_close_bracket_pastes() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.process_input(b"\x02");
+        let result = kb.process_input(b"]");
+        match result {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["paste-buffer"]);
+            }
+            _ => panic!("expected Command for paste-buffer"),
+        }
     }
 }

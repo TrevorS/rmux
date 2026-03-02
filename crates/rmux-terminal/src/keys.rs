@@ -3,7 +3,41 @@
 //! Converts raw byte sequences from the terminal into key codes.
 //! Handles escape sequences for function keys, arrow keys, etc.
 
+use crate::mouse;
 use rmux_core::key::*;
+
+/// Result of parsing a key that may be a mouse event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyEvent {
+    /// The key code.
+    pub key: KeyCode,
+    /// Number of bytes consumed.
+    pub consumed: usize,
+    /// Mouse coordinates (only set for mouse events).
+    pub mouse_x: u32,
+    /// Mouse y coordinate (only set for mouse events).
+    pub mouse_y: u32,
+}
+
+/// Parse a byte sequence into a key code, also returning mouse coordinates
+/// if the input is a mouse event.
+#[must_use]
+pub fn parse_key_event(data: &[u8]) -> Option<KeyEvent> {
+    // Try mouse parsing first for ESC[ sequences
+    if data.len() >= 3 && data[0] == 0x1b && data[1] == b'[' {
+        if let Some(parsed) = mouse::try_parse_mouse_csi(&data[2..]) {
+            return Some(KeyEvent {
+                key: parsed.key,
+                consumed: parsed.consumed + 2, // +2 for ESC[
+                mouse_x: parsed.x,
+                mouse_y: parsed.y,
+            });
+        }
+    }
+
+    let (key, consumed) = parse_key(data)?;
+    Some(KeyEvent { key, consumed, mouse_x: 0, mouse_y: 0 })
+}
 
 /// Parse a byte sequence into a key code.
 ///
@@ -53,6 +87,23 @@ fn parse_escape(data: &[u8]) -> Option<(KeyCode, usize)> {
 fn parse_csi_key(data: &[u8]) -> Option<(KeyCode, usize)> {
     if data.is_empty() {
         return None;
+    }
+
+    // Check for mouse sequences first (X10: M + 3 bytes, SGR: < + params + M/m)
+    if data[0] == b'M' || data[0] == b'<' {
+        if let Some(parsed) = mouse::try_parse_mouse_csi(data) {
+            return Some((parsed.key, parsed.consumed));
+        }
+        if data[0] == b'M' && data.len() < 4 {
+            return None; // Need more input for X10
+        }
+        if data[0] == b'<' {
+            // Check if we need more input for SGR
+            let has_final = data[1..].iter().any(|&b| b == b'M' || b == b'm');
+            if !has_final {
+                return None; // Need more input
+            }
+        }
     }
 
     // Find the final byte
@@ -321,5 +372,38 @@ mod tests {
     #[test]
     fn key_name_alt() {
         assert_eq!(key_name_to_bytes("M-x"), Some(vec![0x1b, b'x']));
+    }
+
+    #[test]
+    fn parse_x10_mouse_click() {
+        // ESC[M + button(0+32=32) + x(10+33=43) + y(5+33=38)
+        let data = b"\x1b[M +&";
+        let result = parse_key(data).unwrap();
+        assert_eq!(result.0, KEYC_MOUSEDOWN1);
+    }
+
+    #[test]
+    fn parse_sgr_mouse_click() {
+        let data = b"\x1b[<0;11;6M";
+        let result = parse_key(data).unwrap();
+        assert_eq!(result.0, KEYC_MOUSEDOWN1);
+    }
+
+    #[test]
+    fn parse_key_event_mouse_coords() {
+        let data = b"\x1b[<0;11;6M";
+        let event = parse_key_event(data).unwrap();
+        assert_eq!(event.key, KEYC_MOUSEDOWN1);
+        assert_eq!(event.mouse_x, 10);
+        assert_eq!(event.mouse_y, 5);
+    }
+
+    #[test]
+    fn parse_key_event_non_mouse() {
+        let data = b"a";
+        let event = parse_key_event(data).unwrap();
+        assert_eq!(event.key, b'a' as KeyCode);
+        assert_eq!(event.mouse_x, 0);
+        assert_eq!(event.mouse_y, 0);
     }
 }

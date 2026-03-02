@@ -4,6 +4,7 @@ mod client;
 mod display;
 mod options;
 mod pane;
+mod paste;
 mod server_cmds;
 mod session;
 mod window;
@@ -403,5 +404,67 @@ pub static COMMANDS: &[CommandEntry] = &[
         min_args: 0,
         handler: server_cmds::cmd_command_prompt,
         usage: "",
+    },
+    // Copy mode & paste buffer commands
+    CommandEntry {
+        name: "copy-mode",
+        min_args: 0,
+        handler: paste::cmd_copy_mode,
+        usage: "[-u]",
+    },
+    CommandEntry {
+        name: "paste-buffer",
+        min_args: 0,
+        handler: paste::cmd_paste_buffer,
+        usage: "[-b buffer-name]",
+    },
+    CommandEntry {
+        name: "pasteb",
+        min_args: 0,
+        handler: paste::cmd_paste_buffer,
+        usage: "[-b buffer-name]",
+    },
+    CommandEntry {
+        name: "list-buffers",
+        min_args: 0,
+        handler: paste::cmd_list_buffers,
+        usage: "",
+    },
+    CommandEntry { name: "lsb", min_args: 0, handler: paste::cmd_list_buffers, usage: "" },
+    CommandEntry {
+        name: "show-buffer",
+        min_args: 0,
+        handler: paste::cmd_show_buffer,
+        usage: "[-b buffer-name]",
+    },
+    CommandEntry {
+        name: "showb",
+        min_args: 0,
+        handler: paste::cmd_show_buffer,
+        usage: "[-b buffer-name]",
+    },
+    CommandEntry {
+        name: "set-buffer",
+        min_args: 1,
+        handler: paste::cmd_set_buffer,
+        usage: "[-b buffer-name] data",
+    },
+    CommandEntry {
+        name: "setb",
+        min_args: 1,
+        handler: paste::cmd_set_buffer,
+        usage: "[-b buffer-name] data",
+    },
+    CommandEntry {
+        name: "delete-buffer",
+        min_args: 0,
+        handler: paste::cmd_delete_buffer,
+        usage: "-b buffer-name",
+    },
+    CommandEntry {
+        name: "deleteb",
+        min_args: 0,
+        handler: paste::cmd_delete_buffer,
+        usage: "-b buffer-name",
     },
 ];
