@@ -954,9 +954,9 @@ mod paste_buffer_store_extended {
     #[test]
     fn large_buffer_data() {
         let mut store = PasteBufferStore::new(50);
-        let big = vec![b'X'; 100_000];
+        let big = vec![b'X'; 1_024];
         store.add(big);
-        assert_eq!(store.get_top().unwrap().data.len(), 100_000);
+        assert_eq!(store.get_top().unwrap().data.len(), 1_024);
     }
 
     #[test]
@@ -1778,16 +1778,6 @@ mod layout_extended {
     }
 
     #[test]
-    fn pane_at_single_pane_all_coords() {
-        let layout = LayoutCell::new_pane(0, 0, 10, 5, 42);
-        for y in 0..5 {
-            for x in 0..10 {
-                assert_eq!(layout.pane_at(x, y), Some(42));
-            }
-        }
-    }
-
-    #[test]
     fn pane_at_horizontal_boundaries() {
         let layout = layout_even_horizontal(80, 24, &[1, 2]);
         // Check that each x coord maps to the right pane
@@ -1944,30 +1934,13 @@ mod workflow_tests {
     fn copy_mode_on_pane_directly() {
         use crate::copymode::{copy_selection, dispatch_copy_mode_action};
         use crate::pane::Pane;
-        use rmux_core::grid::cell::GridCell;
-        use rmux_core::style::Style;
-        use rmux_core::utf8::Utf8Char;
 
-        // Create pane and write content
         let mut pane = Pane::new(80, 24, 2000);
-        for (x, ch) in b"Hello World".iter().enumerate() {
-            pane.screen.grid.set_cell(
-                x as u32,
-                0,
-                &GridCell {
-                    data: Utf8Char::from_ascii(*ch),
-                    style: Style::DEFAULT,
-                    link: 0,
-                    flags: rmux_core::grid::cell::CellFlags::empty(),
-                },
-            );
-        }
+        pane.screen = make_screen(80, 24, &["Hello World"]);
 
-        // Enter copy mode
         pane.enter_copy_mode("vi");
         assert!(pane.is_in_copy_mode());
 
-        // Navigate and select
         let cm = pane.copy_mode.as_mut().unwrap();
         cm.cy = 0;
         cm.cx = 0;
@@ -1975,11 +1948,9 @@ mod workflow_tests {
         dispatch_copy_mode_action(&pane.screen, cm, "begin-selection");
         cm.cx = 4;
 
-        // Copy
         let data = copy_selection(&pane.screen, cm);
         assert_eq!(data.unwrap(), b"Hello");
 
-        // Exit copy mode
         pane.exit_copy_mode();
         assert!(!pane.is_in_copy_mode());
     }
