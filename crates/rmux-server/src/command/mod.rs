@@ -3,6 +3,10 @@
 //! Parses and executes tmux-compatible commands.
 
 pub mod builtins;
+#[cfg(test)]
+mod test_helpers;
+#[cfg(test)]
+mod phase4_tests;
 
 use crate::server::ServerError;
 
