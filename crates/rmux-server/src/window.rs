@@ -19,6 +19,8 @@ pub struct Window {
     pub panes: HashMap<u32, Pane>,
     /// Active pane ID.
     pub active_pane: u32,
+    /// Last active pane ID (for last-pane command).
+    pub last_active_pane: Option<u32>,
     /// Layout tree.
     pub layout: Option<LayoutCell>,
     /// Window width.
@@ -38,6 +40,7 @@ impl Window {
             name,
             panes: HashMap::new(),
             active_pane: 0,
+            last_active_pane: None,
             layout: None,
             sx,
             sy,

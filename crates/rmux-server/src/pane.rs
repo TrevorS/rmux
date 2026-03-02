@@ -27,6 +27,8 @@ pub struct Pane {
     pub xoff: u32,
     /// Y offset within window.
     pub yoff: u32,
+    /// Whether the pane's process has exited.
+    pub dead: bool,
 }
 
 impl Pane {
@@ -43,6 +45,7 @@ impl Pane {
             sy,
             xoff: 0,
             yoff: 0,
+            dead: false,
         }
     }
 

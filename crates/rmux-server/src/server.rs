@@ -3,11 +3,12 @@
 //! The server listens on a Unix domain socket and accepts client connections.
 //! It manages all sessions, windows, and panes using a tokio single-threaded runtime.
 
-use crate::client::{ClientFlags, ServerClient};
+use crate::client::{ClientFlags, PromptState, ServerClient};
 use crate::command::{self, CommandResult, CommandServer, Direction};
-use crate::keybind::KeyBindings;
+use crate::keybind::{KeyBindings, string_to_key};
 use crate::navigate;
 use crate::pane::Pane;
+use rmux_core::options::OptionValue;
 use crate::render;
 use crate::session::SessionManager;
 use crate::window::Window;
@@ -89,6 +90,8 @@ pub struct Server {
     shutdown: bool,
     /// Client ID for the current command execution context.
     command_client: u64,
+    /// Server-level options.
+    pub options: rmux_core::options::Options,
 }
 
 impl Server {
@@ -111,6 +114,7 @@ impl Server {
             pty_tasks: HashMap::new(),
             shutdown: false,
             command_client: 0,
+            options: rmux_core::options::default_server_options(),
         }
     }
 
@@ -322,6 +326,32 @@ impl Server {
             }
             Ok(CommandResult::Exit) => {
                 self.shutdown = true;
+            }
+            Ok(CommandResult::RunShell(cmd)) => {
+                let output = match tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .output()
+                    .await
+                {
+                    Ok(out) => {
+                        let mut result = out.stdout;
+                        result.extend_from_slice(&out.stderr);
+                        String::from_utf8_lossy(&result).into_owned()
+                    }
+                    Err(e) => format!("run-shell: {e}\n"),
+                };
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    if !output.is_empty() {
+                        client
+                            .send(&Message::OutputData(output.into_bytes()))
+                            .await
+                            .ok();
+                    }
+                    if !client.is_attached() {
+                        client.send(&Message::Exit).await.ok();
+                    }
+                }
             }
             Err(e) => {
                 let err_msg = format!("{e}\n");
@@ -1232,6 +1262,765 @@ impl CommandServer for Server {
         for client in self.clients.values_mut() {
             if client.session_id == Some(session_id) && client.is_attached() {
                 client.mark_redraw();
+            }
+        }
+    }
+
+    // --- PTY I/O ---
+
+    fn write_to_pane(
+        &self,
+        _session_id: u32,
+        _window_idx: u32,
+        pane_id: u32,
+        data: &[u8],
+    ) -> Result<(), ServerError> {
+        if let Some(fd) = self.pty_fds.get(&pane_id) {
+            nix::unistd::write(fd, data).map_err(|e| {
+                ServerError::Io(std::io::Error::other(e.to_string()))
+            })?;
+            Ok(())
+        } else {
+            Err(ServerError::Command(format!("pane %{pane_id} has no PTY")))
+        }
+    }
+
+    // --- Options ---
+
+    fn get_server_option(&self, key: &str) -> Result<String, ServerError> {
+        match self.options.get(key) {
+            Some(val) => Ok(format_option_value(val)),
+            None => Err(ServerError::Command(format!("unknown option: {key}"))),
+        }
+    }
+
+    fn set_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
+        let val = parse_option_value(value);
+        self.options.set(key, val);
+        Ok(())
+    }
+
+    fn set_session_option(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let val = parse_option_value(value);
+        session.options.set(key, val);
+        Ok(())
+    }
+
+    fn set_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        let val = parse_option_value(value);
+        window.options.set(key, val);
+        Ok(())
+    }
+
+    fn show_options(&self, scope: &str, target_id: Option<u32>) -> Vec<String> {
+        let opts: Vec<String> = match scope {
+            "server" => self
+                .options
+                .local_iter()
+                .map(|(k, v)| format!("{k} {}", format_option_value(v)))
+                .collect(),
+            "session" => {
+                if let Some(session) = target_id.and_then(|id| self.sessions.find_by_id(id)) {
+                    session
+                        .options
+                        .local_iter()
+                        .map(|(k, v)| format!("{k} {}", format_option_value(v)))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            "window" => {
+                if let Some(session) = target_id.and_then(|id| self.sessions.find_by_id(id)) {
+                    if let Some(window) = session.active_window() {
+                        window
+                            .options
+                            .local_iter()
+                            .map(|(k, v)| format!("{k} {}", format_option_value(v)))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        };
+        let mut sorted = opts;
+        sorted.sort();
+        sorted
+    }
+
+    // --- Key bindings ---
+
+    fn add_key_binding(
+        &mut self,
+        table: &str,
+        key_name: &str,
+        argv: Vec<String>,
+    ) -> Result<(), ServerError> {
+        let key = string_to_key(key_name)
+            .ok_or_else(|| ServerError::Command(format!("unknown key: {key_name}")))?;
+        self.keybindings.add_binding(table, key, argv);
+        Ok(())
+    }
+
+    fn remove_key_binding(&mut self, table: &str, key_name: &str) -> Result<(), ServerError> {
+        let key = string_to_key(key_name)
+            .ok_or_else(|| ServerError::Command(format!("unknown key: {key_name}")))?;
+        if !self.keybindings.remove_binding(table, key) {
+            return Err(ServerError::Command(format!("key not bound: {key_name}")));
+        }
+        Ok(())
+    }
+
+    // --- Config ---
+
+    fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String> {
+        let mut errors = Vec::new();
+        for argv in commands {
+            if let Err(e) = crate::command::execute_command(&argv, self) {
+                errors.push(format!("{e}"));
+            }
+        }
+        errors
+    }
+
+    // --- Capture ---
+
+    fn capture_pane(
+        &self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<String, ServerError> {
+        let session = self
+            .sessions
+            .find_by_id(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        let pane = window
+            .panes
+            .get(&pane_id)
+            .ok_or_else(|| ServerError::Command(format!("pane not found: %{pane_id}")))?;
+
+        let mut lines = Vec::new();
+        for y in 0..pane.screen.grid.height() {
+            let mut line_buf = String::new();
+            for x in 0..pane.screen.grid.width() {
+                let cell = pane.screen.grid.get_cell(x, y);
+                let bytes = cell.data.as_bytes();
+                if let Ok(s) = std::str::from_utf8(bytes) {
+                    line_buf.push_str(s);
+                } else {
+                    line_buf.push(' ');
+                }
+            }
+            // Trim trailing whitespace from each line
+            let trimmed = line_buf.trim_end();
+            lines.push(trimmed.to_string());
+        }
+
+        // Join with newlines and add trailing newline
+        Ok(lines.join("\n") + "\n")
+    }
+
+    // --- Resize ---
+
+    fn resize_pane(
+        &mut self,
+        session_id: u32,
+        _window_idx: u32,
+        _pane_id: u32,
+        _direction: Option<Direction>,
+        _amount: u32,
+    ) -> Result<(), ServerError> {
+        // Basic implementation: just mark clients for redraw.
+        // A full implementation would adjust the layout tree.
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    // --- Swap/Move ---
+
+    fn swap_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        src: u32,
+        dst: u32,
+    ) -> Result<(), ServerError> {
+        {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            let window = session
+                .windows
+                .get_mut(&window_idx)
+                .ok_or_else(|| {
+                    ServerError::Command(format!("window not found: {window_idx}"))
+                })?;
+
+            if !window.panes.contains_key(&src) {
+                return Err(ServerError::Command(format!("pane not found: %{src}")));
+            }
+            if !window.panes.contains_key(&dst) {
+                return Err(ServerError::Command(format!("pane not found: %{dst}")));
+            }
+
+            // Swap the pane screen/parser state but keep their layout positions
+            let mut pane_a = window.panes.remove(&src).unwrap();
+            let mut pane_b = window.panes.remove(&dst).unwrap();
+
+            // Swap layout positions (offsets and sizes)
+            std::mem::swap(&mut pane_a.xoff, &mut pane_b.xoff);
+            std::mem::swap(&mut pane_a.yoff, &mut pane_b.yoff);
+            std::mem::swap(&mut pane_a.sx, &mut pane_b.sx);
+            std::mem::swap(&mut pane_a.sy, &mut pane_b.sy);
+
+            // Re-insert with swapped IDs (pane_a gets dst's slot, pane_b gets src's slot)
+            window.panes.insert(src, pane_b);
+            window.panes.insert(dst, pane_a);
+        }
+
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    fn swap_window(
+        &mut self,
+        session_id: u32,
+        src_idx: u32,
+        dst_idx: u32,
+    ) -> Result<(), ServerError> {
+        {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+
+            if !session.windows.contains_key(&src_idx) {
+                return Err(ServerError::Command(format!(
+                    "window not found: {src_idx}"
+                )));
+            }
+            if !session.windows.contains_key(&dst_idx) {
+                return Err(ServerError::Command(format!(
+                    "window not found: {dst_idx}"
+                )));
+            }
+
+            let window_a = session.windows.remove(&src_idx).unwrap();
+            let window_b = session.windows.remove(&dst_idx).unwrap();
+            session.windows.insert(src_idx, window_b);
+            session.windows.insert(dst_idx, window_a);
+        }
+
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    fn move_window(
+        &mut self,
+        src_session_id: u32,
+        src_idx: u32,
+        dst_session_id: u32,
+        dst_idx: u32,
+    ) -> Result<(), ServerError> {
+        // Remove window from source session
+        let window = {
+            let session = self
+                .sessions
+                .find_by_id_mut(src_session_id)
+                .ok_or_else(|| ServerError::Command("source session not found".into()))?;
+            session
+                .windows
+                .remove(&src_idx)
+                .ok_or_else(|| ServerError::Command(format!("window not found: {src_idx}")))?
+        };
+
+        // Fix active window in source session if needed
+        {
+            let session = self.sessions.find_by_id_mut(src_session_id).unwrap();
+            if session.active_window == src_idx {
+                if let Some(&next) = session.windows.keys().next() {
+                    session.active_window = next;
+                }
+            }
+        }
+
+        // Insert into destination session
+        {
+            let session = self
+                .sessions
+                .find_by_id_mut(dst_session_id)
+                .ok_or_else(|| ServerError::Command("destination session not found".into()))?;
+            // If dst_idx is already taken, remove it first
+            if session.windows.contains_key(&dst_idx) {
+                return Err(ServerError::Command(format!(
+                    "window index {dst_idx} already exists in destination session"
+                )));
+            }
+            session.windows.insert(dst_idx, window);
+        }
+
+        self.mark_clients_redraw(src_session_id);
+        self.mark_clients_redraw(dst_session_id);
+        Ok(())
+    }
+
+    fn break_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<u32, ServerError> {
+        let sx = self.client_sx();
+        let sy = self.client_sy();
+        let pane_height = sy.saturating_sub(1);
+
+        // Remove the pane from the source window
+        let mut pane = {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            let window = session
+                .windows
+                .get_mut(&window_idx)
+                .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+
+            if window.panes.len() <= 1 {
+                return Err(ServerError::Command(
+                    "cannot break with only one pane".into(),
+                ));
+            }
+
+            let pane = window
+                .panes
+                .remove(&pane_id)
+                .ok_or_else(|| ServerError::Command(format!("pane not found: %{pane_id}")))?;
+
+            // Update active pane if needed
+            if window.active_pane == pane_id {
+                if let Some(&next) = window.panes.keys().next() {
+                    window.active_pane = next;
+                }
+            }
+
+            // Rebuild layout for remaining panes
+            let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+            let was_horizontal = window
+                .layout
+                .as_ref()
+                .is_some_and(|l| l.cell_type == rmux_core::layout::LayoutType::LeftRight);
+            let layout = if was_horizontal {
+                layout_even_horizontal(window.sx, window.sy, &pane_ids)
+            } else {
+                layout_even_vertical(window.sx, window.sy, &pane_ids)
+            };
+            for &pid in &pane_ids {
+                if let Some(cell) = layout.find_pane(pid) {
+                    if let Some(p) = window.panes.get_mut(&pid) {
+                        p.resize(cell.sx, cell.sy);
+                        p.xoff = cell.x_off;
+                        p.yoff = cell.y_off;
+                    }
+                }
+            }
+            window.layout = Some(layout);
+
+            pane
+        };
+
+        // Create a new window with this pane
+        let new_window_idx = {
+            let session = self.sessions.find_by_id_mut(session_id).unwrap();
+            let new_idx = session.next_window_index();
+            pane.resize(sx, pane_height);
+            pane.xoff = 0;
+            pane.yoff = 0;
+            let mut new_window = Window::new("bash".to_string(), sx, pane_height);
+            new_window.active_pane = pane.id;
+            new_window.layout = Some(LayoutCell::new_pane(0, 0, sx, pane_height, pane.id));
+            new_window.panes.insert(pane.id, pane);
+            session.windows.insert(new_idx, new_window);
+            new_idx
+        };
+
+        // Resize remaining panes' PTYs in original window
+        {
+            let session = self.sessions.find_by_id(session_id).unwrap();
+            if let Some(win) = session.windows.get(&window_idx) {
+                for (&pid, p) in &win.panes {
+                    if let Some(fd) = self.pty_fds.get(&pid) {
+                        pty::Pty::resize_fd(fd.as_raw_fd(), p.sx as u16, p.sy as u16).ok();
+                    }
+                }
+            }
+        }
+
+        // Resize the pane PTY in the new window
+        if let Some(fd) = self.pty_fds.get(&pane_id) {
+            pty::Pty::resize_fd(fd.as_raw_fd(), sx as u16, pane_height as u16).ok();
+        }
+
+        self.mark_clients_redraw(session_id);
+        Ok(new_window_idx)
+    }
+
+    fn join_pane(
+        &mut self,
+        src_session_id: u32,
+        src_window_idx: u32,
+        src_pane_id: u32,
+        dst_session_id: u32,
+        dst_window_idx: u32,
+        horizontal: bool,
+    ) -> Result<(), ServerError> {
+        // Remove pane from source window
+        let pane = {
+            let session = self
+                .sessions
+                .find_by_id_mut(src_session_id)
+                .ok_or_else(|| ServerError::Command("source session not found".into()))?;
+            let window = session.windows.get_mut(&src_window_idx).ok_or_else(|| {
+                ServerError::Command(format!("window not found: {src_window_idx}"))
+            })?;
+
+            let pane = window.panes.remove(&src_pane_id).ok_or_else(|| {
+                ServerError::Command(format!("pane not found: %{src_pane_id}"))
+            })?;
+
+            // Update active pane if needed
+            if window.active_pane == src_pane_id {
+                if let Some(&next) = window.panes.keys().next() {
+                    window.active_pane = next;
+                }
+            }
+
+            // If window is now empty, remove it
+            if window.panes.is_empty() {
+                let idx = src_window_idx;
+                session.windows.remove(&idx);
+                if session.active_window == idx {
+                    if let Some(&next) = session.windows.keys().next() {
+                        session.active_window = next;
+                    }
+                }
+            } else {
+                // Rebuild layout for remaining panes
+                let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+                let layout = if horizontal {
+                    layout_even_horizontal(window.sx, window.sy, &pane_ids)
+                } else {
+                    layout_even_vertical(window.sx, window.sy, &pane_ids)
+                };
+                for &pid in &pane_ids {
+                    if let Some(cell) = layout.find_pane(pid) {
+                        if let Some(p) = window.panes.get_mut(&pid) {
+                            p.resize(cell.sx, cell.sy);
+                            p.xoff = cell.x_off;
+                            p.yoff = cell.y_off;
+                        }
+                    }
+                }
+                window.layout = Some(layout);
+            }
+
+            pane
+        };
+
+        // Insert pane into destination window
+        {
+            let session = self
+                .sessions
+                .find_by_id_mut(dst_session_id)
+                .ok_or_else(|| ServerError::Command("destination session not found".into()))?;
+            let window = session.windows.get_mut(&dst_window_idx).ok_or_else(|| {
+                ServerError::Command(format!("window not found: {dst_window_idx}"))
+            })?;
+
+            let pid = pane.id;
+            window.panes.insert(pid, pane);
+
+            // Rebuild layout with new pane
+            let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+            let layout = if horizontal {
+                layout_even_horizontal(window.sx, window.sy, &pane_ids)
+            } else {
+                layout_even_vertical(window.sx, window.sy, &pane_ids)
+            };
+            for &id in &pane_ids {
+                if let Some(cell) = layout.find_pane(id) {
+                    if let Some(p) = window.panes.get_mut(&id) {
+                        p.resize(cell.sx, cell.sy);
+                        p.xoff = cell.x_off;
+                        p.yoff = cell.y_off;
+                    }
+                }
+            }
+            window.layout = Some(layout);
+            window.active_pane = pid;
+        }
+
+        // Resize PTYs in destination window
+        {
+            let session = self.sessions.find_by_id(dst_session_id).unwrap();
+            if let Some(win) = session.windows.get(&dst_window_idx) {
+                for (&pid, p) in &win.panes {
+                    if let Some(fd) = self.pty_fds.get(&pid) {
+                        pty::Pty::resize_fd(fd.as_raw_fd(), p.sx as u16, p.sy as u16).ok();
+                    }
+                }
+            }
+        }
+
+        self.mark_clients_redraw(src_session_id);
+        if dst_session_id != src_session_id {
+            self.mark_clients_redraw(dst_session_id);
+        }
+        Ok(())
+    }
+
+    fn last_pane(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+        let switched = {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            let window = session
+                .windows
+                .get_mut(&window_idx)
+                .ok_or_else(|| {
+                    ServerError::Command(format!("window not found: {window_idx}"))
+                })?;
+
+            if let Some(last) = window.last_active_pane {
+                if window.panes.contains_key(&last) {
+                    window.last_active_pane = Some(window.active_pane);
+                    window.active_pane = last;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if switched {
+            self.mark_clients_redraw(session_id);
+            Ok(())
+        } else {
+            Err(ServerError::Command("no last pane".into()))
+        }
+    }
+
+    fn rotate_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+        {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            let window = session
+                .windows
+                .get_mut(&window_idx)
+                .ok_or_else(|| {
+                    ServerError::Command(format!("window not found: {window_idx}"))
+                })?;
+
+            let mut pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+            pane_ids.sort_unstable();
+
+            if pane_ids.len() <= 1 {
+                return Ok(());
+            }
+
+            // Rotate: collect all position info, shift each pane to the next position
+            let positions: Vec<(u32, u32, u32, u32)> = pane_ids
+                .iter()
+                .map(|&id| {
+                    let p = &window.panes[&id];
+                    (p.xoff, p.yoff, p.sx, p.sy)
+                })
+                .collect();
+
+            // Each pane takes the position of the next pane
+            for (i, &pid) in pane_ids.iter().enumerate() {
+                let next_pos = &positions[(i + 1) % positions.len()];
+                if let Some(pane) = window.panes.get_mut(&pid) {
+                    pane.xoff = next_pos.0;
+                    pane.yoff = next_pos.1;
+                    pane.resize(next_pos.2, next_pos.3);
+                }
+            }
+
+            // Advance active pane
+            if let Some(pos) = pane_ids.iter().position(|&id| id == window.active_pane) {
+                let next_active = pane_ids[(pos + 1) % pane_ids.len()];
+                window.active_pane = next_active;
+            }
+        }
+
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    fn select_layout(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        layout_name: &str,
+    ) -> Result<(), ServerError> {
+        // Collect pane resize info: (pane_id, new_sx, new_sy)
+        let pane_resizes: Vec<(u32, u32, u32)> = {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            let window = session
+                .windows
+                .get_mut(&window_idx)
+                .ok_or_else(|| {
+                    ServerError::Command(format!("window not found: {window_idx}"))
+                })?;
+
+            let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+            let layout = match layout_name {
+                "even-horizontal" | "eh" => {
+                    layout_even_horizontal(window.sx, window.sy, &pane_ids)
+                }
+                "even-vertical" | "ev" => {
+                    layout_even_vertical(window.sx, window.sy, &pane_ids)
+                }
+                _ => {
+                    return Err(ServerError::Command(format!(
+                        "unknown layout: {layout_name}"
+                    )));
+                }
+            };
+
+            let mut resizes = Vec::new();
+            // Apply layout positions to panes
+            for &pid in &pane_ids {
+                if let Some(cell) = layout.find_pane(pid) {
+                    if let Some(pane) = window.panes.get_mut(&pid) {
+                        pane.resize(cell.sx, cell.sy);
+                        pane.xoff = cell.x_off;
+                        pane.yoff = cell.y_off;
+                        resizes.push((pid, cell.sx, cell.sy));
+                    }
+                }
+            }
+            window.layout = Some(layout);
+            resizes
+        };
+
+        // Resize PTYs
+        for (pid, new_sx, new_sy) in pane_resizes {
+            if let Some(fd) = self.pty_fds.get(&pid) {
+                pty::Pty::resize_fd(fd.as_raw_fd(), new_sx as u16, new_sy as u16).ok();
+            }
+        }
+
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    fn respawn_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<(), ServerError> {
+        // Clean up old PTY
+        self.cleanup_pane(pane_id);
+
+        // Get pane dimensions and reset screen
+        let (sx, sy, cwd) = {
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            let window = session.windows.get_mut(&window_idx).ok_or_else(|| {
+                ServerError::Command(format!("window not found: {window_idx}"))
+            })?;
+            let pane = window.panes.get_mut(&pane_id).ok_or_else(|| {
+                ServerError::Command(format!("pane not found: %{pane_id}"))
+            })?;
+            let sx = pane.sx;
+            let sy = pane.sy;
+            pane.screen = rmux_core::screen::Screen::new(sx, sy, 2000);
+            let cwd = session.cwd.clone();
+            (sx, sy, cwd)
+        };
+
+        // Spawn a new shell process
+        self.spawn_pane_process(pane_id, sx, sy, &cwd)?;
+
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
+    // --- Command prompt ---
+
+    fn enter_command_prompt(&mut self) {
+        if let Some(client) = self.clients.get_mut(&self.command_client) {
+            client.prompt = Some(PromptState::default());
+        }
+    }
+}
+
+/// Format an option value as a display string.
+fn format_option_value(val: &OptionValue) -> String {
+    match val {
+        OptionValue::String(s) => s.clone(),
+        OptionValue::Number(n) => n.to_string(),
+        OptionValue::Flag(b) => if *b { "on" } else { "off" }.to_string(),
+        OptionValue::Style(s) => format!("{s:?}"),
+        OptionValue::Array(a) => a.join(","),
+    }
+}
+
+/// Parse a string value into an OptionValue, guessing the type.
+fn parse_option_value(value: &str) -> OptionValue {
+    match value {
+        "on" | "true" | "yes" => OptionValue::Flag(true),
+        "off" | "false" | "no" => OptionValue::Flag(false),
+        _ => {
+            if let Ok(n) = value.parse::<i64>() {
+                OptionValue::Number(n)
+            } else {
+                OptionValue::String(value.to_string())
             }
         }
     }

@@ -157,6 +157,58 @@ impl Options {
     pub fn local_iter(&self) -> impl Iterator<Item = (&str, &OptionValue)> {
         self.values.iter().map(|(k, v)| (k.as_str(), v))
     }
+
+    /// Collect all option key-value pairs (including inherited), sorted by key.
+    #[must_use]
+    pub fn all_entries(&self) -> Vec<(String, String)> {
+        let mut map: HashMap<String, String> = HashMap::new();
+        self.collect_all(&mut map);
+        let mut entries: Vec<(String, String)> = map.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries
+    }
+
+    fn collect_all(&self, map: &mut HashMap<String, String>) {
+        if let Some(parent) = &self.parent {
+            parent.collect_all(map);
+        }
+        for (k, v) in &self.values {
+            map.insert(k.clone(), v.to_string());
+        }
+    }
+
+    /// Parse a string value into the correct OptionValue type, based on what's already stored.
+    /// If the key exists, match its type. Otherwise, try auto-detection.
+    pub fn parse_and_set(&mut self, key: &str, value: &str) {
+        let target_type = self.get(key).map(OptionValue::type_name);
+        let parsed = match target_type {
+            Some("number") => {
+                if let Ok(n) = value.parse::<i64>() {
+                    OptionValue::Number(n)
+                } else {
+                    OptionValue::String(value.to_string())
+                }
+            }
+            Some("flag") => match value {
+                "on" | "true" | "1" | "yes" => OptionValue::Flag(true),
+                "off" | "false" | "0" | "no" => OptionValue::Flag(false),
+                _ => OptionValue::String(value.to_string()),
+            },
+            _ => {
+                // Auto-detect type
+                if let Ok(n) = value.parse::<i64>() {
+                    OptionValue::Number(n)
+                } else {
+                    match value {
+                        "on" | "true" => OptionValue::Flag(true),
+                        "off" | "false" => OptionValue::Flag(false),
+                        _ => OptionValue::String(value.to_string()),
+                    }
+                }
+            }
+        };
+        self.set(key, parsed);
+    }
 }
 
 /// Default server options (matching tmux's defaults).
@@ -201,7 +253,20 @@ pub fn default_window_options() -> Options {
     opts.set("monitor-activity", OptionValue::Flag(false));
     opts.set("pane-border-style", OptionValue::String("default".into()));
     opts.set("pane-active-border-style", OptionValue::String("fg=green".into()));
+    opts.set("remain-on-exit", OptionValue::Flag(false));
     opts
+}
+
+impl std::fmt::Display for OptionValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OptionValue::String(s) => write!(f, "{s}"),
+            OptionValue::Number(n) => write!(f, "{n}"),
+            OptionValue::Flag(b) => write!(f, "{}", if *b { "on" } else { "off" }),
+            OptionValue::Style(s) => write!(f, "{s:?}"),
+            OptionValue::Array(a) => write!(f, "{}", a.join(",")),
+        }
+    }
 }
 
 #[cfg(test)]

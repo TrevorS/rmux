@@ -18,6 +18,8 @@ pub enum CommandResult {
     Detach,
     /// Server should exit.
     Exit,
+    /// Server should run a shell command asynchronously and return output.
+    RunShell(String),
 }
 
 /// A registered command handler.
@@ -129,6 +131,129 @@ pub trait CommandServer {
     /// Get the active window index for a given session.
     fn active_window_for(&self, session_id: u32) -> Option<u32>;
 
+    // --- PTY I/O ---
+    /// Write raw bytes to a specific pane's PTY.
+    fn write_to_pane(
+        &self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+        data: &[u8],
+    ) -> Result<(), ServerError>;
+
+    // --- Options ---
+    /// Get a server-level option value as a string.
+    fn get_server_option(&self, key: &str) -> Result<String, ServerError>;
+    /// Set a server-level option.
+    fn set_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError>;
+    /// Set a session-level option.
+    fn set_session_option(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError>;
+    /// Set a window-level option.
+    fn set_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError>;
+    /// Show all options for a given scope. Returns "key value" lines.
+    fn show_options(&self, scope: &str, target_id: Option<u32>) -> Vec<String>;
+
+    // --- Key bindings ---
+    /// Add a key binding.
+    fn add_key_binding(
+        &mut self,
+        table: &str,
+        key_name: &str,
+        argv: Vec<String>,
+    ) -> Result<(), ServerError>;
+    /// Remove a key binding.
+    fn remove_key_binding(&mut self, table: &str, key_name: &str) -> Result<(), ServerError>;
+
+    // --- Config ---
+    /// Execute a list of parsed config commands, returning any error messages.
+    fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String>;
+
+    // --- Capture ---
+    /// Capture the visible content of a pane as text.
+    fn capture_pane(
+        &self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<String, ServerError>;
+
+    // --- Resize ---
+    /// Resize a pane by direction or absolute size.
+    fn resize_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+        direction: Option<Direction>,
+        amount: u32,
+    ) -> Result<(), ServerError>;
+
+    // --- Swap/Move ---
+    fn swap_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        src: u32,
+        dst: u32,
+    ) -> Result<(), ServerError>;
+    fn swap_window(
+        &mut self,
+        session_id: u32,
+        src_idx: u32,
+        dst_idx: u32,
+    ) -> Result<(), ServerError>;
+    fn move_window(
+        &mut self,
+        src_session_id: u32,
+        src_idx: u32,
+        dst_session_id: u32,
+        dst_idx: u32,
+    ) -> Result<(), ServerError>;
+    fn break_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<u32, ServerError>;
+    fn join_pane(
+        &mut self,
+        src_session_id: u32,
+        src_window_idx: u32,
+        src_pane_id: u32,
+        dst_session_id: u32,
+        dst_window_idx: u32,
+        horizontal: bool,
+    ) -> Result<(), ServerError>;
+    fn last_pane(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
+    fn rotate_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
+    fn select_layout(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        layout_name: &str,
+    ) -> Result<(), ServerError>;
+    fn respawn_pane(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<(), ServerError>;
+
+    // --- Command prompt ---
+    /// Put the current client into command prompt mode.
+    fn enter_command_prompt(&mut self);
+
     // --- Info ---
     fn list_clients(&self) -> Vec<String>;
     fn list_all_commands(&self) -> Vec<String>;
@@ -179,4 +304,24 @@ pub fn get_option<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 /// Check if a flag is present in arguments.
 pub fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
+}
+
+/// Collect positional arguments (those that aren't flags or flag values).
+/// Flags are arguments starting with '-'. Flag values follow flags specified in `flags_with_values`.
+pub fn positional_args<'a>(args: &'a [String], flags_with_values: &[&str]) -> Vec<&'a str> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i].starts_with('-') {
+            // If this flag takes a value, skip the next arg too
+            if flags_with_values.contains(&args[i].as_str()) {
+                i += 1; // skip value
+            }
+            i += 1;
+            continue;
+        }
+        result.push(args[i].as_str());
+        i += 1;
+    }
+    result
 }

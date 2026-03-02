@@ -109,6 +109,95 @@ pub fn cmd_list_windows(
     }
 }
 
+/// swap-window [-s src] [-t dst]
+pub fn cmd_swap_window(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let session_id = resolve_session(args, server)?;
+
+    let src_idx = get_option(args, "-s")
+        .and_then(|s| s.split(':').next_back())
+        .and_then(|s| s.parse().ok())
+        .or_else(|| server.active_window_for(session_id))
+        .ok_or_else(|| ServerError::Command("no source window".into()))?;
+
+    let dst_idx = resolve_window_idx(args, server, session_id)?;
+
+    server.swap_window(session_id, src_idx, dst_idx)?;
+    Ok(CommandResult::Ok)
+}
+
+/// move-window [-s src] [-t dst]
+pub fn cmd_move_window(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    // Source session/window
+    let src_session_id = if let Some(src) = get_option(args, "-s") {
+        let name = src.split(':').next().unwrap_or(src);
+        server.find_session_id(name)
+            .ok_or_else(|| ServerError::Command(format!("session not found: {name}")))?
+    } else {
+        server.client_session_id()
+            .ok_or_else(|| ServerError::Command("no current session".into()))?
+    };
+
+    let src_idx = get_option(args, "-s")
+        .and_then(|s| s.split(':').nth(1))
+        .and_then(|s| s.parse().ok())
+        .or_else(|| server.active_window_for(src_session_id))
+        .ok_or_else(|| ServerError::Command("no source window".into()))?;
+
+    // Destination session/window
+    let dst_session_id = resolve_session(args, server)?;
+    let dst_idx = resolve_window_idx(args, server, dst_session_id)?;
+
+    server.move_window(src_session_id, src_idx, dst_session_id, dst_idx)?;
+    Ok(CommandResult::Ok)
+}
+
+/// rotate-window [-t target-window]
+pub fn cmd_rotate_window(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let session_id = resolve_session(args, server)?;
+    let window_idx = resolve_window_idx(args, server, session_id)?;
+    server.rotate_window(session_id, window_idx)?;
+    Ok(CommandResult::Ok)
+}
+
+/// select-layout [-t target-window] layout-name
+pub fn cmd_select_layout(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    use crate::command::positional_args;
+
+    let session_id = resolve_session(args, server)?;
+    let window_idx = resolve_window_idx(args, server, session_id)?;
+
+    let positional = positional_args(args, &["-t"]);
+    let layout_name = positional.first().copied().unwrap_or("even-horizontal");
+
+    server.select_layout(session_id, window_idx, layout_name)?;
+    Ok(CommandResult::Ok)
+}
+
+/// respawn-window [-t target-window]
+pub fn cmd_respawn_window(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let session_id = resolve_session(args, server)?;
+    let window_idx = resolve_window_idx(args, server, session_id)?;
+    let pane_id = server.active_pane_id_for(session_id, window_idx)
+        .ok_or_else(|| ServerError::Command("no active pane".into()))?;
+    server.respawn_pane(session_id, window_idx, pane_id)?;
+    Ok(CommandResult::Ok)
+}
+
 /// Resolve the session ID from -t argument or current client session.
 fn resolve_session(args: &[String], server: &dyn CommandServer) -> Result<u32, ServerError> {
     if let Some(target) = get_option(args, "-t") {

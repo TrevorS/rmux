@@ -145,6 +145,74 @@ fn parse_utf8(data: &[u8], needed: usize) -> Option<(KeyCode, usize)> {
     Some((KEYC_UNKNOWN, 1))
 }
 
+/// Convert a tmux key name string to the raw byte sequence a terminal would emit.
+///
+/// Supports: "Enter", "Escape", "Space", "Tab", "BSpace", "DC" (Delete),
+/// "IC" (Insert), "Home", "End", "PPage", "NPage", "Up", "Down", "Left", "Right",
+/// "F1"-"F12", "C-x" (Ctrl+x), "M-x" (Alt+x), and bare printable characters.
+///
+/// Returns `None` if the key name is not recognized.
+#[must_use]
+pub fn key_name_to_bytes(name: &str) -> Option<Vec<u8>> {
+    // Check for modifier prefixes first
+    if let Some(rest) = name.strip_prefix("C-") {
+        // Ctrl+letter: compute as letter & 0x1f
+        if rest.len() == 1 {
+            let ch = rest.as_bytes()[0];
+            if ch.is_ascii_alphabetic() {
+                return Some(vec![ch.to_ascii_lowercase() & 0x1f]);
+            }
+        }
+        return None;
+    }
+
+    if let Some(rest) = name.strip_prefix("M-") {
+        // Alt+key: ESC followed by the key
+        if rest.len() == 1 {
+            return Some(vec![0x1b, rest.as_bytes()[0]]);
+        }
+        return None;
+    }
+
+    match name {
+        "Enter" | "CR" => Some(b"\r".to_vec()),
+        "Escape" | "Esc" => Some(vec![0x1b]),
+        "Space" => Some(b" ".to_vec()),
+        "Tab" | "BTab" => Some(b"\t".to_vec()),
+        "BSpace" => Some(vec![0x7f]),
+        "DC" | "Delete" => Some(b"\x1b[3~".to_vec()),
+        "IC" | "Insert" => Some(b"\x1b[2~".to_vec()),
+        "Home" => Some(b"\x1b[H".to_vec()),
+        "End" => Some(b"\x1b[F".to_vec()),
+        "PPage" | "PageUp" => Some(b"\x1b[5~".to_vec()),
+        "NPage" | "PageDown" => Some(b"\x1b[6~".to_vec()),
+        "Up" => Some(b"\x1b[A".to_vec()),
+        "Down" => Some(b"\x1b[B".to_vec()),
+        "Right" => Some(b"\x1b[C".to_vec()),
+        "Left" => Some(b"\x1b[D".to_vec()),
+        "F1" => Some(b"\x1bOP".to_vec()),
+        "F2" => Some(b"\x1bOQ".to_vec()),
+        "F3" => Some(b"\x1bOR".to_vec()),
+        "F4" => Some(b"\x1bOS".to_vec()),
+        "F5" => Some(b"\x1b[15~".to_vec()),
+        "F6" => Some(b"\x1b[17~".to_vec()),
+        "F7" => Some(b"\x1b[18~".to_vec()),
+        "F8" => Some(b"\x1b[19~".to_vec()),
+        "F9" => Some(b"\x1b[20~".to_vec()),
+        "F10" => Some(b"\x1b[21~".to_vec()),
+        "F11" => Some(b"\x1b[23~".to_vec()),
+        "F12" => Some(b"\x1b[24~".to_vec()),
+        _ => {
+            // Single printable character
+            if name.len() == 1 && name.as_bytes()[0].is_ascii_graphic() {
+                Some(name.as_bytes().to_vec())
+            } else {
+                None
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +270,56 @@ mod tests {
     #[test]
     fn backspace() {
         assert_eq!(parse_key(b"\x7f"), Some((KEYC_BACKSPACE, 1)));
+    }
+
+    #[test]
+    fn key_name_enter() {
+        assert_eq!(key_name_to_bytes("Enter"), Some(b"\r".to_vec()));
+        assert_eq!(key_name_to_bytes("CR"), Some(b"\r".to_vec()));
+    }
+
+    #[test]
+    fn key_name_ctrl() {
+        assert_eq!(key_name_to_bytes("C-c"), Some(vec![0x03]));
+        assert_eq!(key_name_to_bytes("C-a"), Some(vec![0x01]));
+        assert_eq!(key_name_to_bytes("C-z"), Some(vec![0x1a]));
+    }
+
+    #[test]
+    fn key_name_arrows() {
+        assert_eq!(key_name_to_bytes("Up"), Some(b"\x1b[A".to_vec()));
+        assert_eq!(key_name_to_bytes("Down"), Some(b"\x1b[B".to_vec()));
+        assert_eq!(key_name_to_bytes("Left"), Some(b"\x1b[D".to_vec()));
+        assert_eq!(key_name_to_bytes("Right"), Some(b"\x1b[C".to_vec()));
+    }
+
+    #[test]
+    fn key_name_special() {
+        assert_eq!(key_name_to_bytes("Escape"), Some(vec![0x1b]));
+        assert_eq!(key_name_to_bytes("Space"), Some(b" ".to_vec()));
+        assert_eq!(key_name_to_bytes("Tab"), Some(b"\t".to_vec()));
+        assert_eq!(key_name_to_bytes("BSpace"), Some(vec![0x7f]));
+    }
+
+    #[test]
+    fn key_name_function_keys() {
+        assert_eq!(key_name_to_bytes("F1"), Some(b"\x1bOP".to_vec()));
+        assert_eq!(key_name_to_bytes("F12"), Some(b"\x1b[24~".to_vec()));
+    }
+
+    #[test]
+    fn key_name_bare_char() {
+        assert_eq!(key_name_to_bytes("a"), Some(b"a".to_vec()));
+        assert_eq!(key_name_to_bytes("Z"), Some(b"Z".to_vec()));
+    }
+
+    #[test]
+    fn key_name_unknown() {
+        assert_eq!(key_name_to_bytes("FooBar"), None);
+    }
+
+    #[test]
+    fn key_name_alt() {
+        assert_eq!(key_name_to_bytes("M-x"), Some(vec![0x1b, b'x']));
     }
 }

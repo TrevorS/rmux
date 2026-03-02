@@ -22,6 +22,8 @@ pub struct KeyBindings {
     in_prefix: bool,
     /// Key -> command bindings for prefix mode.
     bindings: HashMap<KeyCode, Vec<String>>,
+    /// Key -> command bindings for root table (no prefix needed).
+    root_bindings: HashMap<KeyCode, Vec<String>>,
 }
 
 impl KeyBindings {
@@ -66,7 +68,23 @@ impl KeyBindings {
         // Command prompt
         bindings.insert(b':' as KeyCode, vec!["command-prompt".into()]);
 
-        Self { prefix, in_prefix: false, bindings }
+        Self { prefix, in_prefix: false, bindings, root_bindings: HashMap::new() }
+    }
+
+    /// Add a key binding to the given table.
+    pub fn add_binding(&mut self, table: &str, key: KeyCode, argv: Vec<String>) {
+        match table {
+            "root" => { self.root_bindings.insert(key, argv); }
+            _ => { self.bindings.insert(key, argv); }
+        }
+    }
+
+    /// Remove a key binding from the given table.
+    pub fn remove_binding(&mut self, table: &str, key: KeyCode) -> bool {
+        match table {
+            "root" => self.root_bindings.remove(&key).is_some(),
+            _ => self.bindings.remove(&key).is_some(),
+        }
     }
 
     /// Process input bytes and return the action to take.
@@ -102,6 +120,12 @@ impl KeyBindings {
             return None;
         }
 
+        // Check root table bindings (no prefix needed)
+        let base = keyc_base(key);
+        if let Some(argv) = self.root_bindings.get(&base).or_else(|| self.root_bindings.get(&key)) {
+            return Some(KeyAction::Command(argv.clone()));
+        }
+
         // Check if this is the prefix key
         if key == self.prefix {
             self.in_prefix = true;
@@ -123,8 +147,71 @@ impl KeyBindings {
                 format!("bind-key -T prefix {key_name} {cmd}")
             })
             .collect();
+
+        for (&key, argv) in &self.root_bindings {
+            let key_name = key_to_string(key);
+            let cmd = argv.join(" ");
+            result.push(format!("bind-key -T root {key_name} {cmd}"));
+        }
+
         result.sort();
         result
+    }
+}
+
+/// Convert a key name string to a KeyCode.
+///
+/// This is the reverse of `key_to_string`. Used by bind-key/unbind-key.
+pub fn string_to_key(name: &str) -> Option<KeyCode> {
+    // Check for modifier prefixes
+    let (mods, base_name) = if let Some(rest) = name.strip_prefix("C-") {
+        (KeyModifiers::CTRL, rest)
+    } else if let Some(rest) = name.strip_prefix("M-") {
+        (KeyModifiers::META, rest)
+    } else if let Some(rest) = name.strip_prefix("S-") {
+        (KeyModifiers::SHIFT, rest)
+    } else {
+        (KeyModifiers::empty(), name)
+    };
+
+    let base = match base_name {
+        "Up" => KEYC_UP,
+        "Down" => KEYC_DOWN,
+        "Left" => KEYC_LEFT,
+        "Right" => KEYC_RIGHT,
+        "Home" => KEYC_HOME,
+        "End" => KEYC_END,
+        "IC" | "Insert" => KEYC_INSERT,
+        "DC" | "Delete" => KEYC_DELETE,
+        "PPage" | "PageUp" => KEYC_PPAGE,
+        "NPage" | "PageDown" => KEYC_NPAGE,
+        "BSpace" => KEYC_BACKSPACE,
+        "Tab" => KEYC_TAB,
+        "Enter" | "CR" => KEYC_RETURN,
+        "Escape" | "Esc" => KEYC_ESCAPE,
+        "Space" => KEYC_SPACE,
+        s if s.starts_with('F') && s.len() > 1 => {
+            if let Ok(n) = s[1..].parse::<u64>() {
+                if (1..=12).contains(&n) {
+                    KEYC_F1 + n - 1
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+        s if s.len() == 1 => {
+            let ch = s.as_bytes()[0];
+            ch as KeyCode
+        }
+        _ => return None,
+    };
+
+    if mods.is_empty() {
+        Some(base)
+    } else {
+        Some(keyc_build(base, mods))
     }
 }
 

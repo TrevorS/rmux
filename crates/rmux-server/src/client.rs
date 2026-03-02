@@ -23,6 +23,15 @@ bitflags! {
     }
 }
 
+/// State for the interactive command prompt (:).
+#[derive(Debug, Clone, Default)]
+pub struct PromptState {
+    /// Current input buffer.
+    pub buffer: String,
+    /// Cursor position in the buffer.
+    pub cursor_pos: usize,
+}
+
 /// A connected client on the server side.
 pub struct ServerClient {
     /// Unique client ID.
@@ -39,6 +48,8 @@ pub struct ServerClient {
     pub sx: u32,
     /// Terminal height.
     pub sy: u32,
+    /// Command prompt state (Some = prompt mode active).
+    pub prompt: Option<PromptState>,
 }
 
 impl ServerClient {
@@ -52,6 +63,7 @@ impl ServerClient {
             session_id: None,
             sx: 80,
             sy: 24,
+            prompt: None,
         }
     }
 
