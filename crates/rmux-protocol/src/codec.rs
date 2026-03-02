@@ -297,17 +297,69 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
         | MessageType::OldStdout => {
             Ok(Message::Version { version: 0 }) // Placeholder
         }
-        // File I/O messages (simplified)
-        MessageType::ReadOpen
-        | MessageType::Read
-        | MessageType::ReadDone
-        | MessageType::WriteOpen
-        | MessageType::Write
-        | MessageType::WriteReady
-        | MessageType::WriteClose
-        | MessageType::ReadCancel => {
-            // These will be implemented fully later
-            Ok(Message::Version { version: 0 })
+        MessageType::ReadOpen => {
+            if data.len() < 8 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let fd = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            let path = decode_cstring(&data[8..]);
+            Ok(Message::ReadOpen(crate::message::MsgReadOpen { stream, fd, path }))
+        }
+        MessageType::Read => {
+            if data.len() < 4 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            Ok(Message::Read(crate::message::MsgReadData { stream }))
+        }
+        MessageType::ReadDone => {
+            if data.len() < 8 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let error = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            Ok(Message::ReadDone(crate::message::MsgReadDone { stream, error }))
+        }
+        MessageType::ReadCancel => {
+            if data.len() < 4 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            Ok(Message::ReadCancel(crate::message::MsgReadCancel { stream }))
+        }
+        MessageType::WriteOpen => {
+            if data.len() < 12 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let fd = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            let flags = i32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+            let path = decode_cstring(&data[12..]);
+            Ok(Message::WriteOpen(crate::message::MsgWriteOpen { stream, fd, flags, path }))
+        }
+        MessageType::Write => {
+            if data.len() < 4 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let write_data = data[4..].to_vec();
+            Ok(Message::Write(crate::message::MsgWriteData { stream, data: write_data }))
+        }
+        MessageType::WriteReady => {
+            if data.len() < 8 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let error = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            Ok(Message::WriteReady(crate::message::MsgWriteReady { stream, error }))
+        }
+        MessageType::WriteClose => {
+            if data.len() < 4 {
+                return Err(err());
+            }
+            let stream = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            Ok(Message::WriteClose(crate::message::MsgWriteClose { stream }))
         }
         // rmux extensions
         MessageType::OutputData => Ok(Message::OutputData(data.to_vec())),
@@ -638,6 +690,177 @@ mod tests {
     #[test]
     fn decode_cstring_no_nul() {
         assert_eq!(decode_cstring(b"hello"), "hello");
+    }
+
+    #[test]
+    fn encode_decode_read_open() {
+        use crate::message::MsgReadOpen;
+        let msg =
+            Message::ReadOpen(MsgReadOpen { stream: 7, fd: 3, path: "/tmp/test.txt".to_string() });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::ReadOpen(m) => {
+                assert_eq!(m.stream, 7);
+                assert_eq!(m.fd, 3);
+                assert_eq!(m.path, "/tmp/test.txt");
+            }
+            other => panic!("expected ReadOpen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_write_open() {
+        use crate::message::MsgWriteOpen;
+        let msg = Message::WriteOpen(MsgWriteOpen {
+            stream: 42,
+            fd: 1,
+            flags: 0x0602,
+            path: "/var/log/output.log".to_string(),
+        });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::WriteOpen(m) => {
+                assert_eq!(m.stream, 42);
+                assert_eq!(m.fd, 1);
+                assert_eq!(m.flags, 0x0602);
+                assert_eq!(m.path, "/var/log/output.log");
+            }
+            other => panic!("expected WriteOpen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_read_data() {
+        use crate::message::MsgReadData;
+        let msg = Message::Read(MsgReadData { stream: 99 });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::Read(m) => {
+                assert_eq!(m.stream, 99);
+            }
+            other => panic!("expected Read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_write_data() {
+        use crate::message::MsgWriteData;
+        let data = vec![0x41, 0x42, 0x43, 0x00, 0xFF];
+        let msg = Message::Write(MsgWriteData { stream: 5, data: data.clone() });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::Write(m) => {
+                assert_eq!(m.stream, 5);
+                assert_eq!(m.data, data);
+            }
+            other => panic!("expected Write, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_read_done() {
+        use crate::message::MsgReadDone;
+        let msg = Message::ReadDone(MsgReadDone { stream: 12, error: -1 });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::ReadDone(m) => {
+                assert_eq!(m.stream, 12);
+                assert_eq!(m.error, -1);
+            }
+            other => panic!("expected ReadDone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_write_ready() {
+        use crate::message::MsgWriteReady;
+        let msg = Message::WriteReady(MsgWriteReady { stream: 33, error: 0 });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::WriteReady(m) => {
+                assert_eq!(m.stream, 33);
+                assert_eq!(m.error, 0);
+            }
+            other => panic!("expected WriteReady, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_write_close() {
+        use crate::message::MsgWriteClose;
+        let msg = Message::WriteClose(MsgWriteClose { stream: 77 });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::WriteClose(m) => {
+                assert_eq!(m.stream, 77);
+            }
+            other => panic!("expected WriteClose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_read_cancel() {
+        use crate::message::MsgReadCancel;
+        let msg = Message::ReadCancel(MsgReadCancel { stream: 55 });
+        let mut buf = BytesMut::new();
+        encode_message(&msg, &mut buf).unwrap();
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::ReadCancel(m) => {
+                assert_eq!(m.stream, 55);
+            }
+            other => panic!("expected ReadCancel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_at_max_size() {
+        // Create a message with data at exactly IMSG_MAX_DATA bytes
+        let data = vec![0xAB; IMSG_MAX_DATA];
+        let msg = Message::OutputData(data.clone());
+        let mut buf = BytesMut::new();
+        let result = encode_message(&msg, &mut buf);
+        assert!(result.is_ok());
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::OutputData(d) => assert_eq!(d.len(), IMSG_MAX_DATA),
+            other => panic!("expected OutputData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_exceeding_max_size() {
+        // Create a message with data exceeding IMSG_MAX_DATA bytes
+        let data = vec![0xAB; IMSG_MAX_DATA + 1];
+        let msg = Message::OutputData(data);
+        let mut buf = BytesMut::new();
+        let result = encode_message(&msg, &mut buf);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            CodecError::TooLarge { size } => assert_eq!(size, IMSG_MAX_DATA + 1),
+            other => panic!("expected TooLarge error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_buffer_returns_none() {
+        let mut buf = BytesMut::new();
+        let result = decode_message(&mut buf).unwrap();
+        assert!(result.is_none());
     }
 
     mod prop_tests {

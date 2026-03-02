@@ -205,6 +205,7 @@ pub fn default_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::sys::wait::{WaitPidFlag, waitpid};
 
     #[test]
     fn create_pty() {
@@ -238,7 +239,6 @@ mod tests {
         assert!(n.is_ok(), "read failed: {n:?}");
 
         // Wait for child to finish
-        use nix::sys::wait::{WaitPidFlag, waitpid};
         waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG)).ok();
     }
 
@@ -253,7 +253,6 @@ mod tests {
         // Wait for child to exit
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        use nix::sys::wait::{WaitPidFlag, waitpid};
         let status = waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG));
         assert!(status.is_ok());
     }
@@ -273,7 +272,6 @@ mod tests {
         // Clean up
         nix::unistd::write(&spawned.master, b"exit\n").ok();
         std::thread::sleep(std::time::Duration::from_millis(100));
-        use nix::sys::wait::{WaitPidFlag, waitpid};
         waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG)).ok();
     }
 }

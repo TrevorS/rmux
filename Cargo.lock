@@ -733,6 +733,7 @@ name = "rmux-protocol"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "criterion",
  "nix",
  "proptest",
  "thiserror",
@@ -747,6 +748,7 @@ dependencies = [
  "bytes",
  "criterion",
  "nix",
+ "proptest",
  "rmux-core",
  "rmux-protocol",
  "rmux-terminal",

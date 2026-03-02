@@ -273,4 +273,245 @@ mod tests {
         let mut cell = LayoutCell::new_pane(0, 0, 2, 2, 0);
         assert!(cell.split_horizontal(1).is_none());
     }
+
+    #[test]
+    fn triple_horizontal_split() {
+        // Split horizontally 3 times to get 3 panes.
+        // Start with a wide enough pane (80 columns).
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        assert!(cell.split_horizontal(1).is_some());
+        // Now cell is LeftRight with children [pane0, pane1].
+        assert_eq!(cell.pane_count(), 2);
+
+        // Split the second child (pane1) horizontally again.
+        let result = cell.children[1].split_horizontal(2);
+        assert!(result.is_some());
+        assert_eq!(cell.pane_count(), 3);
+
+        // Verify all three panes exist.
+        assert!(cell.find_pane(0).is_some());
+        assert!(cell.find_pane(1).is_some());
+        assert!(cell.find_pane(2).is_some());
+
+        // All panes should have the same height as the original.
+        let p0 = cell.find_pane(0).unwrap();
+        let p1 = cell.find_pane(1).unwrap();
+        let p2 = cell.find_pane(2).unwrap();
+        assert_eq!(p0.sy, 24);
+        assert_eq!(p1.sy, 24);
+        assert_eq!(p2.sy, 24);
+
+        // Widths should add up (with separators) to the original width.
+        // p0.sx + 1 + p1.sx + 1 + p2.sx = 80
+        assert_eq!(p0.sx + 1 + p1.sx + 1 + p2.sx, 80);
+    }
+
+    #[test]
+    fn nested_split() {
+        // Split horizontally then split one pane vertically to get 3 panes.
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        assert!(cell.split_horizontal(1).is_some());
+        assert_eq!(cell.pane_count(), 2);
+
+        // Split the right pane (pane1) vertically.
+        let result = cell.children[1].split_vertical(2);
+        assert!(result.is_some());
+        assert_eq!(cell.pane_count(), 3);
+
+        // Verify all panes exist.
+        assert!(cell.find_pane(0).is_some());
+        assert!(cell.find_pane(1).is_some());
+        assert!(cell.find_pane(2).is_some());
+
+        // Left pane should be full height.
+        let p0 = cell.find_pane(0).unwrap();
+        assert_eq!(p0.sy, 24);
+
+        // Right-side panes (top and bottom) should share the height.
+        let p1 = cell.find_pane(1).unwrap();
+        let p2 = cell.find_pane(2).unwrap();
+        assert_eq!(p1.sx, p2.sx); // Same width (they're stacked vertically).
+        // Heights should add up with separator.
+        assert_eq!(p1.sy + 1 + p2.sy, 24);
+    }
+
+    #[test]
+    fn find_pane_nonexistent() {
+        let cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        assert!(cell.find_pane(999).is_none());
+
+        // Also test in a split layout.
+        let mut split = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        split.split_horizontal(1);
+        assert!(split.find_pane(999).is_none());
+    }
+
+    #[test]
+    fn pane_at_boundary() {
+        // Create a horizontal split and test the boundary between panes.
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell.split_horizontal(1);
+
+        let left = cell.find_pane(0).unwrap();
+        let right = cell.find_pane(1).unwrap();
+
+        // The last column of the left pane should still be left pane.
+        let left_last_col = left.x_off + left.sx - 1;
+        assert_eq!(cell.pane_at(left_last_col, 0), Some(0));
+
+        // The first column of the right pane should be right pane.
+        assert_eq!(cell.pane_at(right.x_off, 0), Some(1));
+
+        // The separator column (between left and right) should return None.
+        let separator_col = left.x_off + left.sx;
+        assert!(
+            separator_col < right.x_off,
+            "There should be a gap (separator) between left and right"
+        );
+        assert_eq!(cell.pane_at(separator_col, 0), None);
+    }
+
+    #[test]
+    fn pane_ids_returns_all() {
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell.split_horizontal(1);
+        cell.children[1].split_vertical(2);
+
+        let ids = cell.pane_ids();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn pane_count_matches_ids() {
+        // Single pane.
+        let cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        assert_eq!(cell.pane_count(), cell.pane_ids().len());
+
+        // After splits.
+        let mut cell2 = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell2.split_horizontal(1);
+        assert_eq!(cell2.pane_count(), cell2.pane_ids().len());
+
+        cell2.children[0].split_vertical(2);
+        assert_eq!(cell2.pane_count(), cell2.pane_ids().len());
+    }
+
+    #[test]
+    fn split_minimum_size() {
+        // A pane needs at least PANE_MINIMUM_WIDTH * 2 + 1 = 3 columns for horizontal split.
+        let mut cell_exact_min = LayoutCell::new_pane(0, 0, 3, 10, 0);
+        assert!(cell_exact_min.split_horizontal(1).is_some());
+
+        // At exactly PANE_MINIMUM_WIDTH * 2 = 2, it should fail.
+        let mut cell_too_small = LayoutCell::new_pane(0, 0, 2, 10, 0);
+        assert!(cell_too_small.split_horizontal(1).is_none());
+
+        // Width 1 should also fail.
+        let mut cell_tiny = LayoutCell::new_pane(0, 0, 1, 10, 0);
+        assert!(cell_tiny.split_horizontal(1).is_none());
+
+        // Vertical split: needs PANE_MINIMUM_HEIGHT * 2 + 1 = 3 rows.
+        let mut cell_vert_ok = LayoutCell::new_pane(0, 0, 10, 3, 0);
+        assert!(cell_vert_ok.split_vertical(1).is_some());
+
+        let mut cell_vert_fail = LayoutCell::new_pane(0, 0, 10, 2, 0);
+        assert!(cell_vert_fail.split_vertical(1).is_none());
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn pane_count_matches_pane_ids_len(
+                width in 20u32..200, height in 10u32..100,
+                pane_id in 0u32..1000,
+            ) {
+                let layout = LayoutCell::new_pane(0, 0, width, height, pane_id);
+                prop_assert_eq!(layout.pane_count(), layout.pane_ids().len());
+            }
+
+            #[test]
+            fn pane_at_within_bounds_returns_some(
+                width in 20u32..200, height in 10u32..100,
+                pane_id in 0u32..1000,
+            ) {
+                let layout = LayoutCell::new_pane(0, 0, width, height, pane_id);
+                // Any coordinate strictly within the pane bounds should return Some
+                let x = width / 2;
+                let y = height / 2;
+                prop_assert_eq!(layout.pane_at(x, y), Some(pane_id));
+            }
+
+            #[test]
+            fn pane_at_outside_bounds_returns_none(
+                width in 20u32..200, height in 10u32..100,
+                pane_id in 0u32..1000,
+            ) {
+                let layout = LayoutCell::new_pane(0, 0, width, height, pane_id);
+                // Coordinates outside bounds should return None
+                prop_assert!(layout.pane_at(width, 0).is_none());
+                prop_assert!(layout.pane_at(0, height).is_none());
+            }
+
+            #[test]
+            fn horizontal_split_preserves_pane_count(
+                width in 20u32..200, height in 10u32..100,
+            ) {
+                let mut layout = LayoutCell::new_pane(0, 0, width, height, 0);
+                if width > PANE_MINIMUM_WIDTH * 2 {
+                    layout.split_horizontal(1);
+                    prop_assert_eq!(layout.pane_count(), 2);
+                    prop_assert_eq!(layout.pane_ids().len(), 2);
+                }
+            }
+
+            #[test]
+            fn vertical_split_preserves_pane_count(
+                width in 20u32..200, height in 10u32..100,
+            ) {
+                let mut layout = LayoutCell::new_pane(0, 0, width, height, 0);
+                if height > PANE_MINIMUM_HEIGHT * 2 {
+                    layout.split_vertical(1);
+                    prop_assert_eq!(layout.pane_count(), 2);
+                    prop_assert_eq!(layout.pane_ids().len(), 2);
+                }
+            }
+
+            #[test]
+            fn even_horizontal_pane_count(
+                width in 20u32..200, height in 10u32..100,
+                n_panes in 1u32..6,
+            ) {
+                let pane_ids: Vec<u32> = (0..n_panes).collect();
+                let layout = layout_even_horizontal(width, height, &pane_ids);
+                prop_assert_eq!(layout.pane_count(), n_panes as usize);
+            }
+
+            #[test]
+            fn even_vertical_pane_count(
+                width in 20u32..200, height in 10u32..100,
+                n_panes in 1u32..6,
+            ) {
+                let pane_ids: Vec<u32> = (0..n_panes).collect();
+                let layout = layout_even_vertical(width, height, &pane_ids);
+                prop_assert_eq!(layout.pane_count(), n_panes as usize);
+            }
+
+            #[test]
+            fn find_pane_returns_correct_id(
+                width in 20u32..200, height in 10u32..100,
+                pane_id in 0u32..1000,
+            ) {
+                let layout = LayoutCell::new_pane(0, 0, width, height, pane_id);
+                let found = layout.find_pane(pane_id);
+                prop_assert!(found.is_some());
+                prop_assert_eq!(found.unwrap().pane_id, Some(pane_id));
+            }
+        }
+    }
 }

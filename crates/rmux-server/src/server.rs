@@ -9,11 +9,11 @@ use crate::copymode::{self, CopyModeAction};
 use crate::keybind::{KeyBindings, string_to_key};
 use crate::navigate;
 use crate::pane::Pane;
-use rmux_core::options::OptionValue;
 use crate::render;
 use crate::session::SessionManager;
 use crate::window::Window;
 use rmux_core::layout::{LayoutCell, layout_even_horizontal, layout_even_vertical};
+use rmux_core::options::OptionValue;
 use rmux_protocol::codec::{self, MessageReader, MessageWriter};
 use rmux_protocol::message::Message;
 use rmux_terminal::pty;
@@ -332,25 +332,18 @@ impl Server {
                 self.shutdown = true;
             }
             Ok(CommandResult::RunShell(cmd)) => {
-                let output = match tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .output()
-                    .await
-                {
-                    Ok(out) => {
-                        let mut result = out.stdout;
-                        result.extend_from_slice(&out.stderr);
-                        String::from_utf8_lossy(&result).into_owned()
-                    }
-                    Err(e) => format!("run-shell: {e}\n"),
-                };
+                let output =
+                    match tokio::process::Command::new("sh").arg("-c").arg(&cmd).output().await {
+                        Ok(out) => {
+                            let mut result = out.stdout;
+                            result.extend_from_slice(&out.stderr);
+                            String::from_utf8_lossy(&result).into_owned()
+                        }
+                        Err(e) => format!("run-shell: {e}\n"),
+                    };
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     if !output.is_empty() {
-                        client
-                            .send(&Message::OutputData(output.into_bytes()))
-                            .await
-                            .ok();
+                        client.send(&Message::OutputData(output.into_bytes())).await.ok();
                     }
                     if !client.is_attached() {
                         client.send(&Message::Exit).await.ok();
@@ -436,11 +429,7 @@ impl Server {
         use rmux_core::key::*;
 
         // Check if the `mouse` option is enabled
-        let mouse_enabled = self
-            .options
-            .get_flag("mouse")
-            .ok()
-            .unwrap_or(false);
+        let mouse_enabled = self.options.get_flag("mouse").ok().unwrap_or(false);
 
         if !mouse_enabled {
             // Mouse disabled: forward to PTY if the pane has mouse mode flags
@@ -562,12 +551,7 @@ impl Server {
 
     /// Enter copy mode on the active pane of a session.
     fn enter_copy_mode_for_active_pane(&mut self, session_id: u32) {
-        let mode_keys = self
-            .options
-            .get_string("mode-keys")
-            .ok()
-            .unwrap_or("emacs")
-            .to_string();
+        let mode_keys = self.options.get_string("mode-keys").ok().unwrap_or("emacs").to_string();
         if let Some(session) = self.sessions.find_by_id_mut(session_id) {
             if let Some(window) = session.active_window_mut() {
                 if let Some(pane) = window.active_pane_mut() {
@@ -633,11 +617,7 @@ impl Server {
             let Some(cm) = &pane.copy_mode else {
                 return;
             };
-            if cm.selecting {
-                copymode::copy_selection(&pane.screen, cm)
-            } else {
-                None
-            }
+            if cm.selecting { copymode::copy_selection(&pane.screen, cm) } else { None }
         };
 
         if let Some(data) = copy_data {
@@ -820,11 +800,7 @@ impl Server {
                 let Some(client) = self.clients.get_mut(&client_id) else {
                     return;
                 };
-                let cmd = client
-                    .prompt
-                    .as_ref()
-                    .map(|p| p.buffer.clone())
-                    .unwrap_or_default();
+                let cmd = client.prompt.as_ref().map(|p| p.buffer.clone()).unwrap_or_default();
                 client.prompt = None;
                 cmd
             };
@@ -1761,9 +1737,8 @@ impl CommandServer for Server {
         data: &[u8],
     ) -> Result<(), ServerError> {
         if let Some(fd) = self.pty_fds.get(&pane_id) {
-            nix::unistd::write(fd, data).map_err(|e| {
-                ServerError::Io(std::io::Error::other(e.to_string()))
-            })?;
+            nix::unistd::write(fd, data)
+                .map_err(|e| ServerError::Io(std::io::Error::other(e.to_string())))?;
             Ok(())
         } else {
             Err(ServerError::Command(format!("pane %{pane_id} has no PTY")))
@@ -1970,9 +1945,7 @@ impl CommandServer for Server {
             let window = session
                 .windows
                 .get_mut(&window_idx)
-                .ok_or_else(|| {
-                    ServerError::Command(format!("window not found: {window_idx}"))
-                })?;
+                .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
             if !window.panes.contains_key(&src) {
                 return Err(ServerError::Command(format!("pane not found: %{src}")));
@@ -2013,14 +1986,10 @@ impl CommandServer for Server {
                 .ok_or_else(|| ServerError::Command("session not found".into()))?;
 
             if !session.windows.contains_key(&src_idx) {
-                return Err(ServerError::Command(format!(
-                    "window not found: {src_idx}"
-                )));
+                return Err(ServerError::Command(format!("window not found: {src_idx}")));
             }
             if !session.windows.contains_key(&dst_idx) {
-                return Err(ServerError::Command(format!(
-                    "window not found: {dst_idx}"
-                )));
+                return Err(ServerError::Command(format!("window not found: {dst_idx}")));
             }
 
             let window_a = session.windows.remove(&src_idx).unwrap();
@@ -2104,9 +2073,7 @@ impl CommandServer for Server {
                 .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
             if window.panes.len() <= 1 {
-                return Err(ServerError::Command(
-                    "cannot break with only one pane".into(),
-                ));
+                return Err(ServerError::Command("cannot break with only one pane".into()));
             }
 
             let pane = window
@@ -2201,9 +2168,10 @@ impl CommandServer for Server {
                 ServerError::Command(format!("window not found: {src_window_idx}"))
             })?;
 
-            let pane = window.panes.remove(&src_pane_id).ok_or_else(|| {
-                ServerError::Command(format!("pane not found: %{src_pane_id}"))
-            })?;
+            let pane = window
+                .panes
+                .remove(&src_pane_id)
+                .ok_or_else(|| ServerError::Command(format!("pane not found: %{src_pane_id}")))?;
 
             // Update active pane if needed
             if window.active_pane == src_pane_id {
@@ -2305,9 +2273,7 @@ impl CommandServer for Server {
             let window = session
                 .windows
                 .get_mut(&window_idx)
-                .ok_or_else(|| {
-                    ServerError::Command(format!("window not found: {window_idx}"))
-                })?;
+                .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
             if let Some(last) = window.last_active_pane {
                 if window.panes.contains_key(&last) {
@@ -2339,9 +2305,7 @@ impl CommandServer for Server {
             let window = session
                 .windows
                 .get_mut(&window_idx)
-                .ok_or_else(|| {
-                    ServerError::Command(format!("window not found: {window_idx}"))
-                })?;
+                .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
             let mut pane_ids: Vec<u32> = window.panes.keys().copied().collect();
             pane_ids.sort_unstable();
@@ -2395,22 +2359,14 @@ impl CommandServer for Server {
             let window = session
                 .windows
                 .get_mut(&window_idx)
-                .ok_or_else(|| {
-                    ServerError::Command(format!("window not found: {window_idx}"))
-                })?;
+                .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
             let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
             let layout = match layout_name {
-                "even-horizontal" | "eh" => {
-                    layout_even_horizontal(window.sx, window.sy, &pane_ids)
-                }
-                "even-vertical" | "ev" => {
-                    layout_even_vertical(window.sx, window.sy, &pane_ids)
-                }
+                "even-horizontal" | "eh" => layout_even_horizontal(window.sx, window.sy, &pane_ids),
+                "even-vertical" | "ev" => layout_even_vertical(window.sx, window.sy, &pane_ids),
                 _ => {
-                    return Err(ServerError::Command(format!(
-                        "unknown layout: {layout_name}"
-                    )));
+                    return Err(ServerError::Command(format!("unknown layout: {layout_name}")));
                 }
             };
 
@@ -2456,12 +2412,14 @@ impl CommandServer for Server {
                 .sessions
                 .find_by_id_mut(session_id)
                 .ok_or_else(|| ServerError::Command("session not found".into()))?;
-            let window = session.windows.get_mut(&window_idx).ok_or_else(|| {
-                ServerError::Command(format!("window not found: {window_idx}"))
-            })?;
-            let pane = window.panes.get_mut(&pane_id).ok_or_else(|| {
-                ServerError::Command(format!("pane not found: %{pane_id}"))
-            })?;
+            let window = session
+                .windows
+                .get_mut(&window_idx)
+                .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+            let pane = window
+                .panes
+                .get_mut(&pane_id)
+                .ok_or_else(|| ServerError::Command(format!("pane not found: %{pane_id}")))?;
             let sx = pane.sx;
             let sy = pane.sy;
             pane.screen = rmux_core::screen::Screen::new(sx, sy, 2000);
@@ -2494,12 +2452,9 @@ impl CommandServer for Server {
             .sessions
             .find_by_id_mut(session_id)
             .ok_or(ServerError::Command("session not found".into()))?;
-        let window = session
-            .active_window_mut()
-            .ok_or(ServerError::Command("no active window".into()))?;
-        let pane = window
-            .active_pane_mut()
-            .ok_or(ServerError::Command("no active pane".into()))?;
+        let window =
+            session.active_window_mut().ok_or(ServerError::Command("no active window".into()))?;
+        let pane = window.active_pane_mut().ok_or(ServerError::Command("no active pane".into()))?;
         pane.enter_copy_mode(&mode_keys);
         self.mark_clients_redraw(session_id);
         Ok(())
@@ -2544,19 +2499,12 @@ impl CommandServer for Server {
             .sessions
             .find_by_id(session_id)
             .ok_or(ServerError::Command("session not found".into()))?;
-        let window = session
-            .active_window()
-            .ok_or(ServerError::Command("no active window".into()))?;
-        let pane = window
-            .active_pane()
-            .ok_or(ServerError::Command("no active pane".into()))?;
+        let window =
+            session.active_window().ok_or(ServerError::Command("no active window".into()))?;
+        let pane = window.active_pane().ok_or(ServerError::Command("no active pane".into()))?;
 
         // Wrap with bracketed paste if the pane has BRACKETPASTE mode
-        if pane
-            .screen
-            .mode
-            .contains(rmux_core::screen::ModeFlags::BRACKETPASTE)
-        {
+        if pane.screen.mode.contains(rmux_core::screen::ModeFlags::BRACKETPASTE) {
             let mut wrapped = Vec::with_capacity(data.len() + 12);
             wrapped.extend_from_slice(b"\x1b[200~");
             wrapped.extend_from_slice(&data);
@@ -2573,10 +2521,8 @@ impl CommandServer for Server {
             .list()
             .iter()
             .map(|b| {
-                let preview: String = String::from_utf8_lossy(
-                    &b.data[..b.data.len().min(50)],
-                )
-                .into();
+                let preview: String =
+                    String::from_utf8_lossy(&b.data[..b.data.len().min(50)]).into();
                 format!("{}: {} bytes: \"{}\"", b.name, b.data.len(), preview)
             })
             .collect()
@@ -2594,9 +2540,7 @@ impl CommandServer for Server {
         if self.paste_buffers.delete(name) {
             Ok(())
         } else {
-            Err(ServerError::Command(format!(
-                "buffer not found: {name}"
-            )))
+            Err(ServerError::Command(format!("buffer not found: {name}")))
         }
     }
 

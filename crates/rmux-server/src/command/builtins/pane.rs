@@ -219,7 +219,11 @@ pub fn cmd_swap_pane(
         if let Some(pos) = ids.iter().position(|&id| id == src_pane) {
             let dst_idx = match dir {
                 Direction::Up | Direction::Left => {
-                    if pos > 0 { pos - 1 } else { ids.len() - 1 }
+                    if pos > 0 {
+                        pos - 1
+                    } else {
+                        ids.len() - 1
+                    }
                 }
                 Direction::Down | Direction::Right => (pos + 1) % ids.len(),
             };
@@ -253,13 +257,16 @@ pub fn cmd_join_pane(
     let (src_session, src_window) = if let Some(src_target) = get_option(args, "-s") {
         resolve_target(src_target, server)?
     } else {
-        let sid = server.client_session_id()
+        let sid = server
+            .client_session_id()
             .ok_or_else(|| ServerError::Command("no current session".into()))?;
-        let wid = server.client_active_window()
+        let wid = server
+            .client_active_window()
             .ok_or_else(|| ServerError::Command("no current window".into()))?;
         (sid, wid)
     };
-    let src_pane = server.active_pane_id_for(src_session, src_window)
+    let src_pane = server
+        .active_pane_id_for(src_session, src_window)
         .ok_or_else(|| ServerError::Command("no source pane".into()))?;
 
     // Destination: -t flag or current
@@ -299,7 +306,8 @@ fn resolve_pane_id(
 ) -> Result<u32, ServerError> {
     if let Some(target) = get_option(args, "-t") {
         if let Some(stripped) = target.strip_prefix('%') {
-            return stripped.parse()
+            return stripped
+                .parse()
                 .map_err(|_| ServerError::Command(format!("invalid pane: {target}")));
         }
         // For session:window or session targets, use active pane
@@ -320,9 +328,11 @@ fn resolve_target(target: &str, server: &dyn CommandServer) -> Result<(u32, u32)
     if let Some(colon) = target.find(':') {
         let session_name = &target[..colon];
         let window_str = &target[colon + 1..];
-        let session_id = server.find_session_id(session_name)
+        let session_id = server
+            .find_session_id(session_name)
             .ok_or_else(|| ServerError::Command(format!("session not found: {session_name}")))?;
-        let window_idx = window_str.parse()
+        let window_idx = window_str
+            .parse()
             .map_err(|_| ServerError::Command(format!("invalid window: {window_str}")))?;
         Ok((session_id, window_idx))
     } else if let Some(session_id) = server.find_session_id(target) {

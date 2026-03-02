@@ -94,11 +94,8 @@ pub fn cmd_bind_key(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let table = if has_flag(args, "-n") {
-        "root"
-    } else {
-        get_option(args, "-T").unwrap_or("prefix")
-    };
+    let table =
+        if has_flag(args, "-n") { "root" } else { get_option(args, "-T").unwrap_or("prefix") };
 
     let positional = positional_args(args, &["-T"]);
     if positional.is_empty() {

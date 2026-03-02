@@ -119,4 +119,44 @@ mod tests {
         assert_eq!(Color::from_tmux_raw(black.to_tmux_raw()), black);
         assert_eq!(Color::from_tmux_raw(white.to_tmux_raw()), white);
     }
+
+    #[test]
+    fn named_colors_are_palette() {
+        // Named standard colors should be Palette(n) with correct indices.
+        assert_eq!(Color::BLACK, Color::Palette(0));
+        assert_eq!(Color::RED, Color::Palette(1));
+        assert_eq!(Color::GREEN, Color::Palette(2));
+        assert_eq!(Color::YELLOW, Color::Palette(3));
+        assert_eq!(Color::BLUE, Color::Palette(4));
+        assert_eq!(Color::MAGENTA, Color::Palette(5));
+        assert_eq!(Color::CYAN, Color::Palette(6));
+        assert_eq!(Color::WHITE, Color::Palette(7));
+        assert_eq!(Color::BRIGHT_BLACK, Color::Palette(8));
+        assert_eq!(Color::BRIGHT_RED, Color::Palette(9));
+        assert_eq!(Color::BRIGHT_GREEN, Color::Palette(10));
+        assert_eq!(Color::BRIGHT_YELLOW, Color::Palette(11));
+        assert_eq!(Color::BRIGHT_BLUE, Color::Palette(12));
+        assert_eq!(Color::BRIGHT_MAGENTA, Color::Palette(13));
+        assert_eq!(Color::BRIGHT_CYAN, Color::Palette(14));
+        assert_eq!(Color::BRIGHT_WHITE, Color::Palette(15));
+    }
+
+    #[test]
+    fn is_default_works() {
+        assert!(Color::Default.is_default());
+        assert!(!Color::Palette(0).is_default());
+        assert!(!Color::Palette(255).is_default());
+        assert!(!Color::Rgb { r: 0, g: 0, b: 0 }.is_default());
+        assert!(!Color::RED.is_default());
+    }
+
+    #[test]
+    fn color_debug_display() {
+        // Just assert that Debug formatting doesn't panic for each variant.
+        let _ = format!("{:?}", Color::Default);
+        let _ = format!("{:?}", Color::Palette(42));
+        let _ = format!("{:?}", Color::Rgb { r: 128, g: 64, b: 32 });
+        let _ = format!("{:?}", Color::BLACK);
+        let _ = format!("{:?}", Color::BRIGHT_WHITE);
+    }
 }

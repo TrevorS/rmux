@@ -3,8 +3,8 @@
 //! When a pane enters copy mode, the user can scroll through history,
 //! move a cursor independently, select text, and copy it to a paste buffer.
 
-use rmux_core::screen::selection::{Selection, SelectionType};
 use rmux_core::screen::Screen;
+use rmux_core::screen::selection::{Selection, SelectionType};
 
 /// Copy mode state for a single pane.
 #[derive(Debug, Clone)]
@@ -401,22 +401,70 @@ pub fn dispatch_copy_mode_action(
 ) -> CopyModeAction {
     match action {
         // Navigation
-        "cursor-up" => { cm.cursor_up(screen, 1); CopyModeAction::Handled }
-        "cursor-down" => { cm.cursor_down(screen, 1); CopyModeAction::Handled }
-        "cursor-left" => { cm.cursor_left(); CopyModeAction::Handled }
-        "cursor-right" => { cm.cursor_right(screen); CopyModeAction::Handled }
-        "page-up" => { cm.page_up(screen); CopyModeAction::Handled }
-        "page-down" => { cm.page_down(screen); CopyModeAction::Handled }
-        "halfpage-up" => { cm.halfpage_up(screen); CopyModeAction::Handled }
-        "halfpage-down" => { cm.halfpage_down(screen); CopyModeAction::Handled }
-        "history-top" => { cm.history_top(screen); CopyModeAction::Handled }
-        "history-bottom" => { cm.history_bottom(screen); CopyModeAction::Handled }
-        "start-of-line" => { cm.start_of_line(); CopyModeAction::Handled }
-        "end-of-line" => { cm.end_of_line(screen); CopyModeAction::Handled }
-        "back-to-indentation" => { cm.back_to_indentation(screen); CopyModeAction::Handled }
-        "next-word" => { cm.next_word(screen); CopyModeAction::Handled }
-        "previous-word" => { cm.previous_word(screen); CopyModeAction::Handled }
-        "next-word-end" => { cm.next_word_end(screen); CopyModeAction::Handled }
+        "cursor-up" => {
+            cm.cursor_up(screen, 1);
+            CopyModeAction::Handled
+        }
+        "cursor-down" => {
+            cm.cursor_down(screen, 1);
+            CopyModeAction::Handled
+        }
+        "cursor-left" => {
+            cm.cursor_left();
+            CopyModeAction::Handled
+        }
+        "cursor-right" => {
+            cm.cursor_right(screen);
+            CopyModeAction::Handled
+        }
+        "page-up" => {
+            cm.page_up(screen);
+            CopyModeAction::Handled
+        }
+        "page-down" => {
+            cm.page_down(screen);
+            CopyModeAction::Handled
+        }
+        "halfpage-up" => {
+            cm.halfpage_up(screen);
+            CopyModeAction::Handled
+        }
+        "halfpage-down" => {
+            cm.halfpage_down(screen);
+            CopyModeAction::Handled
+        }
+        "history-top" => {
+            cm.history_top(screen);
+            CopyModeAction::Handled
+        }
+        "history-bottom" => {
+            cm.history_bottom(screen);
+            CopyModeAction::Handled
+        }
+        "start-of-line" => {
+            cm.start_of_line();
+            CopyModeAction::Handled
+        }
+        "end-of-line" => {
+            cm.end_of_line(screen);
+            CopyModeAction::Handled
+        }
+        "back-to-indentation" => {
+            cm.back_to_indentation(screen);
+            CopyModeAction::Handled
+        }
+        "next-word" => {
+            cm.next_word(screen);
+            CopyModeAction::Handled
+        }
+        "previous-word" => {
+            cm.previous_word(screen);
+            CopyModeAction::Handled
+        }
+        "next-word-end" => {
+            cm.next_word_end(screen);
+            CopyModeAction::Handled
+        }
 
         // Selection
         "begin-selection" => {
@@ -710,5 +758,120 @@ mod tests {
             CopyModeAction::Handled => assert_eq!(cm.cy, 22),
             _ => panic!("expected Handled"),
         }
+    }
+
+    #[test]
+    fn halfpage_up_and_down() {
+        let mut screen = Screen::new(80, 24, 2000);
+        for _ in 0..100 {
+            screen.grid.scroll_up();
+        }
+
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        assert_eq!(cm.oy, 0);
+
+        cm.halfpage_up(&screen);
+        assert_eq!(cm.oy, 12); // half of 24
+
+        cm.halfpage_up(&screen);
+        assert_eq!(cm.oy, 24);
+
+        cm.halfpage_down(&screen);
+        assert_eq!(cm.oy, 12);
+
+        cm.halfpage_down(&screen);
+        assert_eq!(cm.oy, 0);
+
+        // Can't go below 0
+        cm.halfpage_down(&screen);
+        assert_eq!(cm.oy, 0);
+    }
+
+    #[test]
+    fn back_to_indentation() {
+        let screen = make_screen_with_content(80, 24, &["   hello world"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.back_to_indentation(&screen);
+        assert_eq!(cm.cx, 3); // First non-space is 'h' at index 3
+    }
+
+    #[test]
+    fn next_word_end() {
+        let screen = make_screen_with_content(80, 24, &["hello world foo"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.next_word_end(&screen);
+        assert_eq!(cm.cx, 4); // End of "hello" (index 4)
+
+        cm.next_word_end(&screen);
+        assert_eq!(cm.cx, 10); // End of "world" (index 10)
+
+        cm.next_word_end(&screen);
+        assert_eq!(cm.cx, 14); // End of "foo" (index 14)
+    }
+
+    #[test]
+    fn cursor_right_wraps_to_next_line() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 79; // Last column
+
+        // cursor_right at end of line should not go further (it doesn't wrap in this impl)
+        cm.cursor_right(&screen);
+        assert_eq!(cm.cx, 79); // Stays at max
+    }
+
+    #[test]
+    fn cursor_left_wraps_to_prev_line() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 1;
+        cm.cx = 0;
+
+        // cursor_left at start of line uses saturating_sub, stays at 0
+        cm.cursor_left();
+        assert_eq!(cm.cx, 0);
+    }
+
+    #[test]
+    fn single_cell_selection_copies_cell() {
+        let screen = make_screen_with_content(80, 24, &["Hello World"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        // Position cursor at 'H' (column 0, row 0) and begin selection
+        cm.cy = 0;
+        cm.cx = 0;
+        cm.begin_selection(screen.grid.history_size());
+        // Move cursor right to cover "He" (0..1 inclusive)
+        cm.cx = 1;
+        let data = copy_selection(&screen, &cm).unwrap();
+        assert_eq!(data, b"He");
+    }
+
+    #[test]
+    fn block_selection() {
+        let screen = make_screen_with_content(80, 24, &["ABCDE", "FGHIJ", "KLMNO"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 1; // Start at 'B'
+
+        cm.begin_selection(screen.grid.history_size());
+        cm.rectangle_toggle(); // Switch to block selection
+        assert_eq!(cm.sel_type, SelectionType::Block);
+
+        cm.cy = 2;
+        cm.cx = 3; // End at 'N' (row 2, col 3)
+
+        let data = copy_selection(&screen, &cm).unwrap();
+        let text = String::from_utf8_lossy(&data);
+        // Block selection cols 1-3, rows 0-2: "BCD", "GHI", "LMN"
+        assert!(text.contains("BCD"));
+        assert!(text.contains("GHI"));
+        assert!(text.contains("LMN"));
     }
 }

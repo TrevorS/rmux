@@ -303,4 +303,229 @@ mod tests {
         assert_eq!(MessageType::Ready as u32, 207);
         assert_eq!(MessageType::ReadOpen as u32, 300);
     }
+
+    #[test]
+    fn all_message_type_raw_values_unique() {
+        let all_variants: Vec<(u32, &str)> = vec![
+            (MessageType::Version as u32, "Version"),
+            (MessageType::IdentifyFlags as u32, "IdentifyFlags"),
+            (MessageType::IdentifyTerm as u32, "IdentifyTerm"),
+            (MessageType::IdentifyTtyName as u32, "IdentifyTtyName"),
+            (MessageType::IdentifyOldCwd as u32, "IdentifyOldCwd"),
+            (MessageType::IdentifyStdin as u32, "IdentifyStdin"),
+            (MessageType::IdentifyEnviron as u32, "IdentifyEnviron"),
+            (MessageType::IdentifyDone as u32, "IdentifyDone"),
+            (MessageType::IdentifyClientPid as u32, "IdentifyClientPid"),
+            (MessageType::IdentifyCwd as u32, "IdentifyCwd"),
+            (MessageType::IdentifyFeatures as u32, "IdentifyFeatures"),
+            (MessageType::IdentifyStdout as u32, "IdentifyStdout"),
+            (MessageType::IdentifyLongFlags as u32, "IdentifyLongFlags"),
+            (MessageType::IdentifyTerminfo as u32, "IdentifyTerminfo"),
+            (MessageType::Command as u32, "Command"),
+            (MessageType::Detach as u32, "Detach"),
+            (MessageType::DetachKill as u32, "DetachKill"),
+            (MessageType::Exit as u32, "Exit"),
+            (MessageType::Exited as u32, "Exited"),
+            (MessageType::Exiting as u32, "Exiting"),
+            (MessageType::Lock as u32, "Lock"),
+            (MessageType::Ready as u32, "Ready"),
+            (MessageType::Resize as u32, "Resize"),
+            (MessageType::Shell as u32, "Shell"),
+            (MessageType::Shutdown as u32, "Shutdown"),
+            (MessageType::OldStderr as u32, "OldStderr"),
+            (MessageType::OldStdin as u32, "OldStdin"),
+            (MessageType::OldStdout as u32, "OldStdout"),
+            (MessageType::Suspend as u32, "Suspend"),
+            (MessageType::Unlock as u32, "Unlock"),
+            (MessageType::Wakeup as u32, "Wakeup"),
+            (MessageType::Exec as u32, "Exec"),
+            (MessageType::Flags as u32, "Flags"),
+            (MessageType::ReadOpen as u32, "ReadOpen"),
+            (MessageType::Read as u32, "Read"),
+            (MessageType::ReadDone as u32, "ReadDone"),
+            (MessageType::WriteOpen as u32, "WriteOpen"),
+            (MessageType::Write as u32, "Write"),
+            (MessageType::WriteReady as u32, "WriteReady"),
+            (MessageType::WriteClose as u32, "WriteClose"),
+            (MessageType::ReadCancel as u32, "ReadCancel"),
+            (MessageType::OutputData as u32, "OutputData"),
+            (MessageType::InputData as u32, "InputData"),
+            (MessageType::ErrorOutput as u32, "ErrorOutput"),
+        ];
+        let mut seen = std::collections::HashMap::new();
+        for (raw, name) in &all_variants {
+            if let Some(existing) = seen.insert(raw, name) {
+                panic!("Duplicate raw value {raw}: {existing} and {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn message_type_from_raw_all_known() {
+        // Test every variant's raw value maps back correctly via from_raw
+        let mappings: Vec<(u32, MessageType)> = vec![
+            (12, MessageType::Version),
+            (100, MessageType::IdentifyFlags),
+            (101, MessageType::IdentifyTerm),
+            (102, MessageType::IdentifyTtyName),
+            (103, MessageType::IdentifyOldCwd),
+            (104, MessageType::IdentifyStdin),
+            (105, MessageType::IdentifyEnviron),
+            (106, MessageType::IdentifyDone),
+            (107, MessageType::IdentifyClientPid),
+            (108, MessageType::IdentifyCwd),
+            (109, MessageType::IdentifyFeatures),
+            (110, MessageType::IdentifyStdout),
+            (111, MessageType::IdentifyLongFlags),
+            (112, MessageType::IdentifyTerminfo),
+            (200, MessageType::Command),
+            (201, MessageType::Detach),
+            (202, MessageType::DetachKill),
+            (203, MessageType::Exit),
+            (204, MessageType::Exited),
+            (205, MessageType::Exiting),
+            (206, MessageType::Lock),
+            (207, MessageType::Ready),
+            (208, MessageType::Resize),
+            (209, MessageType::Shell),
+            (210, MessageType::Shutdown),
+            (211, MessageType::OldStderr),
+            (212, MessageType::OldStdin),
+            (213, MessageType::OldStdout),
+            (214, MessageType::Suspend),
+            (215, MessageType::Unlock),
+            (216, MessageType::Wakeup),
+            (217, MessageType::Exec),
+            (218, MessageType::Flags),
+            (300, MessageType::ReadOpen),
+            (301, MessageType::Read),
+            (302, MessageType::ReadDone),
+            (303, MessageType::WriteOpen),
+            (304, MessageType::Write),
+            (305, MessageType::WriteReady),
+            (306, MessageType::WriteClose),
+            (307, MessageType::ReadCancel),
+            (400, MessageType::OutputData),
+            (401, MessageType::InputData),
+            (402, MessageType::ErrorOutput),
+        ];
+        for (raw, expected) in mappings {
+            assert_eq!(
+                MessageType::from_raw(raw),
+                Some(expected),
+                "from_raw({raw}) should return {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn message_type_from_raw_unknown() {
+        // Values that should not map to any known variant
+        let unknown_values: Vec<u32> = vec![
+            0,
+            1,
+            11,
+            13,
+            50,
+            99,
+            113,
+            150,
+            199,
+            219,
+            250,
+            299,
+            308,
+            350,
+            399,
+            403,
+            500,
+            1000,
+            u32::MAX,
+        ];
+        for val in unknown_values {
+            assert_eq!(MessageType::from_raw(val), None, "from_raw({val}) should return None");
+        }
+    }
+
+    #[test]
+    fn all_message_types_from_raw_roundtrip() {
+        // Verify that casting each variant to u32 and back via from_raw recovers the variant
+        let variants: &[(MessageType, u32)] = &[
+            (MessageType::Version, 12),
+            (MessageType::IdentifyFlags, 100),
+            (MessageType::IdentifyTerm, 101),
+            (MessageType::IdentifyTtyName, 102),
+            (MessageType::IdentifyOldCwd, 103),
+            (MessageType::IdentifyStdin, 104),
+            (MessageType::IdentifyEnviron, 105),
+            (MessageType::IdentifyDone, 106),
+            (MessageType::IdentifyClientPid, 107),
+            (MessageType::IdentifyCwd, 108),
+            (MessageType::IdentifyFeatures, 109),
+            (MessageType::IdentifyStdout, 110),
+            (MessageType::IdentifyLongFlags, 111),
+            (MessageType::IdentifyTerminfo, 112),
+            (MessageType::Command, 200),
+            (MessageType::Detach, 201),
+            (MessageType::DetachKill, 202),
+            (MessageType::Exit, 203),
+            (MessageType::Exited, 204),
+            (MessageType::Exiting, 205),
+            (MessageType::Lock, 206),
+            (MessageType::Ready, 207),
+            (MessageType::Resize, 208),
+            (MessageType::Shell, 209),
+            (MessageType::Shutdown, 210),
+            (MessageType::OldStderr, 211),
+            (MessageType::OldStdin, 212),
+            (MessageType::OldStdout, 213),
+            (MessageType::Suspend, 214),
+            (MessageType::Unlock, 215),
+            (MessageType::Wakeup, 216),
+            (MessageType::Exec, 217),
+            (MessageType::Flags, 218),
+            (MessageType::ReadOpen, 300),
+            (MessageType::Read, 301),
+            (MessageType::ReadDone, 302),
+            (MessageType::WriteOpen, 303),
+            (MessageType::Write, 304),
+            (MessageType::WriteReady, 305),
+            (MessageType::WriteClose, 306),
+            (MessageType::ReadCancel, 307),
+            (MessageType::OutputData, 400),
+            (MessageType::InputData, 401),
+            (MessageType::ErrorOutput, 402),
+        ];
+        for &(variant, raw) in variants {
+            // Verify the enum discriminant matches the expected raw value
+            assert_eq!(variant as u32, raw, "{variant:?} as u32 should be {raw}");
+            // Verify from_raw roundtrip
+            assert_eq!(
+                MessageType::from_raw(variant as u32),
+                Some(variant),
+                "from_raw({raw}) roundtrip failed for {variant:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_raw_returns_none() {
+        assert_eq!(MessageType::from_raw(0), None);
+        assert_eq!(MessageType::from_raw(1), None);
+        assert_eq!(MessageType::from_raw(13), None);
+        assert_eq!(MessageType::from_raw(99), None);
+        assert_eq!(MessageType::from_raw(113), None);
+        assert_eq!(MessageType::from_raw(199), None);
+        assert_eq!(MessageType::from_raw(219), None);
+        assert_eq!(MessageType::from_raw(299), None);
+        assert_eq!(MessageType::from_raw(308), None);
+        assert_eq!(MessageType::from_raw(399), None);
+        assert_eq!(MessageType::from_raw(403), None);
+        assert_eq!(MessageType::from_raw(u32::MAX), None);
+    }
+
+    #[test]
+    fn protocol_version_is_8() {
+        assert_eq!(PROTOCOL_VERSION, 8);
+    }
 }

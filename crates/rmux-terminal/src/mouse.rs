@@ -80,11 +80,7 @@ fn button_to_keycode(cb: u32, is_release: bool) -> KeyCode {
 
     if is_wheel {
         // Wheel events
-        if button_bits == 0 {
-            KEYC_WHEELUP
-        } else {
-            KEYC_WHEELDOWN
-        }
+        if button_bits == 0 { KEYC_WHEELUP } else { KEYC_WHEELDOWN }
     } else if is_drag {
         // Drag events
         match button_bits {
@@ -272,6 +268,120 @@ mod tests {
     #[test]
     fn incomplete_sgr_returns_none() {
         assert!(parse_sgr_mouse(b"0;11;").is_none());
+    }
+
+    #[test]
+    fn parse_x10_button1_click() {
+        // Button 1 press: cb=0+32=32, x=5+33=38, y=10+33=43
+        let data = [32u8, 38, 43];
+        let result = parse_x10_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 5);
+        assert_eq!(result.y, 10);
+        assert_eq!(result.consumed, 3);
+    }
+
+    #[test]
+    fn parse_x10_button2_click() {
+        // Button 2 press: cb=1+32=33, x=20+33=53, y=15+33=48
+        let data = [33u8, 53, 48];
+        let result = parse_x10_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN2);
+        assert_eq!(result.x, 20);
+        assert_eq!(result.y, 15);
+    }
+
+    #[test]
+    fn parse_x10_button3_click() {
+        // Button 3 press: cb=2+32=34, x=0+33=33, y=0+33=33
+        let data = [34u8, 33, 33];
+        let result = parse_x10_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN3);
+        assert_eq!(result.x, 0);
+        assert_eq!(result.y, 0);
+    }
+
+    #[test]
+    fn parse_x10_scroll_up() {
+        // Wheel up: cb=64+0+32=96, x=10+33=43, y=5+33=38
+        let data = [96u8, 43, 38];
+        let result = parse_x10_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_WHEELUP);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+    }
+
+    #[test]
+    fn parse_x10_scroll_down() {
+        // Wheel down: cb=64+1+32=97, x=10+33=43, y=5+33=38
+        let data = [97u8, 43, 38];
+        let result = parse_x10_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_WHEELDOWN);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+    }
+
+    #[test]
+    fn parse_sgr_release_button1() {
+        // SGR release for button 1: ESC[<0;11;6m (lowercase 'm' = release)
+        let data = b"0;11;6m";
+        let result = parse_sgr_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEUP1);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+        assert_eq!(result.consumed, 7);
+    }
+
+    #[test]
+    fn encode_x10_roundtrip() {
+        // There is no X10 encode function, but we can encode via SGR and verify
+        // the X10 parse produces the same logical event.
+        // Manually create an X10 sequence for button 1 at (10, 5):
+        // cb=0+32=32, x=10+33=43, y=5+33=38
+        let x10_data = [32u8, 43, 38];
+        let x10_result = parse_x10_mouse(&x10_data).unwrap();
+        assert_eq!(x10_result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(x10_result.x, 10);
+        assert_eq!(x10_result.y, 5);
+
+        // Encode as SGR and parse to verify same logical event
+        let sgr_encoded = encode_sgr_mouse(KEYC_MOUSEDOWN1, 10, 5);
+        let sgr_result = try_parse_mouse_csi(&sgr_encoded[2..]).unwrap();
+        assert_eq!(sgr_result.key, x10_result.key);
+        assert_eq!(sgr_result.x, x10_result.x);
+        assert_eq!(sgr_result.y, x10_result.y);
+    }
+
+    #[test]
+    fn encode_sgr_roundtrip_all_buttons() {
+        let test_cases = [
+            (KEYC_MOUSEDOWN1, 5, 3),
+            (KEYC_MOUSEDOWN2, 0, 0),
+            (KEYC_MOUSEDOWN3, 100, 50),
+            (KEYC_MOUSEUP1, 20, 10),
+            (KEYC_MOUSEUP2, 30, 15),
+            (KEYC_MOUSEUP3, 1, 1),
+            (KEYC_MOUSEDRAG1, 50, 25),
+            (KEYC_WHEELUP, 10, 5),
+            (KEYC_WHEELDOWN, 10, 5),
+        ];
+        for (key, x, y) in test_cases {
+            let encoded = encode_sgr_mouse(key, x, y);
+            // All SGR encodings start with ESC[
+            assert_eq!(&encoded[..2], b"\x1b[");
+            let parsed = try_parse_mouse_csi(&encoded[2..]).unwrap();
+            assert_eq!(parsed.key, key, "key mismatch for {key:#x}");
+            assert_eq!(parsed.x, x, "x mismatch for {key:#x}");
+            assert_eq!(parsed.y, y, "y mismatch for {key:#x}");
+        }
+    }
+
+    #[test]
+    fn invalid_x10_too_short() {
+        // X10 needs 3 bytes after ESC[M; less than 3 returns None
+        assert!(parse_x10_mouse(&[]).is_none());
+        assert!(parse_x10_mouse(&[32]).is_none());
+        assert!(parse_x10_mouse(&[32, 43]).is_none());
     }
 
     mod prop_tests {

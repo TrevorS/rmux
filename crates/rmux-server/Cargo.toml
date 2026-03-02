@@ -20,7 +20,12 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+proptest = { workspace = true }
 
 [[bench]]
 name = "format_bench"
+harness = false
+
+[[bench]]
+name = "render_bench"
 harness = false

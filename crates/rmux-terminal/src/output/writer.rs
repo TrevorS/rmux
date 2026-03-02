@@ -202,4 +202,123 @@ mod tests {
         w.set_style(&style);
         assert!(w.buffer().windows(5).any(|w| w == b"\x1b[31m"));
     }
+
+    #[test]
+    fn clear_screen_writes_sequence() {
+        let mut w = TermWriter::new(256);
+        w.clear_screen();
+        assert_eq!(w.buffer(), b"\x1b[2J");
+    }
+
+    #[test]
+    fn clear_to_eol_writes_sequence() {
+        let mut w = TermWriter::new(256);
+        w.clear_to_eol();
+        assert_eq!(w.buffer(), b"\x1b[K");
+    }
+
+    #[test]
+    fn hide_cursor_writes_sequence() {
+        let mut w = TermWriter::new(256);
+        w.hide_cursor();
+        assert_eq!(w.buffer(), b"\x1b[?25l");
+    }
+
+    #[test]
+    fn show_cursor_writes_sequence() {
+        let mut w = TermWriter::new(256);
+        w.show_cursor();
+        assert_eq!(w.buffer(), b"\x1b[?25h");
+    }
+
+    #[test]
+    fn begin_end_sync() {
+        let mut w = TermWriter::new(256);
+        w.begin_sync();
+        assert_eq!(w.buffer(), b"\x1b[?2026h");
+        w.take();
+        w.end_sync();
+        assert_eq!(w.buffer(), b"\x1b[?2026l");
+    }
+
+    #[test]
+    fn style_dim() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::DIM, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(4).any(|w| w == b"\x1b[2m"));
+    }
+
+    #[test]
+    fn style_italic() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::ITALICS, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(4).any(|w| w == b"\x1b[3m"));
+    }
+
+    #[test]
+    fn style_underline() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::UNDERSCORE, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(4).any(|w| w == b"\x1b[4m"));
+    }
+
+    #[test]
+    fn style_reverse() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::REVERSE, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(4).any(|w| w == b"\x1b[7m"));
+    }
+
+    #[test]
+    fn bg_color_palette() {
+        let mut w = TermWriter::new(256);
+        let style = Style { bg: Color::GREEN, ..Style::DEFAULT };
+        w.set_style(&style);
+        // Color::GREEN is Palette(2), bg palette 0-7 produces ESC[4Xm where X = 40+n
+        assert!(w.buffer().windows(5).any(|w| w == b"\x1b[42m"));
+    }
+
+    #[test]
+    fn rgb_fg_color() {
+        let mut w = TermWriter::new(256);
+        let style = Style { fg: Color::Rgb { r: 100, g: 150, b: 200 }, ..Style::DEFAULT };
+        w.set_style(&style);
+        let output = std::str::from_utf8(w.buffer()).unwrap();
+        assert!(output.contains("\x1b[38;2;100;150;200m"));
+    }
+
+    #[test]
+    fn rgb_bg_color() {
+        let mut w = TermWriter::new(256);
+        let style = Style { bg: Color::Rgb { r: 10, g: 20, b: 30 }, ..Style::DEFAULT };
+        w.set_style(&style);
+        let output = std::str::from_utf8(w.buffer()).unwrap();
+        assert!(output.contains("\x1b[48;2;10;20;30m"));
+    }
+
+    #[test]
+    fn style_reset_on_change() {
+        let mut w = TermWriter::new(256);
+        // Set bold style
+        let bold = Style { attrs: Attrs::BOLD, ..Style::DEFAULT };
+        w.set_style(&bold);
+        w.take();
+        // Change back to default: should emit reset
+        w.set_style(&Style::DEFAULT);
+        assert!(w.buffer().windows(4).any(|w| w == b"\x1b[0m"));
+    }
+
+    #[test]
+    fn take_clears_buffer() {
+        let mut w = TermWriter::new(256);
+        w.write_raw(b"hello");
+        assert!(!w.buffer().is_empty());
+        let taken = w.take();
+        assert_eq!(&taken[..], b"hello");
+        assert!(w.buffer().is_empty());
+    }
 }

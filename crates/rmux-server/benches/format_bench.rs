@@ -1,7 +1,7 @@
 //! Format string expansion benchmarks.
 
-use criterion::{Criterion, criterion_group, criterion_main, black_box};
-use rmux_server::format::{format_expand, FormatContext};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use rmux_server::format::{FormatContext, format_expand};
 
 fn make_context() -> FormatContext {
     let mut ctx = FormatContext::new();

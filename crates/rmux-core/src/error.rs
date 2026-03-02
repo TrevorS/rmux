@@ -1,7 +1,7 @@
 //! Error types for rmux-core.
 
 /// Errors that can occur in core grid/screen operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum CoreError {
     /// Grid position is out of bounds.
     #[error("grid position out of bounds: ({x}, {y}) in grid of size ({sx}, {sy})")]
@@ -35,7 +35,7 @@ mod tests {
     fn error_display_grid_oob() {
         let e = CoreError::GridOutOfBounds { x: 5, y: 10, sx: 80, sy: 24 };
         let msg = format!("{e}");
-        assert!(msg.contains("5"));
+        assert!(msg.contains('5'));
         assert!(msg.contains("10"));
         assert!(msg.contains("80"));
         assert!(msg.contains("24"));
@@ -64,11 +64,8 @@ mod tests {
 
     #[test]
     fn error_display_type_mismatch() {
-        let e = CoreError::OptionTypeMismatch {
-            key: "status".into(),
-            expected: "bool",
-            got: "string",
-        };
+        let e =
+            CoreError::OptionTypeMismatch { key: "status".into(), expected: "bool", got: "string" };
         let msg = format!("{e}");
         assert!(msg.contains("status"));
         assert!(msg.contains("bool"));
@@ -78,7 +75,7 @@ mod tests {
     #[test]
     fn core_result_ok() {
         let r: CoreResult<i32> = Ok(42);
-        assert_eq!(r.unwrap(), 42);
+        assert_eq!(r, Ok(42));
     }
 
     #[test]

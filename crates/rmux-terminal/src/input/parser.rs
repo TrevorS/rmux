@@ -976,9 +976,7 @@ mod tests {
                 let mut data = Vec::new();
                 for _ in 0..n_lines {
                     data.extend_from_slice(b"\x1b[32m");
-                    for _ in 0..width.min(79) {
-                        data.push(b'X');
-                    }
+                    data.extend(std::iter::repeat_n(b'X', width.min(79) as usize));
                     data.extend_from_slice(b"\x1b[0m\r\n");
                 }
                 parser.parse(&data, &mut screen);

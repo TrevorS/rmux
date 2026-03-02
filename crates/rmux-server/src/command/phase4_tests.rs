@@ -12,13 +12,14 @@
 //! - run-shell / command-prompt / display-message
 //! - list-keys / list-commands / list-clients
 
-#![cfg(test)]
-
 use super::test_helpers::MockCommandServer;
 use crate::command::{CommandResult, CommandServer, execute_command};
 
 /// Helper to execute a command from a string slice of arguments.
-fn exec(server: &mut MockCommandServer, args: &[&str]) -> Result<CommandResult, crate::server::ServerError> {
+fn exec(
+    server: &mut MockCommandServer,
+    args: &[&str],
+) -> Result<CommandResult, crate::server::ServerError> {
     let argv: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
     execute_command(&argv, server)
 }
@@ -163,7 +164,7 @@ mod keybinding_tests {
         exec(&mut s, &["bind-key", "z", "kill-session"]).unwrap();
 
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("kill-session")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")));
     }
 
     #[test]
@@ -173,7 +174,7 @@ mod keybinding_tests {
         exec(&mut s, &["bind-key", "-T", "prefix", "z", "kill-session"]).unwrap();
 
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("kill-session")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")));
     }
 
     #[test]
@@ -215,7 +216,7 @@ mod keybinding_tests {
         exec(&mut s, &["bind-key", "m", "select-window", "-t", "3"]).unwrap();
 
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("m") && b.contains("select-window")));
+        assert!(bindings.iter().any(|b| b.contains('m') && b.contains("select-window")));
     }
 
     #[test]
@@ -237,7 +238,7 @@ mod keybinding_tests {
         let mut s = MockCommandServer::new();
         exec(&mut s, &["bind", "z", "kill-session"]).unwrap();
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("kill-session")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")));
     }
 
     #[test]
@@ -280,7 +281,11 @@ mod config_tests {
         s.create_test_session("test");
 
         let tmp = "/tmp/rmux_test_config_comments.conf";
-        std::fs::write(tmp, "# This is a comment\nset-option -g history-limit 4000\n# Another comment\n").unwrap();
+        std::fs::write(
+            tmp,
+            "# This is a comment\nset-option -g history-limit 4000\n# Another comment\n",
+        )
+        .unwrap();
 
         exec(&mut s, &["source-file", tmp]).unwrap();
 
@@ -334,7 +339,7 @@ mod config_tests {
         exec(&mut s, &["source-file", tmp]).unwrap();
 
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("kill-session")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")));
 
         std::fs::remove_file(tmp).ok();
     }
@@ -564,9 +569,7 @@ mod swap_pane_tests {
         let p2_xoff = window.panes[&pane2].xoff;
 
         // Set active to pane1
-        s.sessions.find_by_id_mut(sid).unwrap()
-            .windows.get_mut(&widx).unwrap()
-            .active_pane = pane1;
+        s.sessions.find_by_id_mut(sid).unwrap().windows.get_mut(&widx).unwrap().active_pane = pane1;
 
         let result = exec(&mut s, &["swap-pane", "-D"]);
         assert!(result.is_ok());
@@ -585,9 +588,7 @@ mod swap_pane_tests {
         let pane2 = s.add_pane_to_window(sid, widx, false);
 
         // Set active to pane2
-        s.sessions.find_by_id_mut(sid).unwrap()
-            .windows.get_mut(&widx).unwrap()
-            .active_pane = pane2;
+        s.sessions.find_by_id_mut(sid).unwrap().windows.get_mut(&widx).unwrap().active_pane = pane2;
 
         let result = exec(&mut s, &["swap-pane", "-U"]);
         assert!(result.is_ok());
@@ -794,7 +795,8 @@ mod swap_window_tests {
         let name0 = session.windows[&widx0].name.clone();
         let name1 = session.windows[&widx1].name.clone();
 
-        exec(&mut s, &["swap-window", "-s", &widx0.to_string(), "-t", &format!("test:{widx1}")]).unwrap();
+        exec(&mut s, &["swap-window", "-s", &widx0.to_string(), "-t", &format!("test:{widx1}")])
+            .unwrap();
 
         let session = s.sessions.find_by_id(sid).unwrap();
         assert_eq!(session.windows[&widx0].name, name1);
@@ -873,9 +875,7 @@ mod rotate_window_tests {
         let (sid, widx, pane1) = s.create_test_session("test");
         let _pane2 = s.add_pane_to_window(sid, widx, true);
 
-        s.sessions.find_by_id_mut(sid).unwrap()
-            .windows.get_mut(&widx).unwrap()
-            .active_pane = pane1;
+        s.sessions.find_by_id_mut(sid).unwrap().windows.get_mut(&widx).unwrap().active_pane = pane1;
 
         let result = exec(&mut s, &["rotate-window"]);
         assert!(result.is_ok());
@@ -1166,13 +1166,17 @@ mod integration_tests {
 
         // Simulate loading a tmux config
         let tmp = "/tmp/rmux_integration_test.conf";
-        std::fs::write(tmp, "\
+        std::fs::write(
+            tmp,
+            "\
 # My tmux config
 set-option -g history-limit 10000
 set-option -g escape-time 50
 bind-key z kill-session
 bind-key -n F5 new-window
-").unwrap();
+",
+        )
+        .unwrap();
 
         exec(&mut s, &["source-file", tmp]).unwrap();
 
@@ -1185,7 +1189,7 @@ bind-key -n F5 new-window
 
         // Verify key bindings
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("kill-session")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")));
         assert!(bindings.iter().any(|b| b.contains("root") && b.contains("new-window")));
 
         std::fs::remove_file(tmp).ok();
@@ -1264,7 +1268,11 @@ bind-key -n F5 new-window
         if indices.len() >= 2 {
             let idx_a = indices[0];
             let idx_b = indices[1];
-            exec(&mut s, &["swap-window", "-s", &idx_a.to_string(), "-t", &format!("test:{idx_b}")]).unwrap();
+            exec(
+                &mut s,
+                &["swap-window", "-s", &idx_a.to_string(), "-t", &format!("test:{idx_b}")],
+            )
+            .unwrap();
         }
 
         // Select layout on first window
@@ -1295,7 +1303,7 @@ bind-key -n F5 new-window
         // Bind
         exec(&mut s, &["bind-key", "z", "kill-session"]).unwrap();
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("kill-session")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")));
 
         // Unbind
         exec(&mut s, &["unbind-key", "z"]).unwrap();
@@ -1305,7 +1313,7 @@ bind-key -n F5 new-window
         // Rebind to something else
         exec(&mut s, &["bind-key", "z", "new-window"]).unwrap();
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z") && b.contains("new-window")));
+        assert!(bindings.iter().any(|b| b.contains('z') && b.contains("new-window")));
     }
 
     #[test]
@@ -1315,10 +1323,9 @@ bind-key -n F5 new-window
 
         // Test that alias commands exist and can be found
         let aliases = [
-            "ls", "attach", "detach", "next", "prev", "set", "show",
-            "bind", "unbind", "source", "capturep", "resizep", "swapp",
-            "breakp", "joinp", "lastp", "respawnp", "swapw", "movew",
-            "rotatew", "selectl", "respawnw", "run", "display", "lscm",
+            "ls", "attach", "detach", "next", "prev", "set", "show", "bind", "unbind", "source",
+            "capturep", "resizep", "swapp", "breakp", "joinp", "lastp", "respawnp", "swapw",
+            "movew", "rotatew", "selectl", "respawnw", "run", "display", "lscm",
         ];
 
         for alias in &aliases {
@@ -1460,7 +1467,7 @@ mod edge_case_tests {
         assert!(output.contains(" 0"));
 
         let bindings = s.keybindings.list_bindings();
-        assert!(bindings.iter().any(|b| b.contains("z")));
+        assert!(bindings.iter().any(|b| b.contains('z')));
         assert!(bindings.iter().any(|b| b.contains("root")));
     }
 }

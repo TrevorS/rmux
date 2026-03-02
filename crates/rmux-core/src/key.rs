@@ -164,4 +164,156 @@ mod tests {
         assert_eq!(keyc_base(key), b'a'.into());
         assert_eq!(keyc_modifiers(key), KeyModifiers::empty());
     }
+
+    #[test]
+    fn all_modifier_combinations() {
+        // Test each modifier individually.
+        let base = KEYC_F1;
+        for modifier in
+            [KeyModifiers::SHIFT, KeyModifiers::META, KeyModifiers::CTRL, KeyModifiers::XTERM]
+        {
+            let key = keyc_build(base, modifier);
+            assert_eq!(keyc_base(key), base);
+            assert_eq!(keyc_modifiers(key), modifier);
+        }
+
+        // Test combined modifiers.
+        let all =
+            KeyModifiers::SHIFT | KeyModifiers::META | KeyModifiers::CTRL | KeyModifiers::XTERM;
+        let key = keyc_build(base, all);
+        assert_eq!(keyc_base(key), base);
+        assert_eq!(keyc_modifiers(key), all);
+
+        // Test a pair.
+        let pair = KeyModifiers::CTRL | KeyModifiers::SHIFT;
+        let key = keyc_build(base, pair);
+        assert_eq!(keyc_modifiers(key), pair);
+        assert!(keyc_modifiers(key).contains(KeyModifiers::CTRL));
+        assert!(keyc_modifiers(key).contains(KeyModifiers::SHIFT));
+        assert!(!keyc_modifiers(key).contains(KeyModifiers::META));
+    }
+
+    #[test]
+    fn function_keys_defined() {
+        let fkeys = [
+            KEYC_F1, KEYC_F2, KEYC_F3, KEYC_F4, KEYC_F5, KEYC_F6, KEYC_F7, KEYC_F8, KEYC_F9,
+            KEYC_F10, KEYC_F11, KEYC_F12,
+        ];
+        // All function keys should be distinct.
+        for i in 0..fkeys.len() {
+            for j in (i + 1)..fkeys.len() {
+                assert_ne!(fkeys[i], fkeys[j], "F{} and F{} should be distinct", i + 1, j + 1);
+            }
+        }
+        // They should all be in the special key range.
+        for (i, &fk) in fkeys.iter().enumerate() {
+            assert!(fk > KEYC_UNKNOWN, "F{} should be above KEYC_UNKNOWN", i + 1);
+        }
+    }
+
+    #[test]
+    fn arrow_keys_defined() {
+        let arrows = [KEYC_UP, KEYC_DOWN, KEYC_LEFT, KEYC_RIGHT];
+        // All arrow keys should be distinct.
+        for i in 0..arrows.len() {
+            for j in (i + 1)..arrows.len() {
+                assert_ne!(arrows[i], arrows[j], "Arrow keys at indices {i} and {j} should differ");
+            }
+        }
+        // They should be different from each other by specific constant values.
+        assert_eq!(KEYC_UP, 0x00100010);
+        assert_eq!(KEYC_DOWN, 0x00100011);
+        assert_eq!(KEYC_LEFT, 0x00100012);
+        assert_eq!(KEYC_RIGHT, 0x00100013);
+    }
+
+    #[test]
+    fn mouse_key_detection_comprehensive() {
+        // All mouse keys should be detected as mouse events.
+        let mouse_keys = [
+            KEYC_MOUSEDOWN1,
+            KEYC_MOUSEDOWN2,
+            KEYC_MOUSEDOWN3,
+            KEYC_MOUSEUP1,
+            KEYC_MOUSEUP2,
+            KEYC_MOUSEUP3,
+            KEYC_MOUSEDRAG1,
+            KEYC_MOUSEDRAG2,
+            KEYC_MOUSEDRAG3,
+            KEYC_WHEELUP,
+            KEYC_WHEELDOWN,
+        ];
+        for &mk in &mouse_keys {
+            assert!(keyc_is_mouse(mk), "Mouse key {mk:#x} should be detected as mouse");
+        }
+        // Also test KEYC_MOUSE itself.
+        assert!(keyc_is_mouse(KEYC_MOUSE));
+
+        // Mouse keys with modifiers should still be detected.
+        let with_ctrl = keyc_build(KEYC_MOUSEDOWN1, KeyModifiers::CTRL);
+        assert!(keyc_is_mouse(with_ctrl));
+        let with_shift_meta = keyc_build(KEYC_WHEELUP, KeyModifiers::SHIFT | KeyModifiers::META);
+        assert!(keyc_is_mouse(with_shift_meta));
+    }
+
+    #[test]
+    fn non_mouse_keys_not_mouse() {
+        // Regular ASCII keys.
+        assert!(!keyc_is_mouse(b'a'.into()));
+        assert!(!keyc_is_mouse(b'Z'.into()));
+        assert!(!keyc_is_mouse(b' '.into()));
+
+        // Function keys.
+        assert!(!keyc_is_mouse(KEYC_F1));
+        assert!(!keyc_is_mouse(KEYC_F12));
+
+        // Navigation keys.
+        assert!(!keyc_is_mouse(KEYC_UP));
+        assert!(!keyc_is_mouse(KEYC_DOWN));
+        assert!(!keyc_is_mouse(KEYC_LEFT));
+        assert!(!keyc_is_mouse(KEYC_RIGHT));
+        assert!(!keyc_is_mouse(KEYC_HOME));
+        assert!(!keyc_is_mouse(KEYC_END));
+        assert!(!keyc_is_mouse(KEYC_PPAGE));
+        assert!(!keyc_is_mouse(KEYC_NPAGE));
+
+        // Special keys.
+        assert!(!keyc_is_mouse(KEYC_BACKSPACE));
+        assert!(!keyc_is_mouse(KEYC_TAB));
+        assert!(!keyc_is_mouse(KEYC_RETURN));
+        assert!(!keyc_is_mouse(KEYC_ESCAPE));
+        assert!(!keyc_is_mouse(KEYC_DELETE));
+        assert!(!keyc_is_mouse(KEYC_INSERT));
+    }
+
+    #[test]
+    fn key_event_fields() {
+        let event = KeyEvent {
+            key: keyc_build(KEYC_F5, KeyModifiers::CTRL),
+            mouse: MouseEvent {
+                valid: false,
+                x: 10,
+                y: 20,
+                button: 0,
+                last_x: 0,
+                last_y: 0,
+                last_button: 0,
+                sgr_type: 0,
+                sgr_button: 0,
+            },
+            raw: vec![0x1b, 0x5b, 0x31, 0x35, 0x7e],
+        };
+        assert_eq!(keyc_base(event.key), KEYC_F5);
+        assert_eq!(keyc_modifiers(event.key), KeyModifiers::CTRL);
+        assert!(!event.mouse.valid);
+        assert_eq!(event.mouse.x, 10);
+        assert_eq!(event.mouse.y, 20);
+        assert_eq!(event.raw.len(), 5);
+
+        // Test Default construction.
+        let default_event = KeyEvent::default();
+        assert_eq!(default_event.key, 0);
+        assert!(default_event.raw.is_empty());
+        assert_eq!(default_event.mouse, MouseEvent::default());
+    }
 }

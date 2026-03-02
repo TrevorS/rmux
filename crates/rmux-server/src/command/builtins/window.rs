@@ -136,10 +136,12 @@ pub fn cmd_move_window(
     // Source session/window
     let src_session_id = if let Some(src) = get_option(args, "-s") {
         let name = src.split(':').next().unwrap_or(src);
-        server.find_session_id(name)
+        server
+            .find_session_id(name)
             .ok_or_else(|| ServerError::Command(format!("session not found: {name}")))?
     } else {
-        server.client_session_id()
+        server
+            .client_session_id()
             .ok_or_else(|| ServerError::Command("no current session".into()))?
     };
 
@@ -192,7 +194,8 @@ pub fn cmd_respawn_window(
 ) -> Result<CommandResult, ServerError> {
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
-    let pane_id = server.active_pane_id_for(session_id, window_idx)
+    let pane_id = server
+        .active_pane_id_for(session_id, window_idx)
         .ok_or_else(|| ServerError::Command("no active pane".into()))?;
     server.respawn_pane(session_id, window_idx, pane_id)?;
     Ok(CommandResult::Ok)

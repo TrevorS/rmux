@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 rmux-core = { path = "../crates/rmux-core" }
 rmux-terminal = { path = "../crates/rmux-terminal" }
 rmux-protocol = { path = "../crates/rmux-protocol" }
+rmux-server = { path = "../crates/rmux-server" }
 bytes = "1"
 
 [[bin]]
@@ -32,4 +33,19 @@ doc = false
 [[bin]]
 name = "fuzz_protocol_codec"
 path = "fuzz_targets/fuzz_protocol_codec.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_config_parser"
+path = "fuzz_targets/fuzz_config_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_format_expand"
+path = "fuzz_targets/fuzz_format_expand.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_options_parse"
+path = "fuzz_targets/fuzz_options_parse.rs"
 doc = false

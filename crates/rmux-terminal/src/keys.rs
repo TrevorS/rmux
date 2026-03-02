@@ -407,6 +407,93 @@ mod tests {
         assert_eq!(event.mouse_y, 0);
     }
 
+    #[test]
+    fn parse_f3_through_f12() {
+        // F3 and F4 use SS3 sequences
+        assert_eq!(parse_key(b"\x1bOR"), Some((KEYC_F3, 3)));
+        assert_eq!(parse_key(b"\x1bOS"), Some((KEYC_F4, 3)));
+        // F5-F12 use CSI ~ sequences
+        assert_eq!(parse_key(b"\x1b[15~"), Some((KEYC_F5, 5)));
+        assert_eq!(parse_key(b"\x1b[17~"), Some((KEYC_F6, 5)));
+        assert_eq!(parse_key(b"\x1b[18~"), Some((KEYC_F7, 5)));
+        assert_eq!(parse_key(b"\x1b[19~"), Some((KEYC_F8, 5)));
+        assert_eq!(parse_key(b"\x1b[20~"), Some((KEYC_F9, 5)));
+        assert_eq!(parse_key(b"\x1b[21~"), Some((KEYC_F10, 5)));
+        assert_eq!(parse_key(b"\x1b[23~"), Some((KEYC_F11, 5)));
+        assert_eq!(parse_key(b"\x1b[24~"), Some((KEYC_F12, 5)));
+    }
+
+    #[test]
+    fn parse_csi_with_modifier() {
+        // CSI sequences with modifier parameters like ESC[1;2A (Shift+Up)
+        // The current parser does not extract modifiers from CSI params for
+        // arrow keys, so it returns the base key code without modifier bits.
+        let result = parse_key(b"\x1b[1;2A");
+        let (key, consumed) = result.unwrap();
+        assert_eq!(key, KEYC_UP);
+        assert_eq!(consumed, 6); // ESC [ 1 ; 2 A = 6 bytes total
+    }
+
+    #[test]
+    fn parse_utf8_two_byte() {
+        // U+00E9 (e with acute accent) = 0xC3 0xA9
+        let data = [0xC3, 0xA9];
+        let (key, consumed) = parse_key(&data).unwrap();
+        assert_eq!(consumed, 2);
+        assert_eq!(key, '\u{00E9}' as KeyCode);
+    }
+
+    #[test]
+    fn parse_utf8_three_byte() {
+        // U+4E16 (CJK character, meaning "world") = 0xE4 0xB8 0x96
+        let ch = '\u{4E16}';
+        let mut buf = [0u8; 3];
+        ch.encode_utf8(&mut buf);
+        let (key, consumed) = parse_key(&buf).unwrap();
+        assert_eq!(consumed, 3);
+        assert_eq!(key, ch as KeyCode);
+    }
+
+    #[test]
+    fn parse_utf8_four_byte() {
+        // U+1F600 (grinning face emoji) = 0xF0 0x9F 0x98 0x80
+        let ch = '\u{1F600}';
+        let mut buf = [0u8; 4];
+        ch.encode_utf8(&mut buf);
+        let (key, consumed) = parse_key(&buf).unwrap();
+        assert_eq!(consumed, 4);
+        assert_eq!(key, ch as KeyCode);
+    }
+
+    #[test]
+    fn key_name_to_bytes_ctrl_all_letters() {
+        for ch in b'a'..=b'z' {
+            let name = format!("C-{}", ch as char);
+            let bytes = key_name_to_bytes(&name).unwrap();
+            let expected = ch & 0x1f;
+            assert_eq!(
+                bytes,
+                vec![expected],
+                "C-{} should produce byte {:#04x}, got {:#04x}",
+                ch as char,
+                expected,
+                bytes[0]
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_csi_returns_none() {
+        // ESC[ with no final byte
+        assert_eq!(parse_key(b"\x1b["), None);
+        // ESC[1 -- parameter but no final byte
+        assert_eq!(parse_key(b"\x1b[1"), None);
+        // ESC[1; -- partial modifier parameter
+        assert_eq!(parse_key(b"\x1b[1;"), None);
+        // ESC[1;2 -- modifier but no final byte
+        assert_eq!(parse_key(b"\x1b[1;2"), None);
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;

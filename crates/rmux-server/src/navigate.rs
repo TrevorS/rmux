@@ -169,4 +169,59 @@ mod tests {
         assert_eq!(next_pane(&layout, 10), None);
         assert_eq!(previous_pane(&layout, 10), None);
     }
+
+    #[test]
+    fn navigate_no_pane_in_direction() {
+        // Two panes side by side: [10 | 11]
+        let layout = layout_even_horizontal(80, 24, &[10, 11]);
+        // No pane above or below in a horizontal split
+        assert_eq!(find_pane_in_direction(&layout, 10, Direction::Up), None);
+        assert_eq!(find_pane_in_direction(&layout, 10, Direction::Down), None);
+        assert_eq!(find_pane_in_direction(&layout, 11, Direction::Up), None);
+        assert_eq!(find_pane_in_direction(&layout, 11, Direction::Down), None);
+    }
+
+    #[test]
+    fn navigate_three_pane_horizontal() {
+        // Three panes side by side: [10 | 11 | 12]
+        let layout = layout_even_horizontal(80, 24, &[10, 11, 12]);
+        // From leftmost, right goes to middle
+        assert_eq!(find_pane_in_direction(&layout, 10, Direction::Right), Some(11));
+        // From middle, left goes to leftmost, right goes to rightmost
+        assert_eq!(find_pane_in_direction(&layout, 11, Direction::Left), Some(10));
+        assert_eq!(find_pane_in_direction(&layout, 11, Direction::Right), Some(12));
+        // From rightmost, left goes to middle
+        assert_eq!(find_pane_in_direction(&layout, 12, Direction::Left), Some(11));
+        // Edges have no further neighbors
+        assert_eq!(find_pane_in_direction(&layout, 10, Direction::Left), None);
+        assert_eq!(find_pane_in_direction(&layout, 12, Direction::Right), None);
+    }
+
+    #[test]
+    fn navigate_asymmetric_layout() {
+        // Asymmetric: left pane is narrow (20 cols), right pane is wide (59 cols)
+        // [10(20) | 11(59)]
+        let mut root = LayoutCell::new_split(LayoutType::LeftRight, 0, 0, 80, 24);
+        root.children.push(LayoutCell::new_pane(0, 0, 20, 24, 10));
+        root.children.push(LayoutCell::new_pane(21, 0, 59, 24, 11));
+
+        assert_eq!(find_pane_in_direction(&root, 10, Direction::Right), Some(11));
+        assert_eq!(find_pane_in_direction(&root, 11, Direction::Left), Some(10));
+        assert_eq!(find_pane_in_direction(&root, 10, Direction::Left), None);
+        assert_eq!(find_pane_in_direction(&root, 11, Direction::Right), None);
+    }
+
+    #[test]
+    fn next_pane_single_returns_same() {
+        // Single pane layout: next_pane returns None (no other pane to go to)
+        let layout = LayoutCell::new_pane(0, 0, 80, 24, 42);
+        assert_eq!(next_pane(&layout, 42), None);
+    }
+
+    #[test]
+    fn previous_pane_single_returns_same() {
+        // Single pane layout: previous_pane returns None
+        let layout = LayoutCell::new_pane(0, 0, 80, 24, 42);
+        assert_eq!(previous_pane(&layout, 42), None);
+    }
 }

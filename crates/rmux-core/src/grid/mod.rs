@@ -373,6 +373,80 @@ mod tests {
         assert_eq!(g.get_cell(7, 0).data, Utf8Char::from_ascii(b'H'));
     }
 
+    #[test]
+    fn get_cell_out_of_bounds() {
+        let g = Grid::new(80, 24, 0);
+        // x beyond grid width should return a cleared cell.
+        let cell = g.get_cell(200, 0);
+        assert_eq!(cell, GridCell::CLEARED);
+        // y beyond grid height should also return a cleared cell.
+        let cell = g.get_cell(0, 50);
+        assert_eq!(cell, GridCell::CLEARED);
+        // Both x and y beyond bounds.
+        let cell = g.get_cell(999, 999);
+        assert_eq!(cell, GridCell::CLEARED);
+    }
+
+    #[test]
+    fn set_cell_extends_grid() {
+        let mut g = Grid::new(80, 24, 0);
+        // Setting a cell at x > current line length should work
+        // (the line internally extends with cleared cells).
+        let cell = make_cell(b'Z');
+        g.set_cell(100, 0, &cell);
+        // Should be able to read it back.
+        assert_eq!(g.get_cell(100, 0).data, Utf8Char::from_ascii(b'Z'));
+        // Cells before it that were auto-extended should be cleared.
+        assert_eq!(g.get_cell(99, 0), GridCell::CLEARED);
+    }
+
+    #[test]
+    fn resize_smaller_truncates() {
+        let mut g = Grid::new(80, 24, 0);
+        // Write cells across the full width.
+        for x in 0..80 {
+            g.set_cell(x, 0, &make_cell(b'A'));
+        }
+        // Resize to a smaller width.
+        g.resize(40, 24);
+        assert_eq!(g.width(), 40);
+        assert_eq!(g.height(), 24);
+        // Resize to smaller height.
+        g.resize(40, 10);
+        assert_eq!(g.height(), 10);
+    }
+
+    #[test]
+    fn scroll_region_works() {
+        let mut g = Grid::new(80, 10, 0);
+        // Set up cells in a scroll region (rows 2-6).
+        g.set_cell(0, 2, &make_cell(b'A'));
+        g.set_cell(0, 3, &make_cell(b'B'));
+        g.set_cell(0, 4, &make_cell(b'C'));
+        g.set_cell(0, 5, &make_cell(b'D'));
+        g.set_cell(0, 6, &make_cell(b'E'));
+
+        // Scroll the region up: rows 2-6.
+        g.scroll_region_up(2, 6);
+        // Row 2 should now have what was in row 3 ('B').
+        assert_eq!(g.get_cell(0, 2).data, Utf8Char::from_ascii(b'B'));
+        // Row 5 should now have what was in row 6 ('E').
+        assert_eq!(g.get_cell(0, 5).data, Utf8Char::from_ascii(b'E'));
+        // Row 6 (bottom of region) should be cleared.
+        assert_eq!(g.get_cell(0, 6), GridCell::CLEARED);
+
+        // Now test scroll_region_down.
+        g.set_cell(0, 2, &make_cell(b'X'));
+        g.set_cell(0, 3, &make_cell(b'Y'));
+        g.scroll_region_down(2, 6);
+        // Row 2 (top of region) should be cleared after scroll down.
+        assert_eq!(g.get_cell(0, 2), GridCell::CLEARED);
+        // Row 3 should have what was in row 2 ('X').
+        assert_eq!(g.get_cell(0, 3).data, Utf8Char::from_ascii(b'X'));
+        // Row 4 should have what was in row 3 ('Y').
+        assert_eq!(g.get_cell(0, 4).data, Utf8Char::from_ascii(b'Y'));
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;

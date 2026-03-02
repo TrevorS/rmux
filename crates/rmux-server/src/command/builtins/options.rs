@@ -35,9 +35,9 @@ pub fn cmd_set_option(
                     ServerError::Command(format!("session not found: {session_name}"))
                 })?
             } else {
-                server.find_session_id(t).ok_or_else(|| {
-                    ServerError::Command(format!("session not found: {t}"))
-                })?
+                server
+                    .find_session_id(t)
+                    .ok_or_else(|| ServerError::Command(format!("session not found: {t}")))?
             }
         } else {
             server
@@ -59,9 +59,9 @@ pub fn cmd_set_option(
     } else {
         // Session-level option
         let session_id = if let Some(t) = target {
-            server.find_session_id(t).ok_or_else(|| {
-                ServerError::Command(format!("session not found: {t}"))
-            })?
+            server
+                .find_session_id(t)
+                .ok_or_else(|| ServerError::Command(format!("session not found: {t}")))?
         } else {
             server
                 .client_session_id()
@@ -82,7 +82,13 @@ pub fn cmd_show_options(
     let global = has_flag(args, "-g");
     let window_scope = has_flag(args, "-w");
 
-    let scope = if global { "server" } else if window_scope { "window" } else { "session" };
+    let scope = if global {
+        "server"
+    } else if window_scope {
+        "window"
+    } else {
+        "session"
+    };
 
     let target_id: Option<u32> = if let Some(target) = get_option(args, "-t") {
         server.find_session_id(target)

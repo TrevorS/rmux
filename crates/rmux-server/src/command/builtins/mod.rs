@@ -406,12 +406,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         usage: "",
     },
     // Copy mode & paste buffer commands
-    CommandEntry {
-        name: "copy-mode",
-        min_args: 0,
-        handler: paste::cmd_copy_mode,
-        usage: "[-u]",
-    },
+    CommandEntry { name: "copy-mode", min_args: 0, handler: paste::cmd_copy_mode, usage: "[-u]" },
     CommandEntry {
         name: "paste-buffer",
         min_args: 0,
@@ -424,12 +419,7 @@ pub static COMMANDS: &[CommandEntry] = &[
         handler: paste::cmd_paste_buffer,
         usage: "[-b buffer-name]",
     },
-    CommandEntry {
-        name: "list-buffers",
-        min_args: 0,
-        handler: paste::cmd_list_buffers,
-        usage: "",
-    },
+    CommandEntry { name: "list-buffers", min_args: 0, handler: paste::cmd_list_buffers, usage: "" },
     CommandEntry { name: "lsb", min_args: 0, handler: paste::cmd_list_buffers, usage: "" },
     CommandEntry {
         name: "show-buffer",

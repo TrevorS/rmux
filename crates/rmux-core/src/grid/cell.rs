@@ -339,4 +339,105 @@ mod tests {
         assert_eq!(unpacked.style, cell.style);
         assert_eq!(unpacked.link, cell.link);
     }
+
+    #[test]
+    fn cell_flags_individual() {
+        // Test each CellFlag individually to verify non-overlapping bits.
+        let flags_list = [
+            CellFlags::EXTENDED,
+            CellFlags::PADDING,
+            CellFlags::SELECTED,
+            CellFlags::CLEARED,
+            CellFlags::FG256,
+            CellFlags::BG256,
+            CellFlags::TAB,
+        ];
+        for (i, &flag_a) in flags_list.iter().enumerate() {
+            // Each flag should be distinct from every other flag.
+            for (j, &flag_b) in flags_list.iter().enumerate() {
+                if i != j {
+                    assert_ne!(flag_a, flag_b);
+                    // Their intersection should be empty.
+                    assert!((flag_a & flag_b).is_empty());
+                }
+            }
+            // Setting and checking a single flag should work.
+            let mut flags = CellFlags::empty();
+            flags |= flag_a;
+            assert!(flags.contains(flag_a));
+        }
+    }
+
+    #[test]
+    fn padding_cell_detection() {
+        let cell = GridCell {
+            data: Utf8Char::SPACE,
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::PADDING,
+        };
+        assert!(cell.is_padding());
+        assert_eq!(cell.width(), 0);
+
+        // A non-padding cell should not be detected as padding.
+        let normal = GridCell {
+            data: Utf8Char::from_ascii(b'A'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        assert!(!normal.is_padding());
+    }
+
+    #[test]
+    fn pack_with_hyperlink() {
+        // A cell with a non-zero hyperlink should require extended storage.
+        let cell = GridCell {
+            data: Utf8Char::from_ascii(b'L'),
+            style: Style::DEFAULT,
+            link: 7,
+            flags: CellFlags::empty(),
+        };
+        let (compact, ext) = cell.pack();
+        assert!(compact.is_extended());
+        assert!(ext.is_some());
+        let ext = ext.unwrap();
+        assert_eq!(ext.link, 7);
+        assert_eq!(ext.data, Utf8Char::from_ascii(b'L'));
+    }
+
+    #[test]
+    fn width_of_cleared_cell() {
+        let cell = GridCell::CLEARED;
+        // CLEARED cell has SPACE data which has width 1.
+        assert_eq!(cell.width(), 1);
+        // Verify flags contain CLEARED.
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+    }
+
+    #[test]
+    fn pack_all_256_palette_colors() {
+        // Pack cells with fg palette colors 0-255, verify roundtrip.
+        for idx in 0..=255u8 {
+            let cell = GridCell {
+                data: Utf8Char::from_ascii(b'C'),
+                style: Style {
+                    fg: Color::Palette(idx),
+                    bg: Color::Default,
+                    us: Color::Default,
+                    attrs: Attrs::empty(),
+                },
+                link: 0,
+                flags: CellFlags::empty(),
+            };
+            let (compact, ext) = cell.pack();
+            let unpacked = GridCell::unpack(&compact, ext.as_ref());
+            assert_eq!(
+                unpacked.style.fg,
+                Color::Palette(idx),
+                "palette color {idx} failed roundtrip"
+            );
+            assert_eq!(unpacked.data, Utf8Char::from_ascii(b'C'));
+        }
+    }
 }

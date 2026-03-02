@@ -94,11 +94,13 @@ mod tests {
 
     #[test]
     fn saved_cursor_roundtrip() {
-        let mut cursor = Cursor::default();
-        cursor.x = 10;
-        cursor.y = 20;
-        cursor.style = Style { fg: Color::RED, ..Style::DEFAULT };
-        cursor.origin_mode = true;
+        let cursor = Cursor {
+            x: 10,
+            y: 20,
+            style: Style { fg: Color::RED, ..Style::DEFAULT },
+            origin_mode: true,
+            ..Default::default()
+        };
 
         let saved = SavedCursor::from(&cursor);
         let mut restored = Cursor::default();
@@ -112,11 +114,13 @@ mod tests {
 
     #[test]
     fn saved_cursor_preserves_fields() {
-        let mut cursor = Cursor::default();
-        cursor.x = 5;
-        cursor.y = 15;
-        cursor.style = Style { bg: Color::Palette(42), attrs: Attrs::BOLD, ..Style::DEFAULT };
-        cursor.origin_mode = true;
+        let cursor = Cursor {
+            x: 5,
+            y: 15,
+            style: Style { bg: Color::Palette(42), attrs: Attrs::BOLD, ..Style::DEFAULT },
+            origin_mode: true,
+            ..Default::default()
+        };
 
         let saved = SavedCursor::from(&cursor);
 
@@ -141,12 +145,7 @@ mod tests {
             origin_mode: true,
         };
 
-        let saved = SavedCursor {
-            x: 3,
-            y: 7,
-            style: Style::DEFAULT,
-            origin_mode: false,
-        };
+        let saved = SavedCursor { x: 3, y: 7, style: Style::DEFAULT, origin_mode: false };
 
         saved.restore_into(&mut cursor);
 

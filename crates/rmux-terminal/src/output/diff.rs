@@ -170,4 +170,95 @@ mod tests {
         // Should contain the session name
         assert!(output.windows(4).any(|w| w == b"main"));
     }
+
+    #[test]
+    fn diff_single_cell_change() {
+        let old = Screen::new(10, 5, 0);
+        let mut new_screen = Screen::new(10, 5, 0);
+        // Change one cell in the new screen
+        let cell = GridCell {
+            data: rmux_core::utf8::Utf8Char::from_ascii(b'X'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: rmux_core::grid::cell::CellFlags::empty(),
+        };
+        new_screen.grid.set_cell(3, 2, &cell);
+
+        let mut writer = TermWriter::new(4096);
+        diff_screens(&old, &new_screen, &mut writer);
+        let output = writer.buffer();
+        // Should have produced output for the changed cell
+        assert!(!output.is_empty());
+        // Should contain 'X' somewhere in the output
+        assert!(output.windows(1).any(|w| w == b"X"));
+    }
+
+    #[test]
+    fn render_full_with_content() {
+        let mut screen = Screen::new(10, 5, 0);
+        let cell_a = GridCell {
+            data: rmux_core::utf8::Utf8Char::from_ascii(b'A'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: rmux_core::grid::cell::CellFlags::empty(),
+        };
+        let cell_b = GridCell {
+            data: rmux_core::utf8::Utf8Char::from_ascii(b'B'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: rmux_core::grid::cell::CellFlags::empty(),
+        };
+        screen.grid.set_cell(0, 0, &cell_a);
+        screen.grid.set_cell(1, 0, &cell_b);
+
+        let mut writer = TermWriter::new(4096);
+        render_full(&screen, &mut writer);
+        let output = writer.buffer();
+        // Should contain 'A' and 'B'
+        assert!(output.windows(1).any(|w| w == b"A"));
+        assert!(output.windows(1).any(|w| w == b"B"));
+    }
+
+    #[test]
+    fn diff_cursor_position_change() {
+        let mut old = Screen::new(10, 5, 0);
+        old.cursor.x = 0;
+        old.cursor.y = 0;
+        let mut new_screen = old.clone();
+        new_screen.cursor.x = 5;
+        new_screen.cursor.y = 3;
+
+        let mut writer = TermWriter::new(4096);
+        diff_screens(&old, &new_screen, &mut writer);
+        let output = writer.buffer();
+        // Output should contain cursor positioning for (5, 3) => ESC[4;6H
+        assert!(output.windows(6).any(|w| w == b"\x1b[4;6H"));
+    }
+
+    #[test]
+    fn status_line_fills_width() {
+        let width = 80;
+        let mut writer = TermWriter::new(4096);
+        render_status_line(&mut writer, "s", 0, 2, width, 0);
+        let output = writer.buffer();
+        // Count the number of space characters and content characters.
+        // The status text is "[s] 0:* (2 panes)" which is 17 chars.
+        // Remaining 63 should be filled with spaces.
+        // The total visible characters written should fill the full width.
+        // Just verify the output is non-trivially large (contains spaces for padding).
+        let space_count = output.iter().copied().filter(|&b| b == b' ').count();
+        assert!(space_count >= (width as usize - 20));
+    }
+
+    #[test]
+    fn status_line_with_zero_panes() {
+        // Edge case: pane_count = 0, should not panic and should produce output
+        let mut writer = TermWriter::new(4096);
+        render_status_line(&mut writer, "test", 0, 0, 40, 0);
+        let output = writer.buffer();
+        assert!(!output.is_empty());
+        // With 0 panes (which is < 2), it should use the format without "(N panes)"
+        // i.e., "[test] 0:*"
+        assert!(output.windows(4).any(|w| w == b"test"));
+    }
 }

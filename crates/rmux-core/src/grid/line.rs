@@ -294,4 +294,177 @@ mod tests {
         assert!(line.flags.contains(LineFlags::WRAPPED));
         assert!(line.flags.contains(LineFlags::START_PROMPT));
     }
+
+    #[test]
+    fn truncate_shortens_line() {
+        let mut line = GridLine::new();
+        for i in 0..10u32 {
+            let cell = GridCell {
+                data: Utf8Char::from_ascii(b'A' + i as u8),
+                style: Style::DEFAULT,
+                link: 0,
+                flags: CellFlags::empty(),
+            };
+            line.set_cell(i, &cell);
+        }
+        assert_eq!(line.cell_count(), 10);
+        line.truncate(5);
+        assert!(line.cell_count() <= 5);
+        // Cells beyond truncation point should now return CLEARED.
+        assert_eq!(line.get_cell(5), GridCell::CLEARED);
+        // Cells before the truncation point should be preserved.
+        assert_eq!(line.get_cell(0).data, Utf8Char::from_ascii(b'A'));
+        assert_eq!(line.get_cell(4).data, Utf8Char::from_ascii(b'E'));
+    }
+
+    #[test]
+    fn compact_extended_reclaims() {
+        let mut line = GridLine::new();
+        // Set a unicode (extended) cell.
+        let wide_cell = GridCell {
+            data: Utf8Char::from_char('世'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        line.set_cell(0, &wide_cell);
+        // The line should now have at least one extended entry.
+        let ext_before = line.compact_cells().iter().filter(|c| c.is_extended()).count();
+        assert!(ext_before > 0);
+
+        // Overwrite with an ASCII cell (non-extended).
+        let ascii_cell = GridCell {
+            data: Utf8Char::from_ascii(b'A'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        line.set_cell(0, &ascii_cell);
+
+        // Now the compact cell at position 0 is no longer extended,
+        // but the extended storage still has the old entry.
+        line.compact_extended();
+        // After compaction, no compact cell references extended storage,
+        // so compact_extended should have reclaimed the unused entries.
+        let ext_refs = line.compact_cells().iter().filter(|c| c.is_extended()).count();
+        assert_eq!(ext_refs, 0);
+    }
+
+    #[test]
+    fn clear_range_middle() {
+        let mut line = GridLine::new();
+        for i in 0..10u32 {
+            let cell = GridCell {
+                data: Utf8Char::from_ascii(b'A' + i as u8),
+                style: Style { fg: Color::RED, ..Style::DEFAULT },
+                link: 0,
+                flags: CellFlags::empty(),
+            };
+            line.set_cell(i, &cell);
+        }
+        // Clear range [4, 7) - cells 4, 5, 6.
+        line.clear_range(4, 7, Color::Default);
+
+        // Boundary cells before the cleared range should be unchanged.
+        assert_eq!(line.get_cell(3).data, Utf8Char::from_ascii(b'D'));
+        assert_eq!(line.get_cell(3).style.fg, Color::RED);
+
+        // Cleared cells should have CLEARED flag.
+        assert!(line.get_cell(4).flags.contains(CellFlags::CLEARED));
+        assert!(line.get_cell(5).flags.contains(CellFlags::CLEARED));
+        assert!(line.get_cell(6).flags.contains(CellFlags::CLEARED));
+
+        // Boundary cell after the cleared range should be unchanged.
+        assert_eq!(line.get_cell(7).data, Utf8Char::from_ascii(b'H'));
+        assert_eq!(line.get_cell(7).style.fg, Color::RED);
+    }
+
+    #[test]
+    fn set_cell_overwrite() {
+        let mut line = GridLine::new();
+        let cell_a = GridCell {
+            data: Utf8Char::from_ascii(b'A'),
+            style: Style { fg: Color::RED, ..Style::DEFAULT },
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        line.set_cell(0, &cell_a);
+        assert_eq!(line.get_cell(0).data, Utf8Char::from_ascii(b'A'));
+        assert_eq!(line.get_cell(0).style.fg, Color::RED);
+
+        // Overwrite with a different cell.
+        let cell_b = GridCell {
+            data: Utf8Char::from_ascii(b'Z'),
+            style: Style { fg: Color::BLUE, ..Style::DEFAULT },
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        line.set_cell(0, &cell_b);
+        assert_eq!(line.get_cell(0).data, Utf8Char::from_ascii(b'Z'));
+        assert_eq!(line.get_cell(0).style.fg, Color::BLUE);
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn set_get_cell_roundtrip(
+                x in 0u32..500,
+                data_byte in 0x20u8..0x7f
+            ) {
+                let mut line = GridLine::new();
+                let mut cell = GridCell::CLEARED;
+                cell.data = Utf8Char::from_ascii(data_byte);
+                cell.flags = CellFlags::empty();
+                line.set_cell(x, &cell);
+                let got = line.get_cell(x);
+                prop_assert_eq!(got.data.as_bytes(), cell.data.as_bytes());
+            }
+
+            #[test]
+            fn fill_to_extends_line(
+                target in 1u32..200
+            ) {
+                let mut line = GridLine::new();
+                line.fill_to(target);
+                prop_assert!(line.cell_count() >= target);
+            }
+
+            #[test]
+            fn get_beyond_end_returns_cleared(
+                x in 0u32..1000
+            ) {
+                let line = GridLine::new();
+                let cell = line.get_cell(x);
+                prop_assert_eq!(cell, GridCell::CLEARED);
+            }
+
+            #[test]
+            fn set_cell_extends_line_to_fit(
+                x in 0u32..500,
+                data_byte in 0x20u8..0x7f
+            ) {
+                let mut line = GridLine::new();
+                let mut cell = GridCell::CLEARED;
+                cell.data = Utf8Char::from_ascii(data_byte);
+                cell.flags = CellFlags::empty();
+                line.set_cell(x, &cell);
+                prop_assert!(line.cell_count() > x);
+            }
+
+            #[test]
+            fn truncate_reduces_cell_count(
+                initial in 10u32..200,
+                cut in 0u32..10
+            ) {
+                let mut line = GridLine::new();
+                line.fill_to(initial);
+                let new_len = initial.saturating_sub(cut);
+                line.truncate(new_len);
+                prop_assert_eq!(line.cell_count(), new_len);
+            }
+        }
+    }
 }

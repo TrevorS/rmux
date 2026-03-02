@@ -1,6 +1,6 @@
 #![no_main]
-use libfuzzer_sys::fuzz_target;
 use bytes::BytesMut;
+use libfuzzer_sys::fuzz_target;
 use rmux_protocol::codec::decode_message;
 
 fuzz_target!(|data: &[u8]| {

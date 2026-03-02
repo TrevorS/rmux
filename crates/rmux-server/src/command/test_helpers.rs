@@ -4,8 +4,6 @@
 //! methods with in-memory state management (sessions, windows, panes, options,
 //! key bindings).
 
-#![cfg(test)]
-
 use crate::command::{CommandServer, Direction};
 use crate::keybind::KeyBindings;
 use crate::pane::Pane;
@@ -30,6 +28,7 @@ pub struct MockCommandServer {
     pub client_sx: u32,
     pub client_sy: u32,
     /// Bytes written to panes via write_to_pane (for send-keys testing).
+    #[allow(dead_code)]
     pub pane_writes: HashMap<u32, Vec<Vec<u8>>>,
     /// Whether command-prompt was entered.
     pub prompt_entered: bool,
@@ -128,11 +127,7 @@ impl MockCommandServer {
 
     /// Helper: add a window to a session.
     /// Returns (window_idx, pane_id).
-    pub fn add_window_to_session(
-        &mut self,
-        session_id: u32,
-        name: &str,
-    ) -> (u32, u32) {
+    pub fn add_window_to_session(&mut self, session_id: u32, name: &str) -> (u32, u32) {
         let session = self.sessions.find_by_id_mut(session_id).unwrap();
         let pane_height = self.client_sy.saturating_sub(1);
         let mut window = Window::new(name.to_string(), self.client_sx, pane_height);
@@ -232,7 +227,9 @@ impl CommandServer for MockCommandServer {
     }
 
     fn kill_session(&mut self, name: &str) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_name(name)
+        let session = self
+            .sessions
+            .find_by_name(name)
             .ok_or_else(|| ServerError::Command(format!("session not found: {name}")))?;
         let id = session.id;
         self.sessions.remove(id);
@@ -244,7 +241,8 @@ impl CommandServer for MockCommandServer {
     }
 
     fn list_sessions(&self) -> Vec<String> {
-        self.sessions.iter()
+        self.sessions
+            .iter()
             .map(|s| {
                 let windows = s.windows.len();
                 let attached = if s.attached > 0 { " (attached)" } else { "" };
@@ -258,7 +256,9 @@ impl CommandServer for MockCommandServer {
     }
 
     fn rename_session(&mut self, name: &str, new_name: &str) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_name_mut(name)
+        let session = self
+            .sessions
+            .find_by_name_mut(name)
             .ok_or_else(|| ServerError::Command(format!("session not found: {name}")))?;
         session.name = new_name.to_string();
         Ok(())
@@ -276,7 +276,9 @@ impl CommandServer for MockCommandServer {
         let sy = self.client_sy;
         let pane_height = sy.saturating_sub(1);
 
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
 
         let window_name = name.unwrap_or("bash").to_string();
@@ -294,9 +296,13 @@ impl CommandServer for MockCommandServer {
     }
 
     fn kill_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        session.windows.remove(&window_idx)
+        session
+            .windows
+            .remove(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         if session.active_window == window_idx {
             if let Some(&next_idx) = session.windows.keys().next() {
@@ -307,7 +313,9 @@ impl CommandServer for MockCommandServer {
     }
 
     fn select_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         if !session.windows.contains_key(&window_idx) {
             return Err(ServerError::Command(format!("window not found: {window_idx}")));
@@ -317,7 +325,9 @@ impl CommandServer for MockCommandServer {
     }
 
     fn next_window(&mut self, session_id: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let current = session.active_window;
         if let Some(next) = session.next_window_after(current) {
@@ -327,7 +337,9 @@ impl CommandServer for MockCommandServer {
     }
 
     fn previous_window(&mut self, session_id: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let current = session.active_window;
         if let Some(prev) = session.prev_window_before(current) {
@@ -337,7 +349,9 @@ impl CommandServer for MockCommandServer {
     }
 
     fn last_window(&mut self, session_id: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         if let Some(last) = session.last_window {
             if session.windows.contains_key(&last) {
@@ -353,9 +367,13 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         name: &str,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         window.name = name.to_string();
         Ok(())
@@ -367,7 +385,8 @@ impl CommandServer for MockCommandServer {
         };
         let mut indices: Vec<u32> = session.windows.keys().copied().collect();
         indices.sort_unstable();
-        indices.iter()
+        indices
+            .iter()
             .map(|&idx| {
                 let window = &session.windows[&idx];
                 let active = if idx == session.active_window { "*" } else { "-" };
@@ -400,9 +419,13 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         pane_id: u32,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
         if window.panes.len() <= 1 {
@@ -446,9 +469,13 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         pane_id: u32,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         if !window.panes.contains_key(&pane_id) {
             return Err(ServerError::Command(format!("pane not found: %{pane_id}")));
@@ -465,11 +492,17 @@ impl CommandServer for MockCommandServer {
         direction: Direction,
     ) -> Result<(), ServerError> {
         let target = {
-            let session = self.sessions.find_by_id(session_id)
+            let session = self
+                .sessions
+                .find_by_id(session_id)
                 .ok_or_else(|| ServerError::Command("session not found".into()))?;
-            let window = session.windows.get(&window_idx)
+            let window = session
+                .windows
+                .get(&window_idx)
                 .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
-            let Some(layout) = &window.layout else { return Ok(()); };
+            let Some(layout) = &window.layout else {
+                return Ok(());
+            };
             let nav_dir = match direction {
                 Direction::Up => crate::navigate::Direction::Up,
                 Direction::Down => crate::navigate::Direction::Down,
@@ -485,12 +518,21 @@ impl CommandServer for MockCommandServer {
     }
 
     fn list_panes(&self, session_id: u32, window_idx: u32) -> Vec<String> {
-        let Some(session) = self.sessions.find_by_id(session_id) else { return Vec::new(); };
-        let Some(window) = session.windows.get(&window_idx) else { return Vec::new(); };
-        window.panes.values()
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return Vec::new();
+        };
+        let Some(window) = session.windows.get(&window_idx) else {
+            return Vec::new();
+        };
+        window
+            .panes
+            .values()
             .map(|pane| {
                 let active = if pane.id == window.active_pane { " (active)" } else { "" };
-                format!("%{}: [{}x{}] [offset {},{} ]{}", pane.id, pane.sx, pane.sy, pane.xoff, pane.yoff, active)
+                format!(
+                    "%{}: [{}x{}] [offset {},{} ]{}",
+                    pane.id, pane.sx, pane.sy, pane.xoff, pane.yoff, active
+                )
             })
             .collect()
     }
@@ -525,7 +567,8 @@ impl CommandServer for MockCommandServer {
     // --- Options ---
 
     fn get_server_option(&self, key: &str) -> Result<String, ServerError> {
-        self.options.get(key)
+        self.options
+            .get(key)
             .map(format_option_value)
             .ok_or_else(|| ServerError::Command(format!("unknown option: {key}")))
     }
@@ -542,7 +585,9 @@ impl CommandServer for MockCommandServer {
         key: &str,
         value: &str,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let val = parse_option_value(value);
         session.options.set(key, val);
@@ -556,9 +601,13 @@ impl CommandServer for MockCommandServer {
         key: &str,
         value: &str,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         let val = parse_option_value(value);
         window.options.set(key, val);
@@ -567,12 +616,16 @@ impl CommandServer for MockCommandServer {
 
     fn show_options(&self, scope: &str, target_id: Option<u32>) -> Vec<String> {
         let opts: Vec<String> = match scope {
-            "server" => self.options.local_iter()
+            "server" => self
+                .options
+                .local_iter()
                 .map(|(k, v)| format!("{k} {}", format_option_value(v)))
                 .collect(),
             "session" => {
                 if let Some(session) = target_id.and_then(|id| self.sessions.find_by_id(id)) {
-                    session.options.local_iter()
+                    session
+                        .options
+                        .local_iter()
                         .map(|(k, v)| format!("{k} {}", format_option_value(v)))
                         .collect()
                 } else {
@@ -582,7 +635,9 @@ impl CommandServer for MockCommandServer {
             "window" => {
                 if let Some(session) = target_id.and_then(|id| self.sessions.find_by_id(id)) {
                     if let Some(window) = session.active_window() {
-                        window.options.local_iter()
+                        window
+                            .options
+                            .local_iter()
                             .map(|(k, v)| format!("{k} {}", format_option_value(v)))
                             .collect()
                     } else {
@@ -642,11 +697,17 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         pane_id: u32,
     ) -> Result<String, ServerError> {
-        let session = self.sessions.find_by_id(session_id)
+        let session = self
+            .sessions
+            .find_by_id(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get(&window_idx)
+        let window = session
+            .windows
+            .get(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
-        let pane = window.panes.get(&pane_id)
+        let pane = window
+            .panes
+            .get(&pane_id)
             .ok_or_else(|| ServerError::Command(format!("pane not found: %{pane_id}")))?;
 
         let mut lines = Vec::new();
@@ -690,9 +751,13 @@ impl CommandServer for MockCommandServer {
         src: u32,
         dst: u32,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         if !window.panes.contains_key(&src) {
             return Err(ServerError::Command(format!("pane not found: %{src}")));
@@ -717,7 +782,9 @@ impl CommandServer for MockCommandServer {
         src_idx: u32,
         dst_idx: u32,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         if !session.windows.contains_key(&src_idx) {
             return Err(ServerError::Command(format!("window not found: {src_idx}")));
@@ -740,9 +807,13 @@ impl CommandServer for MockCommandServer {
         dst_idx: u32,
     ) -> Result<(), ServerError> {
         let window = {
-            let session = self.sessions.find_by_id_mut(src_session_id)
+            let session = self
+                .sessions
+                .find_by_id_mut(src_session_id)
                 .ok_or_else(|| ServerError::Command("source session not found".into()))?;
-            session.windows.remove(&src_idx)
+            session
+                .windows
+                .remove(&src_idx)
                 .ok_or_else(|| ServerError::Command(format!("window not found: {src_idx}")))?
         };
         {
@@ -753,7 +824,9 @@ impl CommandServer for MockCommandServer {
                 }
             }
         }
-        let session = self.sessions.find_by_id_mut(dst_session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(dst_session_id)
             .ok_or_else(|| ServerError::Command("destination session not found".into()))?;
         if session.windows.contains_key(&dst_idx) {
             return Err(ServerError::Command(format!(
@@ -771,14 +844,20 @@ impl CommandServer for MockCommandServer {
         pane_id: u32,
     ) -> Result<u32, ServerError> {
         let pane = {
-            let session = self.sessions.find_by_id_mut(session_id)
+            let session = self
+                .sessions
+                .find_by_id_mut(session_id)
                 .ok_or_else(|| ServerError::Command("session not found".into()))?;
-            let window = session.windows.get_mut(&window_idx)
+            let window = session
+                .windows
+                .get_mut(&window_idx)
                 .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
             if window.panes.len() <= 1 {
                 return Err(ServerError::Command("cannot break with only one pane".into()));
             }
-            let pane = window.panes.remove(&pane_id)
+            let pane = window
+                .panes
+                .remove(&pane_id)
                 .ok_or_else(|| ServerError::Command(format!("pane not found: %{pane_id}")))?;
             if window.active_pane == pane_id {
                 if let Some(&next) = window.panes.keys().next() {
@@ -827,11 +906,16 @@ impl CommandServer for MockCommandServer {
         horizontal: bool,
     ) -> Result<(), ServerError> {
         let pane = {
-            let session = self.sessions.find_by_id_mut(src_session_id)
+            let session = self
+                .sessions
+                .find_by_id_mut(src_session_id)
                 .ok_or_else(|| ServerError::Command("source session not found".into()))?;
-            let window = session.windows.get_mut(&src_window_idx)
-                .ok_or_else(|| ServerError::Command(format!("window not found: {src_window_idx}")))?;
-            let pane = window.panes.remove(&src_pane_id)
+            let window = session.windows.get_mut(&src_window_idx).ok_or_else(|| {
+                ServerError::Command(format!("window not found: {src_window_idx}"))
+            })?;
+            let pane = window
+                .panes
+                .remove(&src_pane_id)
                 .ok_or_else(|| ServerError::Command(format!("pane not found: %{src_pane_id}")))?;
             if window.active_pane == src_pane_id {
                 if let Some(&next) = window.panes.keys().next() {
@@ -866,9 +950,13 @@ impl CommandServer for MockCommandServer {
             pane
         };
 
-        let session = self.sessions.find_by_id_mut(dst_session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(dst_session_id)
             .ok_or_else(|| ServerError::Command("destination session not found".into()))?;
-        let window = session.windows.get_mut(&dst_window_idx)
+        let window = session
+            .windows
+            .get_mut(&dst_window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {dst_window_idx}")))?;
         let pid = pane.id;
         window.panes.insert(pid, pane);
@@ -893,9 +981,13 @@ impl CommandServer for MockCommandServer {
     }
 
     fn last_pane(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         if let Some(last) = window.last_active_pane {
             if window.panes.contains_key(&last) {
@@ -908,15 +1000,25 @@ impl CommandServer for MockCommandServer {
     }
 
     fn rotate_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         let mut pane_ids: Vec<u32> = window.panes.keys().copied().collect();
         pane_ids.sort_unstable();
-        if pane_ids.len() <= 1 { return Ok(()); }
-        let positions: Vec<(u32, u32, u32, u32)> = pane_ids.iter()
-            .map(|&id| { let p = &window.panes[&id]; (p.xoff, p.yoff, p.sx, p.sy) })
+        if pane_ids.len() <= 1 {
+            return Ok(());
+        }
+        let positions: Vec<(u32, u32, u32, u32)> = pane_ids
+            .iter()
+            .map(|&id| {
+                let p = &window.panes[&id];
+                (p.xoff, p.yoff, p.sx, p.sy)
+            })
             .collect();
         for (i, &pid) in pane_ids.iter().enumerate() {
             let next_pos = &positions[(i + 1) % positions.len()];
@@ -939,9 +1041,13 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         layout_name: &str,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
         let layout = match layout_name {
@@ -968,11 +1074,17 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         pane_id: u32,
     ) -> Result<(), ServerError> {
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let window = session.windows.get_mut(&window_idx)
+        let window = session
+            .windows
+            .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
-        let pane = window.panes.get_mut(&pane_id)
+        let pane = window
+            .panes
+            .get_mut(&pane_id)
             .ok_or_else(|| ServerError::Command(format!("pane not found: %{pane_id}")))?;
         // Reset screen
         let sx = pane.sx;
@@ -991,15 +1103,16 @@ impl CommandServer for MockCommandServer {
 
     fn enter_copy_mode(&mut self) -> Result<(), ServerError> {
         self.copy_mode_entered = true;
-        let session_id = self.client_session_id
-            .ok_or(ServerError::Command("no session".into()))?;
+        let session_id = self.client_session_id.ok_or(ServerError::Command("no session".into()))?;
         let mode_keys = self.pane_mode_keys();
-        let session = self.sessions.find_by_id_mut(session_id)
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
             .ok_or(ServerError::Command("session not found".into()))?;
-        let window = session.windows.values_mut().next()
-            .ok_or(ServerError::Command("no window".into()))?;
-        let pane = window.panes.values_mut().next()
-            .ok_or(ServerError::Command("no pane".into()))?;
+        let window =
+            session.windows.values_mut().next().ok_or(ServerError::Command("no window".into()))?;
+        let pane =
+            window.panes.values_mut().next().ok_or(ServerError::Command("no pane".into()))?;
         pane.enter_copy_mode(&mode_keys);
         Ok(())
     }
@@ -1036,18 +1149,21 @@ impl CommandServer for MockCommandServer {
     }
 
     fn list_buffers(&self) -> Vec<String> {
-        self.paste_buffers.list().iter()
+        self.paste_buffers
+            .list()
+            .iter()
             .map(|b| {
-                let preview: String = String::from_utf8_lossy(
-                    &b.data[..b.data.len().min(50)]
-                ).into();
+                let preview: String =
+                    String::from_utf8_lossy(&b.data[..b.data.len().min(50)]).into();
                 format!("{}: {} bytes: \"{}\"", b.name, b.data.len(), preview)
             })
             .collect()
     }
 
     fn show_buffer(&self, name: &str) -> Result<String, ServerError> {
-        let buf = self.paste_buffers.get_by_name(name)
+        let buf = self
+            .paste_buffers
+            .get_by_name(name)
             .ok_or(ServerError::Command(format!("buffer not found: {name}")))?;
         Ok(String::from_utf8_lossy(&buf.data).into_owned())
     }
@@ -1072,7 +1188,8 @@ impl CommandServer for MockCommandServer {
     }
 
     fn list_all_commands(&self) -> Vec<String> {
-        crate::command::builtins::COMMANDS.iter()
+        crate::command::builtins::COMMANDS
+            .iter()
             .map(|cmd| format!("{} {}", cmd.name, cmd.usage))
             .collect()
     }

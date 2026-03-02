@@ -4,11 +4,11 @@
 
 pub mod builtins;
 #[cfg(test)]
-mod test_helpers;
-#[cfg(test)]
 mod phase4_tests;
 #[cfg(test)]
 mod phase5_tests;
+#[cfg(test)]
+mod test_helpers;
 
 use crate::server::ServerError;
 

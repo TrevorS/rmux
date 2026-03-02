@@ -81,4 +81,111 @@ mod tests {
         assert!(Attrs::CURLY_UNDERSCORE.has_any_underline());
         assert!(!Attrs::BOLD.has_any_underline());
     }
+
+    #[test]
+    fn all_individual_attrs() {
+        // Test each of the 14 attribute flags individually.
+        let all_attrs = [
+            Attrs::BOLD,
+            Attrs::DIM,
+            Attrs::UNDERSCORE,
+            Attrs::BLINK,
+            Attrs::REVERSE,
+            Attrs::HIDDEN,
+            Attrs::ITALICS,
+            Attrs::STRIKETHROUGH,
+            Attrs::DOUBLE_UNDERSCORE,
+            Attrs::CURLY_UNDERSCORE,
+            Attrs::DOTTED_UNDERSCORE,
+            Attrs::DASHED_UNDERSCORE,
+            Attrs::OVERLINE,
+            Attrs::CHARSET,
+        ];
+
+        for (i, &attr) in all_attrs.iter().enumerate() {
+            // Each flag should not be empty.
+            assert!(!attr.is_empty(), "Attr at index {i} should not be empty");
+
+            // Each flag should be distinct from all others.
+            for (j, &other) in all_attrs.iter().enumerate() {
+                if i != j {
+                    assert_ne!(attr, other, "Attr at index {i} should differ from index {j}");
+                    // They should not overlap (no shared bits).
+                    assert!(
+                        (attr & other).is_empty(),
+                        "Attr at index {i} should not share bits with index {j}"
+                    );
+                }
+            }
+
+            // Setting and checking the flag works.
+            let combined = Attrs::empty() | attr;
+            assert!(combined.contains(attr));
+        }
+    }
+
+    #[test]
+    fn all_underlines_combined() {
+        // ALL_UNDERLINES should contain all underline variants.
+        assert!(Attrs::ALL_UNDERLINES.contains(Attrs::UNDERSCORE));
+        assert!(Attrs::ALL_UNDERLINES.contains(Attrs::DOUBLE_UNDERSCORE));
+        assert!(Attrs::ALL_UNDERLINES.contains(Attrs::CURLY_UNDERSCORE));
+        assert!(Attrs::ALL_UNDERLINES.contains(Attrs::DOTTED_UNDERSCORE));
+        assert!(Attrs::ALL_UNDERLINES.contains(Attrs::DASHED_UNDERSCORE));
+
+        // ALL_UNDERLINES should NOT contain non-underline attrs.
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::BOLD));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::DIM));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::BLINK));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::REVERSE));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::HIDDEN));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::ITALICS));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::STRIKETHROUGH));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::OVERLINE));
+        assert!(!Attrs::ALL_UNDERLINES.contains(Attrs::CHARSET));
+    }
+
+    #[test]
+    fn has_any_underline_detection() {
+        // Each underline variant should trigger has_any_underline.
+        let underline_variants = [
+            Attrs::UNDERSCORE,
+            Attrs::DOUBLE_UNDERSCORE,
+            Attrs::CURLY_UNDERSCORE,
+            Attrs::DOTTED_UNDERSCORE,
+            Attrs::DASHED_UNDERSCORE,
+        ];
+        for &ul in &underline_variants {
+            assert!(ul.has_any_underline(), "{ul:?} should have underline");
+            // Combined with other attrs should still detect underline.
+            let combined = ul | Attrs::BOLD | Attrs::ITALICS;
+            assert!(combined.has_any_underline(), "{ul:?} | BOLD | ITALICS should have underline");
+        }
+
+        // Non-underline attrs should NOT trigger has_any_underline.
+        let non_underline = [
+            Attrs::BOLD,
+            Attrs::DIM,
+            Attrs::BLINK,
+            Attrs::REVERSE,
+            Attrs::HIDDEN,
+            Attrs::ITALICS,
+            Attrs::STRIKETHROUGH,
+            Attrs::OVERLINE,
+            Attrs::CHARSET,
+        ];
+        for &attr in &non_underline {
+            assert!(!attr.has_any_underline(), "{attr:?} should not have underline");
+        }
+
+        // Empty attrs should not have underline.
+        assert!(!Attrs::empty().has_any_underline());
+
+        // All non-underline combined should not have underline.
+        let mut combined = Attrs::empty();
+        for &attr in &non_underline {
+            combined |= attr;
+        }
+        assert!(!combined.has_any_underline());
+    }
 }

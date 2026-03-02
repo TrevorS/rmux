@@ -31,17 +31,13 @@ fn bench_diff_identical(c: &mut Criterion) {
         let old = make_screen_with_content(w, h, b'A');
         let new = make_screen_with_content(w, h, b'A');
 
-        group.bench_with_input(
-            BenchmarkId::new("size", format!("{w}x{h}")),
-            &(w, h),
-            |b, _| {
-                b.iter(|| {
-                    let mut writer = TermWriter::new(65536);
-                    diff_screens(black_box(&old), black_box(&new), &mut writer);
-                    black_box(writer.buffer());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("size", format!("{w}x{h}")), &(w, h), |b, _| {
+            b.iter(|| {
+                let mut writer = TermWriter::new(65536);
+                diff_screens(black_box(&old), black_box(&new), &mut writer);
+                black_box(writer.buffer());
+            });
+        });
     }
     group.finish();
 }
@@ -53,17 +49,13 @@ fn bench_diff_completely_different(c: &mut Criterion) {
         let old = make_screen_with_content(w, h, b'A');
         let new = make_screen_with_content(w, h, b'B');
 
-        group.bench_with_input(
-            BenchmarkId::new("size", format!("{w}x{h}")),
-            &(w, h),
-            |b, _| {
-                b.iter(|| {
-                    let mut writer = TermWriter::new(65536);
-                    diff_screens(black_box(&old), black_box(&new), &mut writer);
-                    black_box(writer.buffer());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("size", format!("{w}x{h}")), &(w, h), |b, _| {
+            b.iter(|| {
+                let mut writer = TermWriter::new(65536);
+                diff_screens(black_box(&old), black_box(&new), &mut writer);
+                black_box(writer.buffer());
+            });
+        });
     }
     group.finish();
 }
@@ -86,17 +78,13 @@ fn bench_diff_single_line_change(c: &mut Criterion) {
             new.grid.set_cell(x, mid, &cell);
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("size", format!("{w}x{h}")),
-            &(w, h),
-            |b, _| {
-                b.iter(|| {
-                    let mut writer = TermWriter::new(65536);
-                    diff_screens(black_box(&old), black_box(&new), &mut writer);
-                    black_box(writer.buffer());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("size", format!("{w}x{h}")), &(w, h), |b, _| {
+            b.iter(|| {
+                let mut writer = TermWriter::new(65536);
+                diff_screens(black_box(&old), black_box(&new), &mut writer);
+                black_box(writer.buffer());
+            });
+        });
     }
     group.finish();
 }

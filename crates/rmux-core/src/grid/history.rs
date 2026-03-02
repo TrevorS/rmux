@@ -243,4 +243,149 @@ mod tests {
         assert_eq!(h.history_size(), 0);
         assert_eq!(h.total_lines(), 24); // VecDeque might have same total
     }
+
+    #[test]
+    fn scroll_up_at_limit_trims() {
+        let limit = 50u32;
+        let mut h = GridHistory::new(24, limit);
+        // Scroll enough to exceed the limit.
+        for _ in 0..limit + 20 {
+            h.scroll_up();
+        }
+        // History should never exceed the limit after trimming.
+        assert!(h.history_size() <= limit);
+    }
+
+    #[test]
+    fn collect_if_needed_all() {
+        let limit = 50u32;
+        let mut h = GridHistory::new(24, limit);
+        // Build up history beyond the limit.
+        for _ in 0..limit + 30 {
+            h.scroll_up();
+        }
+        // Force a full collection.
+        h.collect_if_needed(true);
+        // After collect_all, history_size should be at most the limit.
+        assert!(h.history_size() <= limit);
+    }
+
+    #[test]
+    fn resize_to_zero() {
+        let mut h = GridHistory::new(24, 2000);
+        // Shrink visible size to 1 (minimum meaningful).
+        h.resize_visible(1);
+        assert_eq!(h.visible_size(), 1);
+        // The 23 excess visible lines should have moved to history.
+        assert_eq!(h.history_size(), 23);
+        // Visible line access should still work.
+        assert!(h.visible_line(0).is_some());
+    }
+
+    #[test]
+    fn clear_history_resets() {
+        let mut h = GridHistory::new(24, 2000);
+        for _ in 0..100 {
+            h.scroll_up();
+        }
+        assert!(h.history_size() > 0);
+        h.clear_history();
+        assert_eq!(h.history_size(), 0);
+        // Visible area should still be intact.
+        assert_eq!(h.visible_size(), 24);
+        assert!(h.visible_line(0).is_some());
+        assert!(h.visible_line(23).is_some());
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn scroll_up_increases_history(
+                visible in 5u32..50,
+                limit in 100u32..1000,
+                scrolls in 1u32..50
+            ) {
+                let mut hist = GridHistory::new(visible, limit);
+                for _ in 0..scrolls {
+                    hist.scroll_up();
+                }
+                // History should be at most scrolls and at most limit
+                prop_assert!(hist.history_size() <= scrolls);
+                prop_assert!(hist.history_size() <= limit);
+                // For scrolls < limit, history_size should equal scrolls
+                if scrolls < limit {
+                    prop_assert_eq!(hist.history_size(), scrolls);
+                }
+            }
+
+            #[test]
+            fn total_lines_is_history_plus_visible(
+                visible in 5u32..50,
+                limit in 100u32..1000,
+                scrolls in 0u32..50
+            ) {
+                let mut hist = GridHistory::new(visible, limit);
+                for _ in 0..scrolls {
+                    hist.scroll_up();
+                }
+                prop_assert_eq!(hist.total_lines(), hist.history_size() + hist.visible_size());
+            }
+
+            #[test]
+            fn visible_size_unchanged_after_scroll_up(
+                visible in 5u32..50,
+                limit in 100u32..1000,
+                scrolls in 0u32..50
+            ) {
+                let mut hist = GridHistory::new(visible, limit);
+                for _ in 0..scrolls {
+                    hist.scroll_up();
+                }
+                prop_assert_eq!(hist.visible_size(), visible);
+            }
+
+            #[test]
+            fn clear_history_resets_to_zero(
+                visible in 5u32..50,
+                limit in 100u32..1000,
+                scrolls in 0u32..50
+            ) {
+                let mut hist = GridHistory::new(visible, limit);
+                for _ in 0..scrolls {
+                    hist.scroll_up();
+                }
+                hist.clear_history();
+                prop_assert_eq!(hist.history_size(), 0);
+                prop_assert_eq!(hist.visible_size(), visible);
+            }
+
+            #[test]
+            fn resize_grow_increases_visible(
+                visible in 5u32..50,
+                limit in 100u32..1000,
+                extra in 1u32..20,
+            ) {
+                let mut hist = GridHistory::new(visible, limit);
+                let new_height = visible + extra;
+                hist.resize_visible(new_height);
+                prop_assert_eq!(hist.visible_size(), new_height);
+            }
+
+            #[test]
+            fn history_never_exceeds_limit(
+                visible in 5u32..50,
+                limit in 10u32..200,
+                scrolls in 0u32..300,
+            ) {
+                let mut hist = GridHistory::new(visible, limit);
+                for _ in 0..scrolls {
+                    hist.scroll_up();
+                }
+                prop_assert!(hist.history_size() <= limit);
+            }
+        }
+    }
 }

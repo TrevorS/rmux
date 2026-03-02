@@ -76,4 +76,54 @@ mod tests {
         let s2 = s1;
         assert!(s1.looks_equal(&s2));
     }
+
+    #[test]
+    fn style_with_bg_not_default() {
+        let s = Style { bg: Color::BLUE, ..Style::DEFAULT };
+        assert!(!s.is_default());
+    }
+
+    #[test]
+    fn style_with_underline_color() {
+        let s = Style { us: Color::RED, ..Style::DEFAULT };
+        assert!(!s.is_default());
+    }
+
+    #[test]
+    fn style_with_attrs_not_default() {
+        let s = Style { attrs: Attrs::BOLD, ..Style::DEFAULT };
+        assert!(!s.is_default());
+
+        let s2 = Style { attrs: Attrs::ITALICS, ..Style::DEFAULT };
+        assert!(!s2.is_default());
+
+        let s3 = Style { attrs: Attrs::UNDERSCORE, ..Style::DEFAULT };
+        assert!(!s3.is_default());
+    }
+
+    #[test]
+    fn looks_equal_ignores_underline_color_when_no_underline() {
+        // Two styles that differ only in underline color but have no underline attr.
+        // The current looks_equal compares all fields including us, so they will
+        // compare as not-equal even without underline. This documents the current behavior.
+        let s1 = Style { us: Color::RED, ..Style::DEFAULT };
+        let s2 = Style { us: Color::BLUE, ..Style::DEFAULT };
+        // They differ in us, and looks_equal checks us unconditionally.
+        assert!(!s1.looks_equal(&s2));
+        // But if the underline colors are the same, they should look equal.
+        let s3 = Style { us: Color::RED, ..Style::DEFAULT };
+        assert!(s1.looks_equal(&s3));
+    }
+
+    #[test]
+    fn looks_equal_detects_underline_color_diff() {
+        // Two styles with UNDERSCORE attr and different underline colors should not look equal.
+        let s1 = Style { attrs: Attrs::UNDERSCORE, us: Color::RED, ..Style::DEFAULT };
+        let s2 = Style { attrs: Attrs::UNDERSCORE, us: Color::GREEN, ..Style::DEFAULT };
+        assert!(!s1.looks_equal(&s2));
+
+        // Same underline color with same attrs should look equal.
+        let s3 = Style { attrs: Attrs::UNDERSCORE, us: Color::RED, ..Style::DEFAULT };
+        assert!(s1.looks_equal(&s3));
+    }
 }

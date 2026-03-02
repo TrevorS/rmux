@@ -1,6 +1,6 @@
 //! Copy mode and paste buffer commands.
 
-use crate::command::{get_option, positional_args, CommandResult, CommandServer};
+use crate::command::{CommandResult, CommandServer, get_option, positional_args};
 use crate::server::ServerError;
 
 /// Enter copy mode on the active pane.

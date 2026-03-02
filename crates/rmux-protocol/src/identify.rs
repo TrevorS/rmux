@@ -184,7 +184,8 @@ mod tests {
                 ("SHELL".to_string(), "/bin/bash".to_string()),
             ],
         );
-        let environ_count = msgs.iter().filter(|m| matches!(m, Message::IdentifyEnviron(_))).count();
+        let environ_count =
+            msgs.iter().filter(|m| matches!(m, Message::IdentifyEnviron(_))).count();
         assert_eq!(environ_count, 2);
     }
 

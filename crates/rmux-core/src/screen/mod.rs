@@ -214,6 +214,9 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::cell::{CellFlags, GridCell};
+    use crate::style::Style;
+    use crate::utf8::Utf8Char;
 
     #[test]
     fn new_screen() {
@@ -277,5 +280,212 @@ mod tests {
         s.resize(40, 10);
         assert_eq!(s.cursor.x, 39);
         assert_eq!(s.cursor.y, 9);
+    }
+
+    #[test]
+    fn screen_reset_clears_state() {
+        let mut s = Screen::new(80, 24, 2000);
+        // Modify various pieces of state
+        s.cursor.x = 30;
+        s.cursor.y = 10;
+        s.title = "modified".to_string();
+        s.path = Some("/tmp".to_string());
+        s.mode.insert(ModeFlags::INSERT);
+        s.mode.remove(ModeFlags::WRAP);
+        s.save_cursor();
+        // Write a cell into the grid
+        let cell = GridCell {
+            data: Utf8Char::from_ascii(b'X'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        s.grid.set_cell(0, 0, &cell);
+
+        s.reset();
+
+        // After reset, screen should be back to initial state
+        assert_eq!(s.cursor.x, 0);
+        assert_eq!(s.cursor.y, 0);
+        assert_eq!(s.title, "");
+        assert_eq!(s.path, None);
+        assert!(s.mode.contains(ModeFlags::WRAP));
+        assert!(s.mode.contains(ModeFlags::CURSOR_VISIBLE));
+        assert!(!s.mode.contains(ModeFlags::INSERT));
+        assert!(s.saved_cursor.is_none());
+        assert!(s.alternate.is_none());
+        assert!(s.selection.is_none());
+        assert_eq!(s.width(), 80);
+        assert_eq!(s.height(), 24);
+    }
+
+    #[test]
+    fn tab_stop_at_boundaries() {
+        let s = Screen::new(80, 24, 0);
+        // At column 0, next tab stop should be 8
+        assert_eq!(s.next_tab_stop(0), 8);
+        // At a tab position (column 8), next stop is 16
+        assert_eq!(s.next_tab_stop(8), 16);
+        // Just before a tab stop (column 7), next stop is 8
+        assert_eq!(s.next_tab_stop(7), 8);
+        // At last column (79), should return width-1 = 79 (no more tab stops)
+        assert_eq!(s.next_tab_stop(79), 79);
+        // At the last tab stop (column 72), next should be 79 (width-1, no more stops)
+        assert_eq!(s.next_tab_stop(72), 79);
+    }
+
+    #[test]
+    fn save_restore_cursor_multiple() {
+        let mut s = Screen::new(80, 24, 0);
+        // Set cursor to first position and save
+        s.cursor.x = 10;
+        s.cursor.y = 5;
+        s.save_cursor();
+
+        // Move cursor to a new position
+        s.cursor.x = 40;
+        s.cursor.y = 15;
+        // Save again (this should overwrite the saved state)
+        s.save_cursor();
+
+        // Move cursor again
+        s.cursor.x = 0;
+        s.cursor.y = 0;
+
+        // Restore should bring back the second saved position (40, 15)
+        s.restore_cursor();
+        assert_eq!(s.cursor.x, 40);
+        assert_eq!(s.cursor.y, 15);
+    }
+
+    #[test]
+    fn alternate_screen_enter_exit() {
+        use crate::grid::cell::{CellFlags, GridCell};
+        use crate::style::Style;
+        use crate::utf8::Utf8Char;
+
+        let mut s = Screen::new(80, 24, 2000);
+        // Write content to the normal screen
+        let cell_a = GridCell {
+            data: Utf8Char::from_ascii(b'A'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        s.grid.set_cell(0, 0, &cell_a);
+        s.cursor.x = 10;
+        s.cursor.y = 5;
+
+        // Enter alternate screen
+        s.enter_alternate();
+        assert!(s.alternate.is_some());
+        // Cursor should be reset in alternate screen
+        assert_eq!(s.cursor.x, 0);
+        assert_eq!(s.cursor.y, 0);
+        // Original content should not be visible (fresh grid)
+        assert_ne!(s.grid.get_cell(0, 0).data, Utf8Char::from_ascii(b'A'));
+
+        // Write something on the alternate screen
+        let cell_b = GridCell {
+            data: Utf8Char::from_ascii(b'B'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        s.grid.set_cell(5, 5, &cell_b);
+        s.cursor.x = 20;
+        s.cursor.y = 12;
+
+        // Exit alternate screen
+        s.exit_alternate();
+        assert!(s.alternate.is_none());
+        // Original content should be restored
+        assert_eq!(s.grid.get_cell(0, 0).data, Utf8Char::from_ascii(b'A'));
+        // Original cursor should be restored
+        assert_eq!(s.cursor.x, 10);
+        assert_eq!(s.cursor.y, 5);
+        // Alternate screen content should not be present
+        assert_ne!(s.grid.get_cell(5, 5).data, Utf8Char::from_ascii(b'B'));
+    }
+
+    #[test]
+    fn screen_resize_preserves_content() {
+        use crate::grid::cell::{CellFlags, GridCell};
+        use crate::style::Style;
+        use crate::utf8::Utf8Char;
+
+        let mut s = Screen::new(80, 24, 0);
+        // Write content at (0,0)
+        let cell = GridCell {
+            data: Utf8Char::from_ascii(b'H'),
+            style: Style::DEFAULT,
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        s.grid.set_cell(0, 0, &cell);
+        s.grid.set_cell(
+            1,
+            0,
+            &GridCell {
+                data: Utf8Char::from_ascii(b'i'),
+                style: Style::DEFAULT,
+                link: 0,
+                flags: CellFlags::empty(),
+            },
+        );
+
+        // Resize to larger
+        s.resize(120, 40);
+        assert_eq!(s.width(), 120);
+        assert_eq!(s.height(), 40);
+        // Content should still be present
+        assert_eq!(s.grid.get_cell(0, 0).data, Utf8Char::from_ascii(b'H'));
+        assert_eq!(s.grid.get_cell(1, 0).data, Utf8Char::from_ascii(b'i'));
+    }
+
+    #[test]
+    fn mode_flags_toggle() {
+        let mut s = Screen::new(80, 24, 0);
+        // Initially WRAP and CURSOR_VISIBLE are set
+        assert!(s.mode.contains(ModeFlags::WRAP));
+        assert!(s.mode.contains(ModeFlags::CURSOR_VISIBLE));
+        assert!(!s.mode.contains(ModeFlags::INSERT));
+        assert!(!s.mode.contains(ModeFlags::BRACKETPASTE));
+
+        // Set INSERT and BRACKETPASTE
+        s.mode.insert(ModeFlags::INSERT);
+        s.mode.insert(ModeFlags::BRACKETPASTE);
+        assert!(s.mode.contains(ModeFlags::INSERT));
+        assert!(s.mode.contains(ModeFlags::BRACKETPASTE));
+
+        // Remove WRAP
+        s.mode.remove(ModeFlags::WRAP);
+        assert!(!s.mode.contains(ModeFlags::WRAP));
+
+        // Toggle CURSOR_VISIBLE
+        s.mode.toggle(ModeFlags::CURSOR_VISIBLE);
+        assert!(!s.mode.contains(ModeFlags::CURSOR_VISIBLE));
+        s.mode.toggle(ModeFlags::CURSOR_VISIBLE);
+        assert!(s.mode.contains(ModeFlags::CURSOR_VISIBLE));
+
+        // Set multiple mouse modes
+        s.mode.insert(ModeFlags::MOUSE_STANDARD | ModeFlags::MOUSE_SGR);
+        assert!(s.mode.contains(ModeFlags::MOUSE_STANDARD));
+        assert!(s.mode.contains(ModeFlags::MOUSE_SGR));
+        // Remove them
+        s.mode.remove(ModeFlags::MOUSE_STANDARD | ModeFlags::MOUSE_SGR);
+        assert!(!s.mode.contains(ModeFlags::MOUSE_STANDARD));
+        assert!(!s.mode.contains(ModeFlags::MOUSE_SGR));
+    }
+
+    #[test]
+    fn default_screen_dimensions() {
+        let s = Screen::new(132, 43, 5000);
+        assert_eq!(s.width(), 132);
+        assert_eq!(s.height(), 43);
+        // Verify scroll region covers full screen
+        assert_eq!(s.scroll_region.top, 0);
+        assert_eq!(s.scroll_region.bottom, 42);
+        assert!(s.scroll_region.is_full(43));
     }
 }

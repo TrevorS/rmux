@@ -77,10 +77,8 @@ fn render_pane_at(
     let pane_h = pane.sy.min(max_height.saturating_sub(yoff));
 
     // Build selection for hit testing if in copy mode
-    let selection = pane
-        .copy_mode
-        .as_ref()
-        .and_then(|cm| cm.current_selection(screen.grid.history_size()));
+    let selection =
+        pane.copy_mode.as_ref().and_then(|cm| cm.current_selection(screen.grid.history_size()));
 
     let oy = pane.copy_mode.as_ref().map_or(0, |cm| cm.oy);
 
@@ -116,9 +114,7 @@ fn render_pane_at(
             }
 
             // Check if this cell is in the selection (reverse video)
-            let in_selection = selection
-                .as_ref()
-                .is_some_and(|sel| sel.contains(x, abs_y));
+            let in_selection = selection.as_ref().is_some_and(|sel| sel.contains(x, abs_y));
 
             if in_selection {
                 let mut style = cell.style;

@@ -327,4 +327,227 @@ mod tests {
         assert_eq!(opts.get_number("history-limit").unwrap(), 2000);
         assert!(opts.get_flag("exit-empty").unwrap());
     }
+
+    #[test]
+    fn parse_and_set_number() {
+        let mut opts = Options::new();
+        opts.parse_and_set("count", "42");
+        assert_eq!(opts.get("count"), Some(&OptionValue::Number(42)));
+    }
+
+    #[test]
+    fn parse_and_set_flag() {
+        let mut opts = Options::new();
+        opts.parse_and_set("enabled", "on");
+        assert_eq!(opts.get("enabled"), Some(&OptionValue::Flag(true)));
+
+        opts.parse_and_set("disabled", "off");
+        assert_eq!(opts.get("disabled"), Some(&OptionValue::Flag(false)));
+
+        // "true" and "false" should also work via auto-detection.
+        opts.parse_and_set("truthy", "true");
+        assert_eq!(opts.get("truthy"), Some(&OptionValue::Flag(true)));
+
+        opts.parse_and_set("falsy", "false");
+        assert_eq!(opts.get("falsy"), Some(&OptionValue::Flag(false)));
+    }
+
+    #[test]
+    fn parse_and_set_string() {
+        let mut opts = Options::new();
+        opts.parse_and_set("name", "hello world");
+        assert_eq!(opts.get("name"), Some(&OptionValue::String("hello world".into())));
+    }
+
+    #[test]
+    fn deep_inheritance_chain() {
+        // Three-level parent chain: grandparent -> parent -> child.
+        let mut grandparent = Options::new();
+        grandparent.set("gp-key", OptionValue::String("from-grandparent".into()));
+        grandparent.set("shared", OptionValue::Number(1));
+
+        let mut parent = Options::with_parent(grandparent);
+        parent.set("parent-key", OptionValue::String("from-parent".into()));
+        parent.set("shared", OptionValue::Number(2)); // Override grandparent.
+
+        let child = Options::with_parent(parent);
+
+        // Child sees grandparent value.
+        assert_eq!(child.get_string("gp-key").unwrap(), "from-grandparent");
+        // Child sees parent value.
+        assert_eq!(child.get_string("parent-key").unwrap(), "from-parent");
+        // Child sees parent's override of shared key.
+        assert_eq!(child.get_number("shared").unwrap(), 2);
+    }
+
+    #[test]
+    fn local_iter_only_local() {
+        let mut parent = Options::new();
+        parent.set("inherited", OptionValue::Number(1));
+
+        let mut child = Options::with_parent(parent);
+        child.set("local", OptionValue::String("mine".into()));
+
+        let local_keys: Vec<&str> = child.local_iter().map(|(k, _)| k).collect();
+        assert!(local_keys.contains(&"local"));
+        assert!(!local_keys.contains(&"inherited"));
+        assert_eq!(local_keys.len(), 1);
+    }
+
+    #[test]
+    fn all_entries_includes_inherited() {
+        let mut parent = Options::new();
+        parent.set("alpha", OptionValue::String("a".into()));
+        parent.set("beta", OptionValue::Number(2));
+
+        let mut child = Options::with_parent(parent);
+        child.set("gamma", OptionValue::Flag(true));
+
+        let entries = child.all_entries();
+        let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"alpha"));
+        assert!(keys.contains(&"beta"));
+        assert!(keys.contains(&"gamma"));
+        // Entries should be sorted by key.
+        assert_eq!(keys, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn type_name_for_each_variant() {
+        assert_eq!(OptionValue::String("x".into()).type_name(), "string");
+        assert_eq!(OptionValue::Number(0).type_name(), "number");
+        assert_eq!(OptionValue::Flag(true).type_name(), "flag");
+        assert_eq!(OptionValue::Style(Style::DEFAULT).type_name(), "style");
+        assert_eq!(OptionValue::Array(vec![]).type_name(), "array");
+    }
+
+    #[test]
+    fn get_style_returns_none_for_non_style() {
+        let mut opts = Options::new();
+        opts.set("num", OptionValue::Number(42));
+        opts.set("str", OptionValue::String("hello".into()));
+        opts.set("flag", OptionValue::Flag(true));
+
+        // Getting as a different type should return None from the accessor.
+        assert!(opts.get("num").unwrap().as_str().is_none());
+        assert!(opts.get("num").unwrap().as_flag().is_none());
+        assert!(opts.get("str").unwrap().as_number().is_none());
+        assert!(opts.get("str").unwrap().as_flag().is_none());
+        assert!(opts.get("flag").unwrap().as_str().is_none());
+        assert!(opts.get("flag").unwrap().as_number().is_none());
+    }
+
+    #[test]
+    fn default_session_options_valid() {
+        let opts = default_session_options();
+        // Should have standard session keys.
+        assert_eq!(opts.get_number("base-index").unwrap(), 0);
+        assert_eq!(opts.get_string("default-shell").unwrap(), "/bin/sh");
+        assert_eq!(opts.get_string("prefix").unwrap(), "C-b");
+        assert!(opts.get_flag("status").unwrap());
+        assert!(!opts.get_flag("mouse").unwrap());
+        assert!(!opts.get_flag("renumber-windows").unwrap());
+    }
+
+    #[test]
+    fn default_window_options_valid() {
+        let opts = default_window_options();
+        // Should have standard window keys.
+        assert_eq!(opts.get_string("mode-keys").unwrap(), "emacs");
+        assert!(opts.get_flag("automatic-rename").unwrap());
+        assert!(!opts.get_flag("aggressive-resize").unwrap());
+        assert!(opts.get_flag("allow-rename").unwrap());
+        assert!(!opts.get_flag("monitor-activity").unwrap());
+        assert!(!opts.get_flag("remain-on-exit").unwrap());
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn set_get_roundtrip(
+                key in "[a-z-]{1,30}",
+                value in "[a-zA-Z0-9 ]{0,100}"
+            ) {
+                let mut opts = Options::new();
+                opts.set(&key, OptionValue::String(value.clone()));
+                let got = opts.get(&key);
+                prop_assert_eq!(got, Some(&OptionValue::String(value)));
+            }
+
+            #[test]
+            fn unset_makes_get_return_none(
+                key in "[a-z-]{1,30}",
+                value in "[a-zA-Z0-9]{1,50}"
+            ) {
+                let mut opts = Options::new();
+                opts.set(&key, OptionValue::String(value));
+                opts.unset(&key);
+                prop_assert!(opts.get(&key).is_none());
+            }
+
+            #[test]
+            fn parse_and_set_number_roundtrip(
+                n in -1000i64..1000
+            ) {
+                let mut opts = Options::new();
+                opts.parse_and_set("test_key", &n.to_string());
+                if let Some(OptionValue::Number(got)) = opts.get("test_key") {
+                    prop_assert_eq!(*got, n);
+                } else {
+                    // parse_and_set auto-detects integers, so this should always be Number
+                    prop_assert!(false, "expected OptionValue::Number but got {:?}", opts.get("test_key"));
+                }
+            }
+
+            #[test]
+            fn set_flag_roundtrip(
+                key in "[a-z-]{1,30}",
+                flag in proptest::bool::ANY,
+            ) {
+                let mut opts = Options::new();
+                opts.set(&key, OptionValue::Flag(flag));
+                let got = opts.get_flag(&key).unwrap();
+                prop_assert_eq!(got, flag);
+            }
+
+            #[test]
+            fn set_number_roundtrip(
+                key in "[a-z-]{1,30}",
+                num in proptest::num::i64::ANY,
+            ) {
+                let mut opts = Options::new();
+                opts.set(&key, OptionValue::Number(num));
+                let got = opts.get_number(&key).unwrap();
+                prop_assert_eq!(got, num);
+            }
+
+            #[test]
+            fn child_overrides_parent(
+                key in "[a-z-]{1,30}",
+                parent_val in "[a-zA-Z]{1,20}",
+                child_val in "[a-zA-Z]{1,20}",
+            ) {
+                let mut parent = Options::new();
+                parent.set(&key, OptionValue::String(parent_val));
+                let mut child = Options::with_parent(parent);
+                child.set(&key, OptionValue::String(child_val.clone()));
+                let got = child.get(&key);
+                prop_assert_eq!(got, Some(&OptionValue::String(child_val)));
+            }
+
+            #[test]
+            fn is_local_after_set(
+                key in "[a-z-]{1,30}",
+                value in "[a-zA-Z0-9]{1,50}",
+            ) {
+                let mut opts = Options::new();
+                prop_assert!(!opts.is_local(&key));
+                opts.set(&key, OptionValue::String(value));
+                prop_assert!(opts.is_local(&key));
+            }
+        }
+    }
 }

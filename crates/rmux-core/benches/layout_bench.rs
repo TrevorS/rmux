@@ -8,15 +8,11 @@ fn bench_even_horizontal(c: &mut Criterion) {
 
     for &n_panes in &[2, 4, 8, 16, 32] {
         let pane_ids: Vec<u32> = (0..n_panes).collect();
-        group.bench_with_input(
-            BenchmarkId::new("panes", n_panes),
-            &pane_ids,
-            |b, ids| {
-                b.iter(|| {
-                    black_box(layout_even_horizontal(200, 50, ids));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("panes", n_panes), &pane_ids, |b, ids| {
+            b.iter(|| {
+                black_box(layout_even_horizontal(200, 50, ids));
+            });
+        });
     }
     group.finish();
 }
@@ -26,15 +22,11 @@ fn bench_even_vertical(c: &mut Criterion) {
 
     for &n_panes in &[2, 4, 8, 16] {
         let pane_ids: Vec<u32> = (0..n_panes).collect();
-        group.bench_with_input(
-            BenchmarkId::new("panes", n_panes),
-            &pane_ids,
-            |b, ids| {
-                b.iter(|| {
-                    black_box(layout_even_vertical(200, 50, ids));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("panes", n_panes), &pane_ids, |b, ids| {
+            b.iter(|| {
+                black_box(layout_even_vertical(200, 50, ids));
+            });
+        });
     }
     group.finish();
 }
@@ -76,15 +68,11 @@ fn bench_find_pane(c: &mut Criterion) {
         let layout = layout_even_horizontal(800, 50, &pane_ids);
         let target = n_panes - 1; // Find last pane
 
-        group.bench_with_input(
-            BenchmarkId::new("panes", n_panes),
-            &target,
-            |b, &target| {
-                b.iter(|| {
-                    black_box(layout.find_pane(target));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("panes", n_panes), &target, |b, &target| {
+            b.iter(|| {
+                black_box(layout.find_pane(target));
+            });
+        });
     }
     group.finish();
 }
@@ -96,16 +84,12 @@ fn bench_pane_at(c: &mut Criterion) {
         let pane_ids: Vec<u32> = (0..n_panes).collect();
         let layout = layout_even_horizontal(800, 50, &pane_ids);
 
-        group.bench_with_input(
-            BenchmarkId::new("panes", n_panes),
-            &n_panes,
-            |b, _| {
-                b.iter(|| {
-                    // Look up middle of screen
-                    black_box(layout.pane_at(400, 25));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("panes", n_panes), &n_panes, |b, _| {
+            b.iter(|| {
+                // Look up middle of screen
+                black_box(layout.pane_at(400, 25));
+            });
+        });
     }
     group.finish();
 }

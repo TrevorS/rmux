@@ -8,10 +8,8 @@
 //! - Mouse event parsing
 //! - Layout pane_at coordinate lookup
 
-#![cfg(test)]
-
 use super::test_helpers::MockCommandServer;
-use crate::command::{execute_command, CommandResult};
+use crate::command::{CommandResult, execute_command};
 
 fn exec(
     server: &mut MockCommandServer,
@@ -21,9 +19,7 @@ fn exec(
     execute_command(&argv, server)
 }
 
-fn output_text(
-    result: Result<CommandResult, crate::server::ServerError>,
-) -> String {
+fn output_text(result: Result<CommandResult, crate::server::ServerError>) -> String {
     match result.unwrap() {
         CommandResult::Output(text) => text,
         other => panic!("expected Output, got {other:?}"),
@@ -248,7 +244,9 @@ mod paste_command_tests {
 
 mod copy_mode_tests {
     use super::make_screen;
-    use crate::copymode::{CopyModeAction, CopyModeState, copy_selection, dispatch_copy_mode_action};
+    use crate::copymode::{
+        CopyModeAction, CopyModeState, copy_selection, dispatch_copy_mode_action,
+    };
     use rmux_core::screen::Screen;
     use rmux_core::screen::selection::SelectionType;
 
@@ -894,10 +892,7 @@ mod pane_copy_mode_tests {
     fn enter_emacs_copy_mode() {
         let mut pane = Pane::new(80, 24, 0);
         pane.enter_copy_mode("emacs");
-        assert_eq!(
-            pane.copy_mode.as_ref().unwrap().key_table,
-            "copy-mode-emacs"
-        );
+        assert_eq!(pane.copy_mode.as_ref().unwrap().key_table, "copy-mode-emacs");
     }
 }
 
@@ -1545,11 +1540,7 @@ mod key_table_extended {
     #[test]
     fn custom_binding_in_copy_mode_table() {
         let mut kb = KeyBindings::default_bindings();
-        kb.add_binding(
-            "copy-mode-vi",
-            b'z' as KeyCode,
-            vec!["custom-action".into()],
-        );
+        kb.add_binding("copy-mode-vi", b'z' as KeyCode, vec!["custom-action".into()]);
         assert_eq!(
             kb.lookup_in_table("copy-mode-vi", b'z' as KeyCode),
             Some(&vec!["custom-action".to_string()])
@@ -1560,11 +1551,7 @@ mod key_table_extended {
     fn binding_overwrite() {
         let mut kb = KeyBindings::default_bindings();
         // h is cursor-left by default
-        kb.add_binding(
-            "copy-mode-vi",
-            b'h' as KeyCode,
-            vec!["replaced".into()],
-        );
+        kb.add_binding("copy-mode-vi", b'h' as KeyCode, vec!["replaced".into()]);
         assert_eq!(
             kb.lookup_in_table("copy-mode-vi", b'h' as KeyCode),
             Some(&vec!["replaced".to_string()])
@@ -1870,11 +1857,7 @@ mod workflow_tests {
         s.create_test_session("test");
 
         // Add a custom binding to copy-mode-vi
-        exec(
-            &mut s,
-            &["bind-key", "-T", "copy-mode-vi", "z", "custom-cmd"],
-        )
-        .unwrap();
+        exec(&mut s, &["bind-key", "-T", "copy-mode-vi", "z", "custom-cmd"]).unwrap();
 
         // Verify via list-keys
         let output = output_text(exec(&mut s, &["list-keys"]));
