@@ -23,6 +23,8 @@ cd fuzz && cargo +nightly fuzz run fuzz_input_parser
 
 **Pre-commit checklist:** `cargo fmt && cargo clippy --all-targets --all-features && cargo test`
 
+**CI:** GitHub Actions runs fmt/clippy/test on push to `master` and on PRs (`.github/workflows/ci.yml`).
+
 ## Workspace Crates
 
 ```
@@ -65,10 +67,13 @@ rmux-client     CLI parsing (tmux-compatible flags), server auto-start, attached
 
 **Tests** are inline `#[cfg(test)]` modules. Command integration tests live in `command/phase4_tests.rs` and `phase5_tests.rs` using mock helpers from `command/test_helpers.rs`.
 
-## Code Standards (from AGENTS.md)
+## Code Standards
 
 - **Lints:** `#![deny(clippy::all, clippy::pedantic)]` in all crates. Zero warnings.
-- **Unsafe whitelist:** Only in `protocol/codec.rs` (SCM_RIGHTS), `terminal/pty.rs` (FFI), and `core/grid/cell.rs` (if needed). Every `unsafe` block needs a `// SAFETY:` comment.
-- **Error handling:** Never `.unwrap()` in library code. Use `thiserror` error enums. Tests/benchmarks may `.unwrap()`.
-- **Benchmarks:** Mandatory for hot paths (grid, parsing, rendering, format expansion). Use criterion with real-world data.
+- **Unsafe:** `#![forbid(unsafe_code)]` in all crates except rmux-terminal and rmux-protocol. Permitted only in `protocol/codec.rs` (SCM_RIGHTS), `terminal/pty.rs` (FFI), and `core/grid/cell.rs` (if needed). Every `unsafe` block needs a `// SAFETY:` comment.
+- **Error handling:** Never `.unwrap()` or `.expect()` in library code. Use `thiserror` error enums. Server event loop catches errors at command boundaries — never panic. Tests/benchmarks may `.unwrap()`.
+- **Testing:** `proptest` for property-based testing of data structures. Integration tests verify behavior against real tmux. Snapshot tests capture screen state after command sequences.
+- **Benchmarks:** Mandatory for hot paths (grid, parsing, rendering, format expansion). Use criterion with real-world data. No benchmark-specific code paths. Include correctness assertions.
+- **Style:** Functions under 50 lines. Prefer explicit types over `impl Trait` in public APIs.
+- **Architecture:** Trait boundaries at module edges for testability. No global mutable state — pass state explicitly.
 - **Commits:** Format `component: description` (e.g., `core/grid: implement scroll_up`). One logical change per commit.
