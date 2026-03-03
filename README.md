@@ -29,9 +29,11 @@ Key bindings work like tmux: `Ctrl-b` is the prefix key.
 | `Ctrl-b 0-9` | Select window by number |
 | `Ctrl-b d` | Detach |
 | `Ctrl-b "` / `%` | Split pane horizontal / vertical |
+| `Ctrl-b o` | Cycle panes |
 | `Ctrl-b x` | Kill pane |
 | `Ctrl-b :` | Command prompt |
-| `Ctrl-b [` | Copy mode (vi keys) |
+| `Ctrl-b [` | Copy mode |
+| `Ctrl-b ]` | Paste buffer |
 
 ## Build
 
@@ -41,6 +43,7 @@ cargo build --release                              # Release build
 cargo test                                         # Run all tests
 cargo clippy --all-targets --all-features          # Lint
 cargo bench -p rmux-core                           # Benchmarks
+make e2e                                           # E2E tests (requires tmux)
 ```
 
 ## Architecture
@@ -54,6 +57,12 @@ rmux-client     CLI, server auto-start, attached mode I/O
 ```
 
 Client and server communicate over a Unix domain socket at `$TMPDIR/rmux-$UID/default`.
+
+## Testing
+
+Unit and integration tests run via `cargo test` (433 tests across all crates). Command integration tests use a `MockCommandServer` to verify behavior without I/O.
+
+E2E tests (`make e2e`) launch rmux inside a real tmux session and exercise the full stack — pane splitting, copy mode, window management, non-attached client commands, detach/reattach, and more. The harness in `scripts/test-harness.sh` provides helpers for sending keys, capturing screen output, and running non-attached rmux commands against the test instance.
 
 ## License
 

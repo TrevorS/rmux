@@ -1,4 +1,4 @@
-.PHONY: help build release test lint fmt check install clean fuzz
+.PHONY: help build release test lint fmt check install clean fuzz e2e
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ install: ## Install client and server binaries
 
 clean: ## Remove build artifacts
 	cargo clean
+
+e2e: build ## Run E2E tests (requires tmux)
+	bash scripts/e2e-test.sh
 
 fuzz: ## Run all fuzz targets briefly (requires nightly)
 	@for target in $$(cd fuzz && cargo +nightly fuzz list 2>/dev/null); do \

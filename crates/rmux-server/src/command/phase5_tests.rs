@@ -619,8 +619,8 @@ mod key_table_tests {
         let mut kb = KeyBindings::default_bindings();
 
         // Prefix+[ should enter copy mode
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"[");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"[");
         match result {
             Some(crate::keybind::KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["copy-mode"]);
@@ -629,8 +629,8 @@ mod key_table_tests {
         }
 
         // Prefix+] should paste buffer
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"]");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"]");
         match result {
             Some(crate::keybind::KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["paste-buffer"]);
@@ -2065,28 +2065,28 @@ mod key_input_tests {
     #[test]
     fn normal_char_passes_through() {
         let mut kb = KeyBindings::default_bindings();
-        assert!(kb.process_input(b"a").is_none());
-        assert!(kb.process_input(b"z").is_none());
-        assert!(kb.process_input(b"1").is_none());
+        assert!(kb.process_input(b"a").0.is_none());
+        assert!(kb.process_input(b"z").0.is_none());
+        assert!(kb.process_input(b"1").0.is_none());
     }
 
     #[test]
     fn prefix_then_unknown_key_ignored() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02"); // Prefix
-        let result = kb.process_input(b"@"); // Not bound
+        let _ = kb.process_input(b"\x02"); // Prefix
+        let (result, _) = kb.process_input(b"@"); // Not bound
         assert!(result.is_none());
         // Prefix should be cleared after processing a key
         // Verify by sending another key that is not prefix - should pass through
-        let result2 = kb.process_input(b"a");
+        let (result2, _) = kb.process_input(b"a");
         assert!(result2.is_none()); // Not in prefix mode anymore
     }
 
     #[test]
     fn double_prefix_sends_ctrl_b() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02"); // First prefix
-        let result = kb.process_input(b"\x02"); // Second prefix
+        let _ = kb.process_input(b"\x02"); // First prefix
+        let (result, _) = kb.process_input(b"\x02"); // Second prefix
         match result {
             Some(KeyAction::SendToPane(data)) => {
                 assert_eq!(data, vec![0x02]);
@@ -2099,8 +2099,8 @@ mod key_input_tests {
     fn prefix_window_number_keys() {
         let mut kb = KeyBindings::default_bindings();
         for i in 0u8..=9 {
-            kb.process_input(b"\x02");
-            let result = kb.process_input(&[b'0' + i]);
+            let _ = kb.process_input(b"\x02");
+            let (result, _) = kb.process_input(&[b'0' + i]);
             match result {
                 Some(KeyAction::Command(argv)) => {
                     assert_eq!(argv[0], "select-window");
@@ -2114,8 +2114,8 @@ mod key_input_tests {
     #[test]
     fn prefix_c_creates_window() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        match kb.process_input(b"c") {
+        let _ = kb.process_input(b"\x02");
+        match kb.process_input(b"c").0 {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["new-window"]);
             }
@@ -2126,8 +2126,8 @@ mod key_input_tests {
     #[test]
     fn prefix_x_kills_pane() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        match kb.process_input(b"x") {
+        let _ = kb.process_input(b"\x02");
+        match kb.process_input(b"x").0 {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["kill-pane"]);
             }
@@ -2138,8 +2138,8 @@ mod key_input_tests {
     #[test]
     fn prefix_colon_command_prompt() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        match kb.process_input(b":") {
+        let _ = kb.process_input(b"\x02");
+        match kb.process_input(b":").0 {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["command-prompt"]);
             }

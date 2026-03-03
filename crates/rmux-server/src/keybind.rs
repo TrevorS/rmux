@@ -8,6 +8,7 @@ use rmux_terminal::keys::parse_key;
 use std::collections::HashMap;
 
 /// Action to take for a key binding.
+#[derive(Debug)]
 pub enum KeyAction {
     /// Send raw bytes to the active pane's PTY.
     SendToPane(Vec<u8>),
@@ -100,16 +101,18 @@ impl KeyBindings {
 
     /// Process input bytes and return the action to take.
     ///
-    /// Returns `Some(action)` if the input was handled,
-    /// `None` if the input should be passed through to the pane.
-    pub fn process_input(&mut self, data: &[u8]) -> Option<KeyAction> {
+    /// Returns `(Some(action), consumed)` if the input was handled by the
+    /// keybinding system, or `(None, consumed)` if the bytes should be passed
+    /// through to the pane. The caller must advance by `consumed` bytes and
+    /// call again for the remainder of the buffer.
+    pub fn process_input(&mut self, data: &[u8]) -> (Option<KeyAction>, usize) {
         // Parse the input into a key code
-        let Some((key, _consumed)) = parse_key(data) else {
+        let Some((key, consumed)) = parse_key(data) else {
             if self.in_prefix {
                 self.in_prefix = false;
-                return None;
             }
-            return None;
+            // Can't parse — consume 1 byte to avoid infinite loop
+            return (None, 1.min(data.len()));
         };
 
         if self.in_prefix {
@@ -118,17 +121,17 @@ impl KeyBindings {
             // Check if this key has a binding in the prefix table
             let base = keyc_base(key);
             if let Some(argv) = self.tables.get("prefix").and_then(|t| t.get(&base)) {
-                return Some(KeyAction::Command(argv.clone()));
+                return (Some(KeyAction::Command(argv.clone())), consumed);
             }
 
             // If the key after prefix is the prefix key itself, send the prefix key to the pane
             if key == self.prefix {
                 // Send Ctrl-b to the pane
-                return Some(KeyAction::SendToPane(vec![0x02]));
+                return (Some(KeyAction::SendToPane(vec![0x02])), consumed);
             }
 
             // Unknown binding, ignore
-            return None;
+            return (None, consumed);
         }
 
         // Check root table bindings (no prefix needed)
@@ -136,17 +139,17 @@ impl KeyBindings {
         if let Some(argv) =
             self.tables.get("root").and_then(|t| t.get(&base).or_else(|| t.get(&key)))
         {
-            return Some(KeyAction::Command(argv.clone()));
+            return (Some(KeyAction::Command(argv.clone())), consumed);
         }
 
         // Check if this is the prefix key
         if key == self.prefix {
             self.in_prefix = true;
-            return Some(KeyAction::SendToPane(Vec::new())); // Consume the prefix key
+            return (Some(KeyAction::SendToPane(Vec::new())), consumed); // Consume the prefix key
         }
 
         // Not handled - pass through to pane
-        None
+        (None, consumed)
     }
 
     /// List all key bindings as human-readable strings.
@@ -367,8 +370,9 @@ mod tests {
     fn prefix_key_detection() {
         let mut kb = KeyBindings::default_bindings();
         // Ctrl-b is 0x02
-        let result = kb.process_input(b"\x02");
+        let (result, consumed) = kb.process_input(b"\x02");
         assert!(result.is_some());
+        assert_eq!(consumed, 1);
         assert!(kb.in_prefix);
     }
 
@@ -376,11 +380,11 @@ mod tests {
     fn prefix_d_detaches() {
         let mut kb = KeyBindings::default_bindings();
         // Send prefix
-        kb.process_input(b"\x02");
+        let _ = kb.process_input(b"\x02");
         assert!(kb.in_prefix);
 
         // Send 'd'
-        let result = kb.process_input(b"d");
+        let (result, _) = kb.process_input(b"d");
         assert!(!kb.in_prefix);
         match result {
             Some(KeyAction::Command(argv)) => {
@@ -393,8 +397,8 @@ mod tests {
     #[test]
     fn prefix_percent_splits_horizontal() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"%");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"%");
         match result {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["split-window", "-h"]);
@@ -406,8 +410,8 @@ mod tests {
     #[test]
     fn prefix_quote_splits_vertical() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"\"");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"\"");
         match result {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["split-window"]);
@@ -419,8 +423,8 @@ mod tests {
     #[test]
     fn prefix_n_next_window() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"n");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"n");
         match result {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["next-window"]);
@@ -432,8 +436,8 @@ mod tests {
     #[test]
     fn prefix_0_selects_window_0() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"0");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"0");
         match result {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["select-window", "-t", "0"]);
@@ -445,8 +449,9 @@ mod tests {
     #[test]
     fn normal_input_passes_through() {
         let mut kb = KeyBindings::default_bindings();
-        let result = kb.process_input(b"a");
+        let (result, consumed) = kb.process_input(b"a");
         assert!(result.is_none());
+        assert_eq!(consumed, 1);
     }
 
     #[test]
@@ -484,8 +489,8 @@ mod tests {
     #[test]
     fn prefix_bracket_enters_copy_mode() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"[");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"[");
         match result {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["copy-mode"]);
@@ -497,8 +502,8 @@ mod tests {
     #[test]
     fn prefix_close_bracket_pastes() {
         let mut kb = KeyBindings::default_bindings();
-        kb.process_input(b"\x02");
-        let result = kb.process_input(b"]");
+        let _ = kb.process_input(b"\x02");
+        let (result, _) = kb.process_input(b"]");
         match result {
             Some(KeyAction::Command(argv)) => {
                 assert_eq!(argv, vec!["paste-buffer"]);
@@ -586,5 +591,29 @@ mod tests {
         let kb = KeyBindings::default_bindings();
         let action = kb.lookup_in_table("nonexistent-table", b'a' as KeyCode);
         assert!(action.is_none());
+    }
+
+    #[test]
+    fn prefix_and_command_in_single_buffer() {
+        let mut kb = KeyBindings::default_bindings();
+
+        // Simulate \x02d arriving in one read (prefix + detach)
+        let data = b"\x02d";
+
+        // First call: consumes the prefix byte
+        let (action1, consumed1) = kb.process_input(data);
+        assert!(matches!(action1, Some(KeyAction::SendToPane(ref b)) if b.is_empty()));
+        assert_eq!(consumed1, 1);
+        assert!(kb.in_prefix);
+
+        // Second call on remaining bytes: processes 'd' as prefix command
+        let (action2, consumed2) = kb.process_input(&data[consumed1..]);
+        assert_eq!(consumed2, 1);
+        match action2 {
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["detach-client"]);
+            }
+            _ => panic!("expected Command(detach-client), got {action2:?}"),
+        }
     }
 }

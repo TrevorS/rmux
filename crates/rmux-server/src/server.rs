@@ -467,21 +467,28 @@ impl Server {
             return;
         }
 
-        // Normal mode: check for prefix key
-        if let Some(key_data) = self.keybindings.process_input(data) {
-            match key_data {
-                crate::keybind::KeyAction::SendToPane(bytes) => {
+        // Normal mode: process all keys in the buffer. A single read may
+        // contain multiple keys (e.g. prefix + command arriving together),
+        // so we loop until the buffer is consumed.
+        let mut offset = 0;
+        while offset < data.len() {
+            let remaining = &data[offset..];
+            let (action, consumed) = self.keybindings.process_input(remaining);
+            match action {
+                Some(crate::keybind::KeyAction::SendToPane(bytes)) => {
                     if !bytes.is_empty() {
                         self.write_to_active_pane(session_id, &bytes);
                     }
                 }
-                crate::keybind::KeyAction::Command(argv) => {
+                Some(crate::keybind::KeyAction::Command(argv)) => {
                     self.queue_command(client_id, argv);
                 }
+                None => {
+                    // Pass through to pane
+                    self.write_to_active_pane(session_id, &remaining[..consumed]);
+                }
             }
-        } else {
-            // No prefix handling, send directly to pane
-            self.write_to_active_pane(session_id, data);
+            offset += consumed;
         }
     }
 

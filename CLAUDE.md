@@ -16,6 +16,7 @@ cargo test -p rmux-server -- test_name   # Run a single test
 cargo fmt --check                        # Check formatting
 cargo clippy --all-targets --all-features  # Lint (zero warnings required)
 cargo bench -p rmux-core                 # Run benchmarks for a crate
+make e2e                                 # Run E2E tests (requires tmux)
 
 # Fuzzing (requires nightly) — 7 targets in fuzz/fuzz_targets/
 cd fuzz && cargo +nightly fuzz run fuzz_input_parser
@@ -65,7 +66,7 @@ rmux-client     CLI parsing (tmux-compatible flags), server auto-start, attached
 
 **Target resolution** (`-t` flag). Targets use tmux syntax: `session:window.pane`. Bare numbers are window indices (use current session), not session names. The `resolve_session`/`resolve_window_idx` helpers in `command/builtins/window.rs` handle this.
 
-**Tests** are inline `#[cfg(test)]` modules. Command integration tests live in `command/phase4_tests.rs` and `phase5_tests.rs` using mock helpers from `command/test_helpers.rs`.
+**Tests** are inline `#[cfg(test)]` modules. Command integration tests live in `command/phase4_tests.rs` and `phase5_tests.rs` using mock helpers from `command/test_helpers.rs`. E2E tests (`scripts/e2e-test.sh`) launch rmux inside a real tmux session via the harness (`scripts/test-harness.sh`) — use `harness_rmux` for non-attached commands and `harness_prefix` for keybind tests.
 
 ## Code Standards
 
