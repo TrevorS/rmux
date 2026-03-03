@@ -3,11 +3,12 @@
 //! These benchmarks measure the hot-path operations on the grid:
 //! cell read/write, scroll, history management.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rmux_core::grid::Grid;
 use rmux_core::grid::cell::{CellFlags, GridCell};
 use rmux_core::style::{Attrs, Color, Style};
 use rmux_core::utf8::Utf8Char;
+use std::hint::black_box;
 
 fn make_ascii_cell(ch: u8) -> GridCell {
     GridCell {

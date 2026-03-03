@@ -2,11 +2,12 @@
 //!
 //! Measures the performance of rendering windows with various pane configurations.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rmux_core::layout::{LayoutCell, LayoutType, layout_even_horizontal};
 use rmux_server::pane::Pane;
 use rmux_server::render::{WindowInfo, render_window};
 use rmux_server::window::Window;
+use std::hint::black_box;
 
 /// Create a window with a single pane of the given dimensions.
 fn make_single_pane_window(sx: u32, sy: u32) -> Window {

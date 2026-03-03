@@ -3,9 +3,10 @@
 //! Measures the performance of encoding and decoding protocol messages.
 
 use bytes::BytesMut;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rmux_protocol::codec::{decode_message, encode_message};
 use rmux_protocol::message::{Message, MsgCommand, PROTOCOL_VERSION};
+use std::hint::black_box;
 
 fn make_test_messages() -> Vec<(&'static str, Message)> {
     vec![

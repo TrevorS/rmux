@@ -1,12 +1,13 @@
 //! Screen diff benchmarks.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rmux_core::grid::cell::{CellFlags, GridCell};
 use rmux_core::screen::Screen;
 use rmux_core::style::Style;
 use rmux_core::utf8::Utf8Char;
 use rmux_terminal::output::diff::diff_screens;
 use rmux_terminal::output::writer::TermWriter;
+use std::hint::black_box;
 
 fn make_screen_with_content(width: u32, height: u32, ch: u8) -> Screen {
     let mut screen = Screen::new(width, height, 0);

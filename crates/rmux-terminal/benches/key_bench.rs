@@ -3,8 +3,9 @@
 //! Measures the performance of parsing raw byte sequences into key codes
 //! and converting key names back to byte sequences.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rmux_terminal::keys::{key_name_to_bytes, parse_key_event};
+use std::hint::black_box;
 
 fn bench_parse_ascii(c: &mut Criterion) {
     c.bench_function("parse_key_event_ascii", |b| {

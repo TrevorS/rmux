@@ -1,7 +1,8 @@
 //! UTF-8 character processing benchmarks.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rmux_core::utf8::Utf8Char;
+use std::hint::black_box;
 
 fn bench_from_ascii(c: &mut Criterion) {
     c.bench_function("utf8_from_ascii", |b| {

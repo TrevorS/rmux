@@ -3,9 +3,10 @@
 //! Measures throughput for various types of terminal output:
 //! pure ASCII, colored text, escape-heavy output.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rmux_core::screen::Screen;
 use rmux_terminal::input::InputParser;
+use std::hint::black_box;
 
 fn make_ascii_data(size: usize) -> Vec<u8> {
     let line: Vec<u8> = (b'!'..=b'~')

@@ -190,9 +190,12 @@ impl Pty {
 /// Set a file descriptor to non-blocking mode.
 pub fn set_nonblocking(fd: i32) -> Result<(), PtyError> {
     use nix::fcntl::{FcntlArg, OFlag, fcntl};
-    let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(PtyError::Create)?;
+    use std::os::fd::BorrowedFd;
+    // SAFETY: Caller guarantees fd is a valid, open file descriptor.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    let flags = fcntl(borrowed, FcntlArg::F_GETFL).map_err(PtyError::Create)?;
     let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-    fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(PtyError::Create)?;
+    fcntl(borrowed, FcntlArg::F_SETFL(flags)).map_err(PtyError::Create)?;
     Ok(())
 }
 
@@ -235,7 +238,7 @@ mod tests {
 
         // Read output from PTY master
         let mut buf = [0u8; 256];
-        let n = nix::unistd::read(spawned.master.as_raw_fd(), &mut buf);
+        let n = nix::unistd::read(&spawned.master, &mut buf);
         assert!(n.is_ok(), "read failed: {n:?}");
 
         // Wait for child to finish

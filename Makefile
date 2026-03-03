@@ -1,4 +1,4 @@
-.PHONY: help build release test lint fmt check install clean fuzz e2e
+.PHONY: help build release test bench lint fmt check install clean fuzz e2e
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ check: fmt lint test ## Format, lint, and test (pre-commit)
 install: ## Install client and server binaries
 	cargo install --path crates/rmux-client
 	cargo install --path crates/rmux-server
+
+bench: ## Run all benchmarks
+	cargo bench
 
 clean: ## Remove build artifacts
 	cargo clean

@@ -1,7 +1,8 @@
 //! Layout calculation benchmarks.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rmux_core::layout::{LayoutCell, layout_even_horizontal, layout_even_vertical};
+use std::hint::black_box;
 
 fn bench_even_horizontal(c: &mut Criterion) {
     let mut group = c.benchmark_group("layout_even_horizontal");
