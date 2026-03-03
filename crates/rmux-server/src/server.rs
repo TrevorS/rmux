@@ -871,77 +871,89 @@ impl Server {
 
     /// Handle input when the client is in command prompt mode.
     fn handle_prompt_input(&mut self, client_id: u64, data: &[u8]) {
-        use rmux_terminal::keys::parse_key;
+        let mut offset = 0;
+        while offset < data.len() {
+            let remaining = &data[offset..];
 
-        let Some((key, _)) = parse_key(data) else {
-            return;
-        };
-
-        let base = rmux_core::key::keyc_base(key);
-
-        // Handle special keys
-        if base == rmux_core::key::KEYC_RETURN {
-            // Execute the prompt buffer as a command
-            let cmd_str = {
-                let Some(client) = self.clients.get_mut(&client_id) else {
-                    return;
-                };
-                let cmd = client.prompt.as_ref().map(|p| p.buffer.clone()).unwrap_or_default();
-                client.prompt = None;
-                cmd
-            };
-            if !cmd_str.is_empty() {
-                // Parse and execute the command
-                let argv: Vec<String> = cmd_str.split_whitespace().map(String::from).collect();
-                self.queue_command(client_id, argv);
-            }
-            let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
-            if let Some(sid) = session_id {
-                self.mark_clients_redraw(sid);
-            }
-            return;
-        }
-
-        if base == rmux_core::key::KEYC_ESCAPE {
-            // Cancel prompt
-            if let Some(client) = self.clients.get_mut(&client_id) {
-                client.prompt = None;
-            }
-            let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
-            if let Some(sid) = session_id {
-                self.mark_clients_redraw(sid);
-            }
-            return;
-        }
-
-        if base == rmux_core::key::KEYC_BACKSPACE {
-            // Delete last character
-            if let Some(client) = self.clients.get_mut(&client_id) {
-                if let Some(prompt) = &mut client.prompt {
-                    prompt.buffer.pop();
-                }
-            }
-            let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
-            if let Some(sid) = session_id {
-                self.mark_clients_redraw(sid);
-            }
-            return;
-        }
-
-        // Printable character: append to buffer
-        if base < 128 {
-            let ch = base as u8;
-            if ch.is_ascii_graphic() || ch == b' ' {
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    if let Some(prompt) = &mut client.prompt {
-                        prompt.buffer.push(ch as char);
+            // Handle raw bytes directly for control chars that parse_key
+            // encodes as Ctrl+letter (losing the original semantic).
+            match remaining[0] {
+                // Enter (\r or \n) — parse_key maps these to Ctrl-M / Ctrl-J
+                0x0D | 0x0A => {
+                    let cmd_str = {
+                        let Some(client) = self.clients.get_mut(&client_id) else {
+                            return;
+                        };
+                        let cmd =
+                            client.prompt.as_ref().map(|p| p.buffer.clone()).unwrap_or_default();
+                        client.prompt = None;
+                        cmd
+                    };
+                    if !cmd_str.is_empty() {
+                        let argv: Vec<String> =
+                            cmd_str.split_whitespace().map(String::from).collect();
+                        self.queue_command(client_id, argv);
                     }
+                    self.mark_prompt_redraw(client_id);
+                    return; // Enter always ends prompt input
                 }
-                let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
-                if let Some(sid) = session_id {
-                    self.mark_clients_redraw(sid);
+                // Escape — parse_key returns None for bare ESC (wants more bytes)
+                0x1B if remaining.len() == 1 || remaining[1] == 0x1B => {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.prompt = None;
+                    }
+                    self.mark_prompt_redraw(client_id);
+                    return; // Escape always ends prompt input
+                }
+                // Backspace (DEL) or Ctrl-H
+                0x7F | 0x08 => {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        if let Some(prompt) = &mut client.prompt {
+                            prompt.buffer.pop();
+                        }
+                    }
+                    self.mark_prompt_redraw(client_id);
+                    offset += 1;
+                }
+                // Ctrl-U — clear the line
+                0x15 => {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        if let Some(prompt) = &mut client.prompt {
+                            prompt.buffer.clear();
+                        }
+                    }
+                    self.mark_prompt_redraw(client_id);
+                    offset += 1;
+                }
+                // Printable ASCII
+                0x20..=0x7E => {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        if let Some(prompt) = &mut client.prompt {
+                            prompt.buffer.push(remaining[0] as char);
+                        }
+                    }
+                    self.mark_prompt_redraw(client_id);
+                    offset += 1;
+                }
+                // ESC sequence (not bare ESC) — skip it, not meaningful in prompt
+                0x1B => {
+                    // Consume the escape sequence so we don't get stuck
+                    let (_, consumed) = rmux_terminal::keys::parse_key(remaining)
+                        .unwrap_or((rmux_core::key::KEYC_UNKNOWN, 1));
+                    offset += consumed;
+                }
+                // Other control chars — ignore
+                _ => {
+                    offset += 1;
                 }
             }
+        }
+    }
+
+    fn mark_prompt_redraw(&mut self, client_id: u64) {
+        let session_id = self.clients.get(&client_id).and_then(|c| c.session_id);
+        if let Some(sid) = session_id {
+            self.mark_clients_redraw(sid);
         }
     }
 

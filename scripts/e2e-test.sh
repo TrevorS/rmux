@@ -147,7 +147,7 @@ test_copy_mode() {
     harness_assert_not 'Copy mode' "Copy mode indicator should disappear after C-g"
 }
 
-test_command_prompt() {
+test_command_prompt_cancel() {
     harness_start
     # C-b : opens command prompt
     harness_prefix ':'
@@ -162,6 +162,30 @@ test_command_prompt() {
 
     harness_wait_for '\[0\]' 5
     harness_assert '\[0\]' "Status bar should return after prompt is cancelled"
+}
+
+test_command_prompt_execute() {
+    harness_start
+    # C-b : opens command prompt, then type a command and press Enter
+    harness_prefix ':'
+    sleep 0.3
+    harness_assert ':' "Command prompt ':' should appear"
+
+    # Type "new-window" and press Enter to create a new window
+    harness_send "new-window" Enter
+    harness_wait_for '1:.*\*' 5
+    harness_assert '1:.*\*' "new-window via command prompt should create window 1"
+}
+
+test_command_prompt_backspace() {
+    harness_start
+    harness_prefix ':'
+    sleep 0.3
+
+    # Type "xxx", backspace 3 times, then type the real command
+    harness_send "xxx" BSpace BSpace BSpace "new-window" Enter
+    harness_wait_for '1:.*\*' 5
+    harness_assert '1:.*\*' "Backspace in prompt should erase chars before executing"
 }
 
 test_non_attached_list_sessions() {
@@ -353,7 +377,9 @@ run_test test_split_vertical
 run_test test_split_horizontal
 run_test test_pane_navigation
 run_test test_copy_mode
-run_test test_command_prompt
+run_test test_command_prompt_cancel
+run_test test_command_prompt_execute
+run_test test_command_prompt_backspace
 run_test test_non_attached_list_sessions
 run_test test_non_attached_send_keys
 run_test test_reattach_after_detach
