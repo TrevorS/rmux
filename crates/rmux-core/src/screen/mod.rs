@@ -22,6 +22,12 @@ pub enum Notification {
     SetBackgroundColor(String),
     /// OSC 112: Reset cursor color.
     ResetCursorColor,
+    /// OSC 104: Reset palette color (index, or all if None).
+    ResetPaletteColor(Option<u8>),
+    /// OSC 110: Reset foreground color.
+    ResetForegroundColor,
+    /// OSC 111: Reset background color.
+    ResetBackgroundColor,
 }
 
 bitflags! {
@@ -56,6 +62,8 @@ bitflags! {
         const CURSOR_VISIBLE  = 0x1000;
         /// Origin mode (DECOM).
         const ORIGIN          = 0x2000;
+        /// Synchronized output (DEC private mode 2026).
+        const SYNC_OUTPUT     = 0x4000;
     }
 }
 
@@ -198,6 +206,21 @@ impl Screen {
         }
     }
 
+    /// Begin synchronized output (DEC private mode 2026).
+    ///
+    /// While active, the server should defer rendering until
+    /// `end_sync_update()` is called.
+    pub fn begin_sync_update(&mut self) {
+        self.mode.insert(ModeFlags::SYNC_OUTPUT);
+    }
+
+    /// End synchronized output (DEC private mode 2026).
+    ///
+    /// Signals that the server should flush any deferred rendering.
+    pub fn end_sync_update(&mut self) {
+        self.mode.remove(ModeFlags::SYNC_OUTPUT);
+    }
+
     /// Resize the screen.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.grid.resize(width, height);
@@ -218,6 +241,19 @@ impl Screen {
         let height = self.height();
         let limit = self.grid.history_limit();
         *self = Self::new(width, height, limit);
+    }
+
+    /// Soft terminal reset (DECSTR, CSI ! p).
+    ///
+    /// Resets cursor, modes, and scroll region without clearing the screen.
+    pub fn soft_reset(&mut self) {
+        use cursor::CursorStyle;
+
+        self.cursor = Cursor::default();
+        self.saved_cursor = None;
+        self.scroll_region = ScrollRegion::full(self.height());
+        self.mode = self.default_mode;
+        self.cursor.cursor_style = CursorStyle::Default;
     }
 
     /// Drain all pending notifications.

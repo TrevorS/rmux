@@ -1,6 +1,6 @@
-//! Client commands: attach-session, detach-client, switch-client, refresh-client.
+//! Client commands: attach-session, detach-client, switch-client, refresh-client, suspend-client.
 
-use crate::command::{CommandResult, CommandServer, get_option};
+use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::server::ServerError;
 
 /// attach-session [-t target-session]
@@ -49,11 +49,47 @@ pub fn cmd_detach_client(
     Ok(CommandResult::Detach)
 }
 
-/// switch-client [-t target-session]
+/// switch-client [-t target-session] [-n] [-p]
 pub fn cmd_switch_client(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let next = has_flag(args, "-n");
+    let prev = has_flag(args, "-p");
+
+    if next || prev {
+        // Switch to next/previous session
+        let sessions = server.list_sessions();
+        if sessions.is_empty() {
+            return Err(ServerError::Command("no sessions".into()));
+        }
+
+        let current_id = server.client_session_id();
+        let session_ids: Vec<u32> = sessions
+            .iter()
+            .filter_map(|s| {
+                let name = s.split(':').next().unwrap_or("");
+                server.find_session_id(name)
+            })
+            .collect();
+
+        if session_ids.is_empty() {
+            return Err(ServerError::Command("no sessions".into()));
+        }
+
+        let current_pos =
+            current_id.and_then(|id| session_ids.iter().position(|&sid| sid == id)).unwrap_or(0);
+
+        let new_pos = if next {
+            (current_pos + 1) % session_ids.len()
+        } else {
+            (current_pos + session_ids.len() - 1) % session_ids.len()
+        };
+
+        server.switch_client(session_ids[new_pos])?;
+        return Ok(CommandResult::Ok);
+    }
+
     let target = get_option(args, "-t")
         .ok_or_else(|| ServerError::Command("switch-client: missing -t target".into()))?;
 
@@ -73,5 +109,19 @@ pub fn cmd_refresh_client(
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
     server.refresh_client();
+    Ok(CommandResult::Ok)
+}
+
+/// suspend-client [-t target-client]
+///
+/// Suspend the client by sending SIGTSTP to itself.
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_suspend_client(
+    args: &[String],
+    _server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    // In tmux, this sends SIGTSTP to the client process.
+    // We acknowledge the command but the actual signal would need client-side support.
     Ok(CommandResult::Ok)
 }

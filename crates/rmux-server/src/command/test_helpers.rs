@@ -1402,4 +1402,8 @@ impl CommandServer for MockCommandServer {
     fn mark_clients_redraw(&mut self, session_id: u32) {
         self.redraw_sessions.push(session_id);
     }
+
+    fn pipe_pane(&mut self, _command: Option<&str>) -> Result<(), ServerError> {
+        Ok(())
+    }
 }

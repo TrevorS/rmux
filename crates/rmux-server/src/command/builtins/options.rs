@@ -81,6 +81,26 @@ pub fn cmd_set_option(
     Ok(CommandResult::Ok)
 }
 
+/// set-window-option: wrapper that injects `-w` and delegates to `cmd_set_option`.
+pub fn cmd_set_window_option(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let mut new_args = vec!["-w".to_string()];
+    new_args.extend_from_slice(args);
+    cmd_set_option(&new_args, server)
+}
+
+/// show-window-options: wrapper that injects `-w` and delegates to `cmd_show_options`.
+pub fn cmd_show_window_options(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let mut new_args = vec!["-w".to_string()];
+    new_args.extend_from_slice(args);
+    cmd_show_options(&new_args, server)
+}
+
 /// show-options [-g] [-s] [-w] [-t target] [option-name]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_show_options(

@@ -41,13 +41,16 @@ impl Utf8Char {
         width: 1,
     };
 
-    /// Create from a single ASCII byte. Panics if byte is not ASCII printable.
+    /// Create from a single byte, assumed to be ASCII.
+    ///
+    /// Non-ASCII bytes (≥0x80) are stored as-is with width 0 (non-printable).
+    /// This avoids panics when the VT100 parser encounters unexpected bytes.
     #[must_use]
     pub fn from_ascii(byte: u8) -> Self {
-        debug_assert!(byte.is_ascii(), "byte {byte:#x} is not ASCII");
         let mut data = [0u8; UTF8_MAX_BYTES];
         data[0] = byte;
-        Self { data, size: 1, width: if byte >= 0x20 && byte != 0x7f { 1 } else { 0 } }
+        let width = if (0x20..0x7f).contains(&byte) { 1 } else { 0 };
+        Self { data, size: 1, width }
     }
 
     /// Create from a Unicode character.

@@ -825,6 +825,199 @@ mod tests {
         assert!(cell_vert_fail.split_vertical(1).is_none());
     }
 
+    #[test]
+    fn main_horizontal_single_pane() {
+        let layout = layout_main_horizontal(80, 24, &[0]);
+        assert!(layout.is_pane());
+        assert_eq!(layout.pane_id, Some(0));
+    }
+
+    #[test]
+    fn main_horizontal_two_panes() {
+        let layout = layout_main_horizontal(80, 24, &[0, 1]);
+        assert_eq!(layout.cell_type, LayoutType::TopBottom);
+        assert_eq!(layout.pane_count(), 2);
+        let p0 = layout.find_pane(0).unwrap();
+        let p1 = layout.find_pane(1).unwrap();
+        // Main pane should be taller
+        assert!(p0.sy > p1.sy);
+        // Heights plus separator should equal total
+        assert_eq!(p0.sy + 1 + p1.sy, 24);
+    }
+
+    #[test]
+    fn main_horizontal_three_panes() {
+        let layout = layout_main_horizontal(80, 24, &[0, 1, 2]);
+        assert_eq!(layout.pane_count(), 3);
+        let p0 = layout.find_pane(0).unwrap();
+        // Main pane is on top
+        assert_eq!(p0.y_off, 0);
+        assert_eq!(p0.sx, 80);
+        // Bottom panes should be side by side
+        let p1 = layout.find_pane(1).unwrap();
+        let p2 = layout.find_pane(2).unwrap();
+        assert_eq!(p1.y_off, p2.y_off); // same row
+    }
+
+    #[test]
+    fn main_vertical_single_pane() {
+        let layout = layout_main_vertical(80, 24, &[0]);
+        assert!(layout.is_pane());
+    }
+
+    #[test]
+    fn main_vertical_two_panes() {
+        let layout = layout_main_vertical(80, 24, &[0, 1]);
+        assert_eq!(layout.cell_type, LayoutType::LeftRight);
+        assert_eq!(layout.pane_count(), 2);
+        let p0 = layout.find_pane(0).unwrap();
+        let p1 = layout.find_pane(1).unwrap();
+        // Main pane should be wider
+        assert!(p0.sx > p1.sx);
+        assert_eq!(p0.sx + 1 + p1.sx, 80);
+    }
+
+    #[test]
+    fn main_vertical_three_panes() {
+        let layout = layout_main_vertical(80, 24, &[0, 1, 2]);
+        assert_eq!(layout.pane_count(), 3);
+        let p0 = layout.find_pane(0).unwrap();
+        assert_eq!(p0.x_off, 0);
+        assert_eq!(p0.sy, 24);
+        // Right panes should be stacked vertically
+        let p1 = layout.find_pane(1).unwrap();
+        let p2 = layout.find_pane(2).unwrap();
+        assert_eq!(p1.x_off, p2.x_off); // same column
+        assert!(p1.y_off < p2.y_off); // p1 above p2
+    }
+
+    #[test]
+    fn tiled_single_pane() {
+        let layout = layout_tiled(80, 24, &[0]);
+        assert!(layout.is_pane());
+    }
+
+    #[test]
+    fn tiled_two_panes() {
+        let layout = layout_tiled(80, 24, &[0, 1]);
+        assert_eq!(layout.pane_count(), 2);
+        let ids = layout.pane_ids();
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+    }
+
+    #[test]
+    fn tiled_four_panes_grid() {
+        let layout = layout_tiled(80, 24, &[0, 1, 2, 3]);
+        assert_eq!(layout.pane_count(), 4);
+        // 4 panes should form a 2x2 grid
+        let p0 = layout.find_pane(0).unwrap();
+        let p3 = layout.find_pane(3).unwrap();
+        // Diagonal corners should differ in both x and y
+        assert!(p3.x_off > p0.x_off || p3.y_off > p0.y_off);
+    }
+
+    #[test]
+    fn tiled_five_panes() {
+        let layout = layout_tiled(80, 24, &[0, 1, 2, 3, 4]);
+        assert_eq!(layout.pane_count(), 5);
+    }
+
+    #[test]
+    fn resize_pane_horizontal() {
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell.split_horizontal(1);
+
+        let left_width_before = cell.children[0].sx;
+        let right_width_before = cell.children[1].sx;
+
+        // Resize pane 0 to the right (grow pane 0, shrink pane 1)
+        assert!(cell.resize_pane(0, ResizeDirection::Right, 5));
+
+        assert_eq!(cell.children[0].sx, left_width_before + 5);
+        assert_eq!(cell.children[1].sx, right_width_before - 5);
+    }
+
+    #[test]
+    fn resize_pane_vertical() {
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell.split_vertical(1);
+
+        let top_height_before = cell.children[0].sy;
+        let bottom_height_before = cell.children[1].sy;
+
+        assert!(cell.resize_pane(0, ResizeDirection::Down, 3));
+
+        assert_eq!(cell.children[0].sy, top_height_before + 3);
+        assert_eq!(cell.children[1].sy, bottom_height_before - 3);
+    }
+
+    #[test]
+    fn resize_pane_beyond_minimum_clamps() {
+        let mut cell = LayoutCell::new_pane(0, 0, 10, 24, 0);
+        cell.split_horizontal(1);
+
+        // Try to resize way beyond available space
+        let right_width = cell.children[1].sx;
+        assert!(cell.resize_pane(0, ResizeDirection::Right, 1000));
+        // Right pane should be at minimum width
+        assert_eq!(cell.children[1].sx, PANE_MINIMUM_WIDTH);
+        // Left pane gained what right pane lost
+        let gained = right_width - PANE_MINIMUM_WIDTH;
+        assert!(gained > 0);
+    }
+
+    #[test]
+    fn resize_pane_nonexistent_returns_false() {
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell.split_horizontal(1);
+        assert!(!cell.resize_pane(999, ResizeDirection::Right, 5));
+    }
+
+    #[test]
+    fn resize_pane_at_edge_returns_false() {
+        let mut cell = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        cell.split_horizontal(1);
+        // Pane 0 is the leftmost — can't resize left (no sibling to the left)
+        assert!(!cell.resize_pane(0, ResizeDirection::Left, 5));
+        // Pane 1 is the rightmost — can't resize right
+        assert!(!cell.resize_pane(1, ResizeDirection::Right, 5));
+    }
+
+    #[test]
+    fn resize_layout_proportional() {
+        let mut layout = layout_even_horizontal(80, 24, &[0, 1]);
+        let p0_width_before = layout.children[0].sx;
+        let p1_width_before = layout.children[1].sx;
+
+        // Resize the whole layout to 160 wide
+        layout.resize_layout(160, 24);
+
+        // Widths should roughly double (proportional)
+        assert!(layout.children[0].sx > p0_width_before);
+        assert!(layout.children[1].sx > p1_width_before);
+        // Total should equal new width (minus separator)
+        assert_eq!(layout.children[0].sx + 1 + layout.children[1].sx, 160);
+    }
+
+    #[test]
+    fn resize_layout_vertical() {
+        let mut layout = layout_even_vertical(80, 24, &[0, 1]);
+
+        layout.resize_layout(80, 48);
+
+        // Heights should roughly double
+        assert_eq!(layout.children[0].sy + 1 + layout.children[1].sy, 48);
+    }
+
+    #[test]
+    fn resize_layout_single_pane() {
+        let mut layout = LayoutCell::new_pane(0, 0, 80, 24, 0);
+        layout.resize_layout(160, 48);
+        assert_eq!(layout.sx, 160);
+        assert_eq!(layout.sy, 48);
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;

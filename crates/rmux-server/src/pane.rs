@@ -3,6 +3,8 @@
 use crate::copymode::CopyModeState;
 use rmux_core::screen::Screen;
 use rmux_terminal::input::InputParser;
+use std::io::Write as IoWrite;
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static NEXT_PANE_ID: AtomicU32 = AtomicU32::new(0);
@@ -32,6 +34,8 @@ pub struct Pane {
     pub dead: bool,
     /// Copy mode state (Some = pane is in copy mode).
     pub copy_mode: Option<CopyModeState>,
+    /// Child process for pipe-pane (piping PTY output to a shell command).
+    pub pipe_child: Option<Child>,
 }
 
 impl Pane {
@@ -56,6 +60,7 @@ impl Pane {
             yoff: 0,
             dead: false,
             copy_mode: None,
+            pipe_child: None,
         }
     }
 
@@ -87,6 +92,42 @@ impl Pane {
     /// Whether this pane is in copy mode.
     pub fn is_in_copy_mode(&self) -> bool {
         self.copy_mode.is_some()
+    }
+
+    /// Start piping PTY output to a shell command.
+    pub fn start_pipe(&mut self, command: &str) -> Result<(), std::io::Error> {
+        // Close any existing pipe
+        self.stop_pipe();
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        self.pipe_child = Some(child);
+        Ok(())
+    }
+
+    /// Stop piping (close the child's stdin and wait).
+    pub fn stop_pipe(&mut self) {
+        if let Some(mut child) = self.pipe_child.take() {
+            // Drop stdin to signal EOF to the child
+            drop(child.stdin.take());
+            child.wait().ok();
+        }
+    }
+
+    /// Feed data to the pipe child (if active).
+    pub fn pipe_output(&mut self, data: &[u8]) {
+        if let Some(ref mut child) = self.pipe_child {
+            if let Some(ref mut stdin) = child.stdin {
+                if stdin.write_all(data).is_err() {
+                    // Pipe broken — clean up
+                    self.pipe_child = None;
+                }
+            }
+        }
     }
 }
 
@@ -133,6 +174,54 @@ mod tests {
         assert!(!p.dead);
         p.dead = true;
         assert!(p.dead);
+    }
+
+    #[test]
+    fn with_id_constructor() {
+        let p = Pane::with_id(42, 80, 24, 1000);
+        assert_eq!(p.id, 42);
+        assert_eq!(p.sx, 80);
+        assert_eq!(p.sy, 24);
+        assert!(!p.dead);
+        assert!(p.copy_mode.is_none());
+        assert!(p.pipe_child.is_none());
+    }
+
+    #[test]
+    fn pipe_lifecycle() {
+        let mut p = Pane::new(80, 24, 0);
+        // Start piping to a simple command
+        assert!(p.start_pipe("cat > /dev/null").is_ok());
+        assert!(p.pipe_child.is_some());
+        // Feed some data
+        p.pipe_output(b"hello");
+        // Stop piping
+        p.stop_pipe();
+        assert!(p.pipe_child.is_none());
+    }
+
+    #[test]
+    fn pipe_output_no_pipe_noop() {
+        let mut p = Pane::new(80, 24, 0);
+        // Should not panic when no pipe is active
+        p.pipe_output(b"hello");
+    }
+
+    #[test]
+    fn stop_pipe_no_pipe_noop() {
+        let mut p = Pane::new(80, 24, 0);
+        p.stop_pipe();
+        assert!(p.pipe_child.is_none());
+    }
+
+    #[test]
+    fn start_pipe_replaces_existing() {
+        let mut p = Pane::new(80, 24, 0);
+        assert!(p.start_pipe("cat > /dev/null").is_ok());
+        // Starting a new pipe should stop the old one
+        assert!(p.start_pipe("cat > /dev/null").is_ok());
+        assert!(p.pipe_child.is_some());
+        p.stop_pipe();
     }
 
     #[test]

@@ -223,6 +223,9 @@ pub fn default_server_options() -> Options {
     opts.set("history-limit", OptionValue::Number(2000));
     opts.set("set-clipboard", OptionValue::String("external".into()));
     opts.set("terminal-overrides", OptionValue::Array(Vec::new()));
+    opts.set("default-terminal", OptionValue::String("screen".into()));
+    opts.set("message-limit", OptionValue::Number(1000));
+    opts.set("prefix-timeout", OptionValue::Number(0));
     opts
 }
 
@@ -244,6 +247,29 @@ pub fn default_session_options() -> Options {
     opts.set("status-position", OptionValue::String("bottom".into()));
     opts.set("window-status-format", OptionValue::String("#I:#W#F".into()));
     opts.set("window-status-current-format", OptionValue::String("#I:#W#F".into()));
+    opts.set("display-time", OptionValue::Number(750));
+    opts.set("repeat-time", OptionValue::Number(500));
+    opts.set("status-interval", OptionValue::Number(15));
+    opts.set("status-justify", OptionValue::String("left".into()));
+    opts.set("status-keys", OptionValue::String("emacs".into()));
+    opts.set("status-left-length", OptionValue::Number(10));
+    opts.set("status-right-length", OptionValue::Number(40));
+    opts.set("status-left-style", OptionValue::String("default".into()));
+    opts.set("status-right-style", OptionValue::String("default".into()));
+    opts.set("message-style", OptionValue::String("bg=yellow,fg=black".into()));
+    opts.set("message-command-style", OptionValue::String("bg=black,fg=yellow".into()));
+    opts.set("set-titles", OptionValue::Flag(false));
+    opts.set(
+        "set-titles-string",
+        OptionValue::String("#S:#I:#W - \"#T\" #{session_alerts}".into()),
+    );
+    opts.set("prefix2", OptionValue::String("None".into()));
+    opts.set("destroy-unattached", OptionValue::Flag(false));
+    opts.set("detach-on-destroy", OptionValue::String("on".into()));
+    opts.set("word-separators", OptionValue::String(" ".into()));
+    opts.set("visual-activity", OptionValue::String("off".into()));
+    opts.set("visual-bell", OptionValue::String("off".into()));
+    opts.set("visual-silence", OptionValue::String("off".into()));
     opts
 }
 
@@ -259,6 +285,27 @@ pub fn default_window_options() -> Options {
     opts.set("pane-border-style", OptionValue::String("default".into()));
     opts.set("pane-active-border-style", OptionValue::String("fg=green".into()));
     opts.set("remain-on-exit", OptionValue::Flag(false));
+    opts.set("alternate-screen", OptionValue::Flag(true));
+    opts.set("monitor-bell", OptionValue::Flag(true));
+    opts.set("monitor-silence", OptionValue::Number(0));
+    opts.set("synchronize-panes", OptionValue::Flag(false));
+    opts.set("wrap-search", OptionValue::Flag(true));
+    opts.set("pane-base-index", OptionValue::Number(0));
+    opts.set("main-pane-height", OptionValue::Number(24));
+    opts.set("main-pane-width", OptionValue::Number(80));
+    opts.set("window-status-style", OptionValue::String("default".into()));
+    opts.set("window-status-current-style", OptionValue::String("default".into()));
+    opts.set("window-status-last-style", OptionValue::String("default".into()));
+    opts.set("window-status-activity-style", OptionValue::String("reverse".into()));
+    opts.set("window-status-bell-style", OptionValue::String("reverse".into()));
+    opts.set("window-status-separator", OptionValue::String(" ".into()));
+    opts.set("window-active-style", OptionValue::String("default".into()));
+    opts.set("window-style", OptionValue::String("default".into()));
+    opts.set("allow-passthrough", OptionValue::Flag(false));
+    opts.set("xterm-keys", OptionValue::Flag(true));
+    opts.set("copy-mode-match-style", OptionValue::String("bg=cyan,fg=black".into()));
+    opts.set("copy-mode-current-match-style", OptionValue::String("bg=magenta,fg=black".into()));
+    opts.set("copy-mode-mark-style", OptionValue::String("bg=red,fg=black".into()));
     opts
 }
 

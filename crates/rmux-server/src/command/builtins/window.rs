@@ -256,6 +256,42 @@ pub fn cmd_respawn_window(
     Ok(CommandResult::Ok)
 }
 
+/// link-window [-s src-window] [-t dst-window]
+///
+/// Link a window from one session to another. Stub — full implementation
+/// requires shared window ownership model.
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_link_window(
+    args: &[String],
+    _server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    Err(ServerError::Command("link-window: not yet implemented".into()))
+}
+
+/// unlink-window [-t target-window]
+///
+/// Unlink a window from the current session. Stub.
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_unlink_window(
+    args: &[String],
+    _server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    Err(ServerError::Command("unlink-window: not yet implemented".into()))
+}
+
+/// move-pane [-s src-pane] [-t dst-pane]
+///
+/// Move a pane to a different window. Similar to join-pane.
+pub fn cmd_move_pane(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    // move-pane is equivalent to join-pane (moves pane between windows)
+    super::pane::cmd_join_pane(args, server)
+}
+
 /// Resolve the session ID from -t argument or current client session.
 ///
 /// Target format: `[session_name:]window_idx` or `session_name`.

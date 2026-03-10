@@ -48,8 +48,10 @@ pub struct CompactCell {
     pub bg: u8,
     /// Cell flags.
     pub flags: CellFlags,
+    /// High byte of attrs (bits 8-15, for DOUBLE_UNDERSCORE/OVERLINE).
+    pub attrs_hi: u8,
     /// Padding for alignment.
-    _pad: [u8; 2],
+    _pad: u8,
 }
 
 impl CompactCell {
@@ -60,7 +62,8 @@ impl CompactCell {
         fg: 8, // default
         bg: 8, // default
         flags: CellFlags::CLEARED,
-        _pad: [0; 2],
+        attrs_hi: 0,
+        _pad: 0,
     };
 
     /// Whether this cell uses extended storage.
@@ -154,7 +157,8 @@ impl GridCell {
                 fg: 0,
                 bg: 0,
                 flags: self.flags | CellFlags::EXTENDED,
-                _pad: [0; 2],
+                attrs_hi: 0,
+                _pad: 0,
             };
             let extended = ExtendedCell {
                 data: self.data,
@@ -184,13 +188,15 @@ impl GridCell {
                 Color::Rgb { .. } => unreachable!(),
             };
 
+            let attr_bits = self.style.attrs.bits();
             let compact = CompactCell {
                 data: byte,
-                attrs: self.style.attrs.bits() as u8,
+                attrs: attr_bits as u8,
                 fg,
                 bg,
                 flags,
-                _pad: [0; 2],
+                attrs_hi: (attr_bits >> 8) as u8,
+                _pad: 0,
             };
             (compact, None)
         }
@@ -216,7 +222,8 @@ impl GridCell {
             } else {
                 Color::Palette(compact.bg)
             };
-            let attrs = Attrs::from_bits_truncate(compact.attrs as u16);
+            let attrs =
+                Attrs::from_bits_truncate(compact.attrs as u16 | (compact.attrs_hi as u16) << 8);
 
             GridCell {
                 data: Utf8Char::from_ascii(compact.data),
@@ -413,6 +420,69 @@ mod tests {
         assert_eq!(cell.width(), 1);
         // Verify flags contain CLEARED.
         assert!(cell.flags.contains(CellFlags::CLEARED));
+    }
+
+    #[test]
+    fn pack_roundtrip_overline() {
+        let cell = GridCell {
+            data: Utf8Char::from_ascii(b'A'),
+            style: Style {
+                fg: Color::Default,
+                bg: Color::Default,
+                us: Color::Default,
+                attrs: Attrs::OVERLINE,
+            },
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        let (compact, ext) = cell.pack();
+        assert!(ext.is_none(), "overline should stay compact");
+        let unpacked = GridCell::unpack(&compact, None);
+        assert_eq!(unpacked.style.attrs, Attrs::OVERLINE);
+    }
+
+    #[test]
+    fn pack_roundtrip_double_underscore() {
+        let cell = GridCell {
+            data: Utf8Char::from_ascii(b'B'),
+            style: Style {
+                fg: Color::Default,
+                bg: Color::Default,
+                us: Color::Default,
+                attrs: Attrs::DOUBLE_UNDERSCORE,
+            },
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        let (compact, ext) = cell.pack();
+        assert!(ext.is_none(), "double underscore should stay compact");
+        let unpacked = GridCell::unpack(&compact, None);
+        assert_eq!(unpacked.style.attrs, Attrs::DOUBLE_UNDERSCORE);
+    }
+
+    #[test]
+    fn pack_roundtrip_all_attrs_combined() {
+        let all_attrs = Attrs::BOLD
+            | Attrs::UNDERSCORE
+            | Attrs::ITALICS
+            | Attrs::STRIKETHROUGH
+            | Attrs::DOUBLE_UNDERSCORE
+            | Attrs::OVERLINE;
+        let cell = GridCell {
+            data: Utf8Char::from_ascii(b'X'),
+            style: Style {
+                fg: Color::Default,
+                bg: Color::Default,
+                us: Color::Default,
+                attrs: all_attrs,
+            },
+            link: 0,
+            flags: CellFlags::empty(),
+        };
+        let (compact, ext) = cell.pack();
+        assert!(ext.is_none());
+        let unpacked = GridCell::unpack(&compact, None);
+        assert_eq!(unpacked.style.attrs, all_attrs);
     }
 
     #[test]

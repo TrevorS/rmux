@@ -107,8 +107,9 @@ impl GridLine {
 
     /// Clear cells from `start` to `end` (exclusive) with the given background color.
     pub fn clear_range(&mut self, start: u32, end: u32, bg: crate::style::Color) {
-        let start = start as usize;
-        let end = end.min(self.cells.len() as u32) as usize;
+        let len = self.cells.len() as u32;
+        let start = start.min(len) as usize;
+        let end = end.min(len) as usize;
 
         let mut cleared = CompactCell::CLEARED;
         if !bg.is_default() {

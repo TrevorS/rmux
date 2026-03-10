@@ -8,8 +8,13 @@ fuzz_target!(|data: &[u8]| {
         let (key, value) = if let Some(pos) = s.find('\0') {
             (&s[..pos], &s[pos + 1..])
         } else if s.len() >= 2 {
+            // Find a char-boundary-safe split point near the midpoint
             let mid = s.len() / 2;
-            (&s[..mid], &s[mid..])
+            let split = s.ceil_char_boundary(mid);
+            if split == 0 || split >= s.len() {
+                return;
+            }
+            (&s[..split], &s[split..])
         } else {
             return;
         };

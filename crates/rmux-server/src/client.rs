@@ -107,6 +107,84 @@ impl ClickState {
     }
 }
 
+/// Result of processing a single prompt input byte/sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptAction {
+    /// Submit the prompt (Enter was pressed).
+    Submit,
+    /// Cancel the prompt (Escape was pressed).
+    Cancel,
+    /// The prompt buffer was modified (needs redraw).
+    Changed,
+    /// The byte was consumed but no action needed.
+    Ignored,
+    /// Need more bytes (incomplete UTF-8 or escape sequence).
+    NeedMore,
+}
+
+/// Process prompt input bytes and return what action to take.
+///
+/// This is a pure function operating on `PromptState`, extracted from the server
+/// event loop for testability. Returns `(action, bytes_consumed)`.
+pub fn process_prompt_input(prompt: &mut PromptState, data: &[u8]) -> (PromptAction, usize) {
+    if data.is_empty() {
+        return (PromptAction::NeedMore, 0);
+    }
+
+    match data[0] {
+        // Enter
+        0x0D | 0x0A => (PromptAction::Submit, 1),
+        // Escape (bare or double)
+        0x1B if data.len() == 1 || data[1] == 0x1B => (PromptAction::Cancel, 1),
+        // Backspace / DEL
+        0x7F | 0x08 => {
+            prompt.buffer.pop();
+            (PromptAction::Changed, 1)
+        }
+        // Ctrl-U — clear line
+        0x15 => {
+            prompt.buffer.clear();
+            (PromptAction::Changed, 1)
+        }
+        // Printable ASCII
+        0x20..=0x7E => {
+            prompt.buffer.push(data[0] as char);
+            (PromptAction::Changed, 1)
+        }
+        // UTF-8 multi-byte
+        0xC2..=0xF4 => {
+            let utf8_len = match data[0] {
+                0xC2..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xF4 => 4,
+                _ => 1,
+            };
+            if data.len() < utf8_len {
+                return (PromptAction::NeedMore, 0);
+            }
+            if let Ok(s) = std::str::from_utf8(&data[..utf8_len]) {
+                if let Some(ch) = s.chars().next() {
+                    if !ch.is_control() {
+                        prompt.buffer.push(ch);
+                        return (PromptAction::Changed, utf8_len);
+                    }
+                }
+                (PromptAction::Ignored, utf8_len)
+            } else {
+                (PromptAction::Ignored, 1)
+            }
+        }
+        // ESC sequence (not bare)
+        0x1B => {
+            let (_, consumed) =
+                rmux_terminal::keys::parse_key(data).unwrap_or((rmux_core::key::KEYC_UNKNOWN, 1));
+            (PromptAction::Ignored, consumed)
+        }
+        // Other control chars
+        _ => (PromptAction::Ignored, 1),
+    }
+}
+
 impl ServerClient {
     /// Create a new client from a message writer.
     pub fn new(id: u64, writer: MessageWriter) -> Self {
@@ -176,6 +254,150 @@ impl ServerClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ============================================================
+    // Prompt input processing
+    // ============================================================
+
+    fn prompt_with(buf: &str) -> PromptState {
+        PromptState { buffer: buf.to_string(), ..PromptState::default() }
+    }
+
+    #[test]
+    fn prompt_enter_submits() {
+        let mut prompt = prompt_with("list-sessions");
+        let (action, consumed) = process_prompt_input(&mut prompt, b"\r");
+        assert_eq!(action, PromptAction::Submit);
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn prompt_newline_submits() {
+        let mut prompt = PromptState::default();
+        let (action, _) = process_prompt_input(&mut prompt, b"\n");
+        assert_eq!(action, PromptAction::Submit);
+    }
+
+    #[test]
+    fn prompt_escape_cancels() {
+        let mut prompt = prompt_with("partial");
+        let (action, _) = process_prompt_input(&mut prompt, b"\x1b");
+        assert_eq!(action, PromptAction::Cancel);
+    }
+
+    #[test]
+    fn prompt_double_escape_cancels() {
+        let mut prompt = PromptState::default();
+        let (action, _) = process_prompt_input(&mut prompt, b"\x1b\x1b");
+        assert_eq!(action, PromptAction::Cancel);
+    }
+
+    #[test]
+    fn prompt_printable_ascii() {
+        let mut prompt = PromptState::default();
+        let (action, consumed) = process_prompt_input(&mut prompt, b"a");
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(consumed, 1);
+        assert_eq!(prompt.buffer, "a");
+    }
+
+    #[test]
+    fn prompt_builds_string() {
+        let mut prompt = PromptState::default();
+        for ch in b"hello" {
+            process_prompt_input(&mut prompt, std::slice::from_ref(ch));
+        }
+        assert_eq!(prompt.buffer, "hello");
+    }
+
+    #[test]
+    fn prompt_backspace_deletes() {
+        let mut prompt = prompt_with("abc");
+        let (action, _) = process_prompt_input(&mut prompt, b"\x7f");
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(prompt.buffer, "ab");
+    }
+
+    #[test]
+    fn prompt_ctrl_h_deletes() {
+        let mut prompt = prompt_with("abc");
+        let (action, _) = process_prompt_input(&mut prompt, b"\x08");
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(prompt.buffer, "ab");
+    }
+
+    #[test]
+    fn prompt_backspace_empty_noop() {
+        let mut prompt = PromptState::default();
+        let (action, _) = process_prompt_input(&mut prompt, b"\x7f");
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(prompt.buffer, "");
+    }
+
+    #[test]
+    fn prompt_ctrl_u_clears() {
+        let mut prompt = prompt_with("some text");
+        let (action, _) = process_prompt_input(&mut prompt, b"\x15");
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(prompt.buffer, "");
+    }
+
+    #[test]
+    fn prompt_control_char_ignored() {
+        let mut prompt = PromptState::default();
+        let (action, consumed) = process_prompt_input(&mut prompt, b"\x01"); // Ctrl-A
+        assert_eq!(action, PromptAction::Ignored);
+        assert_eq!(consumed, 1);
+        assert_eq!(prompt.buffer, "");
+    }
+
+    #[test]
+    fn prompt_utf8_input() {
+        let mut prompt = PromptState::default();
+        let (action, consumed) = process_prompt_input(&mut prompt, "é".as_bytes());
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(consumed, 2);
+        assert_eq!(prompt.buffer, "é");
+    }
+
+    #[test]
+    fn prompt_utf8_cjk() {
+        let mut prompt = PromptState::default();
+        let (action, consumed) = process_prompt_input(&mut prompt, "世".as_bytes());
+        assert_eq!(action, PromptAction::Changed);
+        assert_eq!(consumed, 3);
+        assert_eq!(prompt.buffer, "世");
+    }
+
+    #[test]
+    fn prompt_incomplete_utf8_needs_more() {
+        let mut prompt = PromptState::default();
+        let (action, consumed) = process_prompt_input(&mut prompt, &[0xC3]); // Incomplete 2-byte
+        assert_eq!(action, PromptAction::NeedMore);
+        assert_eq!(consumed, 0);
+    }
+
+    #[test]
+    fn prompt_esc_sequence_ignored() {
+        let mut prompt = PromptState::default();
+        // CSI A (cursor up) — should be consumed and ignored in prompt
+        let (action, consumed) = process_prompt_input(&mut prompt, b"\x1b[A");
+        assert_eq!(action, PromptAction::Ignored);
+        assert!(consumed >= 3);
+        assert_eq!(prompt.buffer, "");
+    }
+
+    #[test]
+    fn prompt_empty_data_needs_more() {
+        let mut prompt = PromptState::default();
+        let (action, consumed) = process_prompt_input(&mut prompt, b"");
+        assert_eq!(action, PromptAction::NeedMore);
+        assert_eq!(consumed, 0);
+    }
+
+    // ============================================================
+    // Click state
+    // ============================================================
 
     #[test]
     fn click_state_single_click() {

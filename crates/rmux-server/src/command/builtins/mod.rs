@@ -195,6 +195,13 @@ pub static COMMANDS: &[CommandEntry] = &[
         usage: "[-T table]",
     },
     CommandEntry {
+        name: "show-messages",
+        min_args: 0,
+        handler: display::cmd_show_messages,
+        usage: "",
+    },
+    CommandEntry { name: "showmsgs", min_args: 0, handler: display::cmd_show_messages, usage: "" },
+    CommandEntry {
         name: "list-clients",
         min_args: 0,
         handler: display::cmd_list_clients,
@@ -207,6 +214,13 @@ pub static COMMANDS: &[CommandEntry] = &[
         handler: server_cmds::cmd_kill_server,
         usage: "",
     },
+    CommandEntry {
+        name: "start-server",
+        min_args: 0,
+        handler: server_cmds::cmd_start_server,
+        usage: "",
+    },
+    CommandEntry { name: "start", min_args: 0, handler: server_cmds::cmd_start_server, usage: "" },
     CommandEntry {
         name: "send-keys",
         min_args: 1,
@@ -237,6 +251,30 @@ pub static COMMANDS: &[CommandEntry] = &[
         min_args: 0,
         handler: options::cmd_show_options,
         usage: "[-g] [-w] [-t target] [option]",
+    },
+    CommandEntry {
+        name: "set-window-option",
+        min_args: 2,
+        handler: options::cmd_set_window_option,
+        usage: "[-g] [-t target] option value",
+    },
+    CommandEntry {
+        name: "setw",
+        min_args: 2,
+        handler: options::cmd_set_window_option,
+        usage: "[-g] [-t target] option value",
+    },
+    CommandEntry {
+        name: "show-window-options",
+        min_args: 0,
+        handler: options::cmd_show_window_options,
+        usage: "[-g] [-t target] [option]",
+    },
+    CommandEntry {
+        name: "showw",
+        min_args: 0,
+        handler: options::cmd_show_window_options,
+        usage: "[-g] [-t target] [option]",
     },
     // Key binding commands
     CommandEntry {
@@ -613,5 +651,219 @@ pub static COMMANDS: &[CommandEntry] = &[
         min_args: 0,
         handler: environment::cmd_show_environment,
         usage: "[-g] [-t target-session] [name]",
+    },
+    // Confirmation / synchronization
+    CommandEntry {
+        name: "confirm-before",
+        min_args: 1,
+        handler: server_cmds::cmd_confirm_before,
+        usage: "[-p prompt] command",
+    },
+    CommandEntry {
+        name: "confirm",
+        min_args: 1,
+        handler: server_cmds::cmd_confirm_before,
+        usage: "[-p prompt] command",
+    },
+    CommandEntry {
+        name: "wait-for",
+        min_args: 1,
+        handler: server_cmds::cmd_wait_for,
+        usage: "[-L|-U|-S] channel",
+    },
+    CommandEntry {
+        name: "wait",
+        min_args: 1,
+        handler: server_cmds::cmd_wait_for,
+        usage: "[-L|-U|-S] channel",
+    },
+    // Interactive display commands
+    CommandEntry {
+        name: "display-panes",
+        min_args: 0,
+        handler: display::cmd_display_panes,
+        usage: "[-d duration] [-t target-client]",
+    },
+    CommandEntry {
+        name: "displayp",
+        min_args: 0,
+        handler: display::cmd_display_panes,
+        usage: "[-d duration]",
+    },
+    CommandEntry {
+        name: "clock-mode",
+        min_args: 0,
+        handler: display::cmd_clock_mode,
+        usage: "[-t target-pane]",
+    },
+    CommandEntry {
+        name: "choose-tree",
+        min_args: 0,
+        handler: display::cmd_choose_tree,
+        usage: "[-t target-pane]",
+    },
+    CommandEntry {
+        name: "choose-buffer",
+        min_args: 0,
+        handler: display::cmd_choose_buffer,
+        usage: "[-t target-pane]",
+    },
+    CommandEntry {
+        name: "choose-client",
+        min_args: 0,
+        handler: display::cmd_choose_client,
+        usage: "[-t target-pane]",
+    },
+    CommandEntry {
+        name: "display-menu",
+        min_args: 0,
+        handler: display::cmd_display_menu,
+        usage: "[-t target-pane] [-T title] name key command ...",
+    },
+    CommandEntry {
+        name: "menu",
+        min_args: 0,
+        handler: display::cmd_display_menu,
+        usage: "[-t target-pane]",
+    },
+    CommandEntry {
+        name: "display-popup",
+        min_args: 0,
+        handler: display::cmd_display_popup,
+        usage: "[-t target-pane] [-w width] [-h height] [command]",
+    },
+    CommandEntry {
+        name: "popup",
+        min_args: 0,
+        handler: display::cmd_display_popup,
+        usage: "[command]",
+    },
+    CommandEntry {
+        name: "customize-mode",
+        min_args: 0,
+        handler: display::cmd_customize_mode,
+        usage: "[-t target-pane]",
+    },
+    // Prompt history
+    CommandEntry {
+        name: "clear-prompt-history",
+        min_args: 0,
+        handler: display::cmd_clear_prompt_history,
+        usage: "",
+    },
+    CommandEntry {
+        name: "show-prompt-history",
+        min_args: 0,
+        handler: display::cmd_show_prompt_history,
+        usage: "",
+    },
+    // Client commands
+    CommandEntry {
+        name: "suspend-client",
+        min_args: 0,
+        handler: client::cmd_suspend_client,
+        usage: "[-t target-client]",
+    },
+    CommandEntry {
+        name: "suspendc",
+        min_args: 0,
+        handler: client::cmd_suspend_client,
+        usage: "[-t target-client]",
+    },
+    // Lock commands
+    CommandEntry { name: "lock-server", min_args: 0, handler: display::cmd_lock_server, usage: "" },
+    CommandEntry { name: "lock", min_args: 0, handler: display::cmd_lock_server, usage: "" },
+    CommandEntry {
+        name: "lock-session",
+        min_args: 0,
+        handler: display::cmd_lock_session,
+        usage: "[-t target-session]",
+    },
+    CommandEntry {
+        name: "locks",
+        min_args: 0,
+        handler: display::cmd_lock_session,
+        usage: "[-t target-session]",
+    },
+    CommandEntry {
+        name: "lock-client",
+        min_args: 0,
+        handler: display::cmd_lock_client,
+        usage: "[-t target-client]",
+    },
+    CommandEntry {
+        name: "lockc",
+        min_args: 0,
+        handler: display::cmd_lock_client,
+        usage: "[-t target-client]",
+    },
+    // Window commands (additional)
+    CommandEntry {
+        name: "link-window",
+        min_args: 0,
+        handler: window::cmd_link_window,
+        usage: "[-s src] [-t dst]",
+    },
+    CommandEntry {
+        name: "linkw",
+        min_args: 0,
+        handler: window::cmd_link_window,
+        usage: "[-s src] [-t dst]",
+    },
+    CommandEntry {
+        name: "unlink-window",
+        min_args: 0,
+        handler: window::cmd_unlink_window,
+        usage: "[-t target-window]",
+    },
+    CommandEntry {
+        name: "unlinkw",
+        min_args: 0,
+        handler: window::cmd_unlink_window,
+        usage: "[-t target-window]",
+    },
+    CommandEntry {
+        name: "move-pane",
+        min_args: 0,
+        handler: window::cmd_move_pane,
+        usage: "[-s src] [-t dst]",
+    },
+    CommandEntry {
+        name: "movep",
+        min_args: 0,
+        handler: window::cmd_move_pane,
+        usage: "[-s src] [-t dst]",
+    },
+    // Pipe/resize
+    CommandEntry {
+        name: "pipe-pane",
+        min_args: 0,
+        handler: display::cmd_pipe_pane,
+        usage: "[-o] [-t target-pane] [command]",
+    },
+    CommandEntry {
+        name: "pipep",
+        min_args: 0,
+        handler: display::cmd_pipe_pane,
+        usage: "[-o] [-t target-pane] [command]",
+    },
+    CommandEntry {
+        name: "resize-window",
+        min_args: 0,
+        handler: display::cmd_resize_window,
+        usage: "[-t target-window] [-x width] [-y height]",
+    },
+    CommandEntry {
+        name: "resizew",
+        min_args: 0,
+        handler: display::cmd_resize_window,
+        usage: "[-t target-window]",
+    },
+    // Server access
+    CommandEntry {
+        name: "server-access",
+        min_args: 0,
+        handler: display::cmd_server_access,
+        usage: "[-adlrw] [user]",
     },
 ];

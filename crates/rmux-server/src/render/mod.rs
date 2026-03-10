@@ -29,6 +29,22 @@ pub struct StatusConfig {
     pub status_position_top: bool,
     /// Whether the status line is enabled.
     pub status_enabled: bool,
+    /// Justification of the window list: "left", "centre", or "right".
+    pub status_justify: String,
+    /// Maximum character width for status-left.
+    pub status_left_length: usize,
+    /// Maximum character width for status-right.
+    pub status_right_length: usize,
+    /// Separator between window entries in the status line.
+    pub window_status_separator: String,
+    /// Style applied to inactive window entries.
+    pub window_status_style: Style,
+    /// Style applied to the active window entry.
+    pub window_status_current_style: Style,
+    /// Whether to send xterm title escape sequences to clients.
+    pub set_titles: bool,
+    /// Format string for the xterm title.
+    pub set_titles_string: String,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -49,6 +65,17 @@ pub fn render_window(
     let status_row = if status_top { 0 } else { sy.saturating_sub(1) };
     let pane_y_offset = u32::from(status_top);
     let pane_area_height = if show_status { sy.saturating_sub(1) } else { sy };
+
+    // Set xterm window title if enabled
+    if let Some(cfg) = status_config {
+        if cfg.set_titles {
+            let ctx = build_status_context(session_name, window, window_list);
+            let title = format_expand(&cfg.set_titles_string, &ctx);
+            writer.write_raw(b"\x1b]2;");
+            writer.write_raw(title.as_bytes());
+            writer.write_raw(b"\x1b\\");
+        }
+    }
 
     writer.hide_cursor();
     writer.begin_sync();
@@ -315,12 +342,10 @@ fn render_status_line(
     };
 
     // Build window list in the center using format expansion
-    let mut center = String::new();
-    for (i, winfo) in window_list.iter().enumerate() {
-        if i > 0 {
-            center.push(' ');
-        }
-        if let Some(cfg) = status_config {
+    let separator = status_config.map_or(" ", |cfg| cfg.window_status_separator.as_str());
+    let mut center_parts: Vec<(String, bool)> = Vec::new();
+    for winfo in window_list {
+        let (text, is_active) = if let Some(cfg) = status_config {
             let mut wctx = FormatContext::new();
             wctx.set("window_index", winfo.idx.to_string());
             wctx.set("window_name", &winfo.name);
@@ -332,45 +357,139 @@ fn render_status_line(
             } else {
                 &cfg.window_status_format
             };
-            center.push_str(&format_expand(fmt, &wctx));
+            (format_expand(fmt, &wctx), winfo.is_active)
         } else {
-            write!(center, "{}:{}", winfo.idx, winfo.name).ok();
+            let mut s = format!("{}:{}", winfo.idx, winfo.name);
             if winfo.is_active {
-                center.push('*');
+                s.push('*');
             }
-        }
+            (s, winfo.is_active)
+        };
+        center_parts.push((text, is_active));
     }
+    let center_joined: String =
+        center_parts.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(separator);
 
-    // Show pane count if multi-pane
+    // Build suffix for pane count and copy mode indicator
+    let mut suffix = String::new();
     let pane_count = window.pane_count();
     if pane_count > 1 {
-        write!(center, " ({pane_count} panes)").ok();
+        write!(suffix, " ({pane_count} panes)").ok();
     }
-
-    // Show copy mode indicator if active pane is in copy mode
     if let Some(pane) = window.active_pane() {
         if let Some(cm) = &pane.copy_mode {
             let hs = pane.screen.grid.history_size();
-            write!(center, " [Copy mode - {}/{hs}]", cm.oy).ok();
+            write!(suffix, " [Copy mode - {}/{hs}]", cm.oy).ok();
         }
     }
+    let center_len = center_joined.len() + suffix.len();
 
     // Expand status-right
     let right =
         if let Some(cfg) = status_config { format_expand(&cfg.right, &ctx) } else { String::new() };
 
-    // Compose: left + center + padding + right
-    let used = left.len() + center.len() + right.len();
-    let padding = (width as usize).saturating_sub(used);
+    // Truncate left/right to configured max lengths
+    let (left, right) = if let Some(cfg) = status_config {
+        let l: String = left.chars().take(cfg.status_left_length).collect();
+        let r: String = right.chars().take(cfg.status_right_length).collect();
+        (l, r)
+    } else {
+        (left, right)
+    };
 
     writer.write_raw(left.as_bytes());
-    writer.write_raw(center.as_bytes());
-    for _ in 0..padding {
+    write_justified_center(
+        writer,
+        &center_parts,
+        &suffix,
+        separator,
+        width as usize,
+        left.len(),
+        right.len(),
+        center_len,
+        status_config,
+        &status_style,
+    );
+    writer.set_style(&status_style);
+    writer.write_raw(right.as_bytes());
+    writer.set_style(&Style::DEFAULT);
+}
+
+/// Write the center section of the status line with justification.
+#[allow(clippy::too_many_arguments)]
+fn write_justified_center(
+    writer: &mut TermWriter,
+    center_parts: &[(String, bool)],
+    suffix: &str,
+    separator: &str,
+    width: usize,
+    left_len: usize,
+    right_len: usize,
+    center_len: usize,
+    status_config: Option<&StatusConfig>,
+    status_style: &Style,
+) {
+    let justify = status_config.map_or("left", |cfg| cfg.status_justify.as_str());
+    let avail = width.saturating_sub(left_len + right_len);
+    let write_center = |w: &mut TermWriter| {
+        write_window_entries(w, center_parts, separator, status_config, status_style);
+        w.write_raw(suffix.as_bytes());
+    };
+
+    match justify {
+        "centre" => {
+            let pad_before = avail.saturating_sub(center_len) / 2;
+            let pad_after = avail.saturating_sub(center_len).saturating_sub(pad_before);
+            write_padding(writer, pad_before);
+            write_center(writer);
+            write_padding(writer, pad_after);
+        }
+        "right" => {
+            write_padding(writer, avail.saturating_sub(center_len));
+            write_center(writer);
+        }
+        _ => {
+            write_center(writer);
+            write_padding(writer, avail.saturating_sub(center_len));
+        }
+    }
+}
+
+/// Write N spaces.
+fn write_padding(writer: &mut TermWriter, n: usize) {
+    for _ in 0..n {
         writer.write_raw(b" ");
     }
-    writer.write_raw(right.as_bytes());
+}
 
-    writer.set_style(&Style::DEFAULT);
+/// Write window entries to the status line with per-entry styles.
+fn write_window_entries(
+    writer: &mut TermWriter,
+    parts: &[(String, bool)],
+    separator: &str,
+    status_config: Option<&StatusConfig>,
+    status_style: &Style,
+) {
+    for (i, (text, is_active)) in parts.iter().enumerate() {
+        if i > 0 {
+            writer.set_style(status_style);
+            writer.write_raw(separator.as_bytes());
+        }
+        if let Some(cfg) = status_config {
+            let entry_style = if *is_active {
+                &cfg.window_status_current_style
+            } else {
+                &cfg.window_status_style
+            };
+            if !entry_style.is_default() {
+                writer.set_style(entry_style);
+            }
+        }
+        writer.write_raw(text.as_bytes());
+        if status_config.is_some() {
+            writer.set_style(status_style);
+        }
+    }
 }
 
 /// Build a `FormatContext` for status line expansion.
@@ -608,6 +727,14 @@ mod tests {
             pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
             status_position_top: false,
             status_enabled: true,
+            status_justify: "left".to_string(),
+            status_left_length: 10,
+            status_right_length: 40,
+            window_status_separator: " ".to_string(),
+            window_status_style: Style::DEFAULT,
+            window_status_current_style: Style::DEFAULT,
+            set_titles: false,
+            set_titles_string: String::new(),
         };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
@@ -654,6 +781,14 @@ mod tests {
             pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
             status_position_top: false,
             status_enabled: true,
+            status_justify: "left".to_string(),
+            status_left_length: 10,
+            status_right_length: 40,
+            window_status_separator: " ".to_string(),
+            window_status_style: Style::DEFAULT,
+            window_status_current_style: Style::DEFAULT,
+            set_titles: false,
+            set_titles_string: String::new(),
         };
         let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
         // Active window uses current format

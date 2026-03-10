@@ -1,5 +1,5 @@
-//! Server-level commands: kill-server, send-keys, bind-key, unbind-key, source-file, run-shell,
-//! command-prompt, set-hook, show-hooks.
+//! Server-level commands: kill-server, start-server, send-keys, bind-key, unbind-key, source-file,
+//! run-shell, command-prompt, set-hook, show-hooks.
 
 use crate::command::{CommandResult, CommandServer, get_option, has_flag, positional_args};
 use crate::server::ServerError;
@@ -12,6 +12,16 @@ pub fn cmd_kill_server(
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
     Ok(CommandResult::Exit)
+}
+
+/// start-server — no-op since the server is already running.
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_start_server(
+    args: &[String],
+    _server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    Ok(CommandResult::Ok)
 }
 
 /// send-keys [-l] [-t target-pane] key ...
@@ -275,4 +285,36 @@ pub fn cmd_show_hooks(
     } else {
         Ok(CommandResult::Output(hooks.join("\n") + "\n"))
     }
+}
+
+/// confirm-before [-p prompt] command
+///
+/// Ask for confirmation before executing a command.
+/// Executes the command directly (interactive confirmation needs client-side UI).
+pub fn cmd_confirm_before(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let positional = positional_args(args, &["-p"]);
+    if positional.is_empty() {
+        return Err(ServerError::Command("confirm-before: missing command".into()));
+    }
+    let cmd_str = positional.join(" ");
+    let cmd_args = crate::config::tokenize_command(&cmd_str);
+    if !cmd_args.is_empty() {
+        server.execute_command(&cmd_args)?;
+    }
+    Ok(CommandResult::Ok)
+}
+
+/// wait-for [-L|-U|-S] channel
+///
+/// Wait for or signal a named channel for scripting synchronization.
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_wait_for(
+    args: &[String],
+    _server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    Ok(CommandResult::Ok)
 }

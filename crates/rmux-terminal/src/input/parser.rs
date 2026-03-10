@@ -765,6 +765,10 @@ impl InputParser {
                     _ => {}
                 }
             }
+            // DECSTR — Soft Terminal Reset (CSI ! p)
+            (b'p', Some(b'!')) => {
+                screen.soft_reset();
+            }
             _ => {} // Unhandled CSI sequences
         }
     }
@@ -908,6 +912,7 @@ impl InputParser {
                     continue;
                 }
                 2004 => ModeFlags::BRACKETPASTE,
+                2026 => ModeFlags::SYNC_OUTPUT,
                 _ => continue,
             };
             if set {
@@ -1004,6 +1009,24 @@ impl InputParser {
             52 => {
                 // Clipboard: OSC 52;selection;base64data ST
                 self.handle_osc_clipboard(data, screen);
+            }
+            104 => {
+                // Reset palette color: OSC 104;index ST or OSC 104 ST (all)
+                if data.is_empty() {
+                    screen.notifications.push_back(Notification::ResetPaletteColor(None));
+                } else if let Ok(text) = std::str::from_utf8(data) {
+                    if let Ok(idx) = text.parse::<u8>() {
+                        screen.notifications.push_back(Notification::ResetPaletteColor(Some(idx)));
+                    }
+                }
+            }
+            110 => {
+                // Reset foreground color
+                screen.notifications.push_back(Notification::ResetForegroundColor);
+            }
+            111 => {
+                // Reset background color
+                screen.notifications.push_back(Notification::ResetBackgroundColor);
             }
             112 => {
                 // Reset cursor color
@@ -1636,6 +1659,653 @@ mod tests {
         assert_eq!(screen.replies, b"\x1b[1;1R");
     }
 
+    // ============================================================
+    // CSI sequences — cursor movement
+    // ============================================================
+
+    #[test]
+    fn csi_cursor_up() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.y = 10;
+        parser.parse(b"\x1b[3A", &mut screen);
+        assert_eq!(screen.cursor.y, 7);
+    }
+
+    #[test]
+    fn csi_cursor_down() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[5B", &mut screen);
+        assert_eq!(screen.cursor.y, 5);
+    }
+
+    #[test]
+    fn csi_cursor_forward() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[10C", &mut screen);
+        assert_eq!(screen.cursor.x, 10);
+    }
+
+    #[test]
+    fn csi_cursor_backward() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 20;
+        parser.parse(b"\x1b[5D", &mut screen);
+        assert_eq!(screen.cursor.x, 15);
+    }
+
+    #[test]
+    fn csi_cnl_cursor_next_line() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 10;
+        parser.parse(b"\x1b[2E", &mut screen);
+        assert_eq!(screen.cursor.x, 0);
+        assert_eq!(screen.cursor.y, 2);
+    }
+
+    #[test]
+    fn csi_cpl_cursor_prev_line() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.y = 5;
+        screen.cursor.x = 10;
+        parser.parse(b"\x1b[2F", &mut screen);
+        assert_eq!(screen.cursor.x, 0);
+        assert_eq!(screen.cursor.y, 3);
+    }
+
+    #[test]
+    fn csi_cha_cursor_character_absolute() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[15G", &mut screen); // 1-based → col 14
+        assert_eq!(screen.cursor.x, 14);
+    }
+
+    #[test]
+    fn csi_vpa_vertical_position_absolute() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[10d", &mut screen); // 1-based → row 9
+        assert_eq!(screen.cursor.y, 9);
+    }
+
+    #[test]
+    fn csi_hpa_horizontal_position_absolute() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[20`", &mut screen); // 1-based → col 19
+        assert_eq!(screen.cursor.x, 19);
+    }
+
+    // ============================================================
+    // CSI sequences — editing
+    // ============================================================
+
+    #[test]
+    fn csi_il_insert_lines() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Line0\r\nLine1\r\nLine2", &mut screen);
+        screen.cursor.y = 1;
+        parser.parse(b"\x1b[1L", &mut screen); // Insert 1 line at row 1
+        // Line1 content should have shifted down
+        let cell = screen.grid.get_cell(0, 1);
+        // After insert, the line at cursor should be blank
+        assert!(cell.flags.contains(CellFlags::CLEARED) || cell.data.as_str() == Some(" "));
+    }
+
+    #[test]
+    fn csi_dl_delete_lines() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"AAA\r\nBBB\r\nCCC", &mut screen);
+        screen.cursor.y = 0;
+        parser.parse(b"\x1b[1M", &mut screen); // Delete 1 line at row 0
+        // BBB should have moved up to row 0
+        let cell = screen.grid.get_cell(0, 0);
+        assert_eq!(cell.data.as_str(), Some("B"));
+    }
+
+    #[test]
+    fn csi_dch_delete_characters() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"ABCDE", &mut screen);
+        screen.cursor.x = 1;
+        parser.parse(b"\x1b[2P", &mut screen); // Delete 2 chars at x=1
+        // "A" stays, then "DE" should shift left
+        let cell = screen.grid.get_cell(1, 0);
+        assert_eq!(cell.data.as_str(), Some("D"));
+    }
+
+    #[test]
+    fn csi_ich_insert_characters() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"ABCDE", &mut screen);
+        screen.cursor.x = 1;
+        parser.parse(b"\x1b[2@", &mut screen); // Insert 2 chars at x=1
+        // "A" stays at 0, gap at 1-2, then "BCD" shifted right
+        let cell = screen.grid.get_cell(3, 0);
+        assert_eq!(cell.data.as_str(), Some("B"));
+    }
+
+    #[test]
+    fn csi_ech_erase_characters() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Hello", &mut screen);
+        screen.cursor.x = 1;
+        parser.parse(b"\x1b[3X", &mut screen); // Erase 3 chars at x=1
+        let cell = screen.grid.get_cell(1, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+        // 'H' at 0 should still be there
+        let cell0 = screen.grid.get_cell(0, 0);
+        assert_eq!(cell0.data.as_str(), Some("H"));
+    }
+
+    #[test]
+    fn csi_su_scroll_up() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"AAA\r\nBBB\r\nCCC", &mut screen);
+        parser.parse(b"\x1b[1S", &mut screen); // Scroll up 1
+        // Row 0 should now have "BBB"
+        let cell = screen.grid.get_cell(0, 0);
+        assert_eq!(cell.data.as_str(), Some("B"));
+    }
+
+    #[test]
+    fn csi_sd_scroll_down() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"AAA\r\nBBB", &mut screen);
+        parser.parse(b"\x1b[1T", &mut screen); // Scroll down 1
+        // Row 0 should now be blank (shifted down)
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED) || cell.data.as_str() == Some(" "));
+    }
+
+    #[test]
+    fn csi_ed_erase_from_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Hello World", &mut screen);
+        screen.cursor.x = 5;
+        screen.cursor.y = 0;
+        parser.parse(b"\x1b[0J", &mut screen); // Erase from cursor to end
+        let cell = screen.grid.get_cell(5, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+        // Before cursor should still be there
+        let cell0 = screen.grid.get_cell(0, 0);
+        assert_eq!(cell0.data.as_str(), Some("H"));
+    }
+
+    #[test]
+    fn csi_ed_erase_to_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Hello World", &mut screen);
+        screen.cursor.x = 5;
+        screen.cursor.y = 0;
+        parser.parse(b"\x1b[1J", &mut screen); // Erase from start to cursor
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+    }
+
+    #[test]
+    fn csi_el_erase_line_from_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Hello World", &mut screen);
+        screen.cursor.x = 5;
+        parser.parse(b"\x1b[0K", &mut screen);
+        let cell = screen.grid.get_cell(5, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+        let cell0 = screen.grid.get_cell(0, 0);
+        assert_eq!(cell0.data.as_str(), Some("H"));
+    }
+
+    #[test]
+    fn csi_el_erase_line_to_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Hello", &mut screen);
+        screen.cursor.x = 3;
+        parser.parse(b"\x1b[1K", &mut screen);
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+    }
+
+    #[test]
+    fn csi_el_erase_entire_line() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"Hello", &mut screen);
+        parser.parse(b"\x1b[2K", &mut screen);
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.flags.contains(CellFlags::CLEARED));
+    }
+
+    #[test]
+    fn csi_tbc_clear_tab_stop() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Set a tab stop, then clear it
+        screen.set_tab_stop(10);
+        screen.cursor.x = 10;
+        parser.parse(b"\x1b[0g", &mut screen); // Clear tab at current position
+        // Verify by tabbing — should skip past 10
+        screen.cursor.x = 0;
+        let next = screen.next_tab_stop(0);
+        assert_ne!(next, 10);
+    }
+
+    #[test]
+    fn csi_tbc_clear_all_tab_stops() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[3g", &mut screen); // Clear all tab stops
+    }
+
+    #[test]
+    fn csi_cup_hvp() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // HVP (CSI f) should work same as CUP (CSI H)
+        parser.parse(b"\x1b[5;10f", &mut screen);
+        assert_eq!(screen.cursor.y, 4);
+        assert_eq!(screen.cursor.x, 9);
+    }
+
+    // ============================================================
+    // SGR attributes
+    // ============================================================
+
+    #[test]
+    fn sgr_dim_italic_underline() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[2;3;4mX", &mut screen);
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.style.attrs.contains(Attrs::DIM));
+        assert!(cell.style.attrs.contains(Attrs::ITALICS));
+        assert!(cell.style.attrs.contains(Attrs::UNDERSCORE));
+    }
+
+    #[test]
+    fn sgr_blink_reverse_hidden_strikethrough() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[5;7;8;9mX", &mut screen);
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.style.attrs.contains(Attrs::BLINK));
+        assert!(cell.style.attrs.contains(Attrs::REVERSE));
+        assert!(cell.style.attrs.contains(Attrs::HIDDEN));
+        assert!(cell.style.attrs.contains(Attrs::STRIKETHROUGH));
+    }
+
+    #[test]
+    fn sgr_overline() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[53mA", &mut screen);
+        assert!(screen.cursor.style.attrs.contains(Attrs::OVERLINE));
+        // Verify attrs survive cell pack/unpack roundtrip in the grid
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.style.attrs.contains(Attrs::OVERLINE));
+    }
+
+    #[test]
+    fn sgr_double_underscore() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[21mA", &mut screen);
+        assert!(screen.cursor.style.attrs.contains(Attrs::DOUBLE_UNDERSCORE));
+        // Verify attrs survive cell pack/unpack roundtrip in the grid
+        let cell = screen.grid.get_cell(0, 0);
+        assert!(cell.style.attrs.contains(Attrs::DOUBLE_UNDERSCORE));
+    }
+
+    #[test]
+    fn sgr_reset_bold_dim() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[1;2mX\x1b[22mY", &mut screen);
+        let cell = screen.grid.get_cell(1, 0);
+        assert!(!cell.style.attrs.contains(Attrs::BOLD));
+        assert!(!cell.style.attrs.contains(Attrs::DIM));
+    }
+
+    #[test]
+    fn sgr_reset_individual_attrs() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Set then reset individual attributes
+        parser.parse(b"\x1b[3mI\x1b[23mN", &mut screen); // italic on/off
+        let cell = screen.grid.get_cell(1, 0);
+        assert!(!cell.style.attrs.contains(Attrs::ITALICS));
+
+        parser.parse(b"\x1b[4mU\x1b[24mN", &mut screen); // underline on/off
+        let cell = screen.grid.get_cell(3, 0);
+        assert!(!cell.style.attrs.contains(Attrs::UNDERSCORE));
+    }
+
+    #[test]
+    fn sgr_reset_blink_reverse_hidden_strike_overline() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[5;7;8;9;53mX\x1b[25;27;28;29;55mY", &mut screen);
+        let cell = screen.grid.get_cell(1, 0);
+        assert!(!cell.style.attrs.contains(Attrs::BLINK));
+        assert!(!cell.style.attrs.contains(Attrs::REVERSE));
+        assert!(!cell.style.attrs.contains(Attrs::HIDDEN));
+        assert!(!cell.style.attrs.contains(Attrs::STRIKETHROUGH));
+        assert!(!cell.style.attrs.contains(Attrs::OVERLINE));
+    }
+
+    #[test]
+    fn sgr_256_color_fg_bg() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[38;5;196mR\x1b[48;5;21mB", &mut screen);
+        let cell_r = screen.grid.get_cell(0, 0);
+        assert_eq!(cell_r.style.fg, Color::Palette(196));
+        let cell_b = screen.grid.get_cell(1, 0);
+        assert_eq!(cell_b.style.bg, Color::Palette(21));
+    }
+
+    #[test]
+    fn sgr_rgb_bg() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[48;2;10;20;30mX", &mut screen);
+        let cell = screen.grid.get_cell(0, 0);
+        assert_eq!(cell.style.bg, Color::Rgb { r: 10, g: 20, b: 30 });
+    }
+
+    #[test]
+    fn sgr_bg_palette() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[42mG", &mut screen); // green bg
+        let cell = screen.grid.get_cell(0, 0);
+        assert_eq!(cell.style.bg, Color::Palette(2));
+    }
+
+    #[test]
+    fn sgr_default_fg_bg() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[31;42mX\x1b[39;49mY", &mut screen);
+        let cell = screen.grid.get_cell(1, 0);
+        assert_eq!(cell.style.fg, Color::Default);
+        assert_eq!(cell.style.bg, Color::Default);
+    }
+
+    #[test]
+    fn sgr_bright_colors() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[90mF\x1b[100mB", &mut screen);
+        let cell_f = screen.grid.get_cell(0, 0);
+        assert_eq!(cell_f.style.fg, Color::Palette(8)); // bright black fg
+        let cell_b = screen.grid.get_cell(1, 0);
+        assert_eq!(cell_b.style.bg, Color::Palette(8)); // bright black bg
+    }
+
+    // ============================================================
+    // ESC sequences
+    // ============================================================
+
+    #[test]
+    fn esc_decsc_decrc_save_restore_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 10;
+        screen.cursor.y = 5;
+        parser.parse(b"\x1b7", &mut screen); // DECSC
+        screen.cursor.x = 0;
+        screen.cursor.y = 0;
+        parser.parse(b"\x1b8", &mut screen); // DECRC
+        assert_eq!(screen.cursor.x, 10);
+        assert_eq!(screen.cursor.y, 5);
+    }
+
+    #[test]
+    fn esc_ind_index() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.y = 0;
+        parser.parse(b"\x1bD", &mut screen); // IND
+        assert_eq!(screen.cursor.y, 1);
+    }
+
+    #[test]
+    fn esc_nel_next_line() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 10;
+        parser.parse(b"\x1bE", &mut screen); // NEL
+        assert_eq!(screen.cursor.x, 0);
+        assert_eq!(screen.cursor.y, 1);
+    }
+
+    #[test]
+    fn esc_ri_reverse_index() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.y = 5;
+        parser.parse(b"\x1bM", &mut screen); // RI
+        assert_eq!(screen.cursor.y, 4);
+    }
+
+    #[test]
+    fn esc_ri_at_scroll_region_top() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[5;20r", &mut screen); // Set scroll region
+        screen.cursor.y = 4; // At top of scroll region
+        parser.parse(b"\x1bM", &mut screen); // RI at top → should scroll down
+        assert_eq!(screen.cursor.y, 4); // stays at top
+    }
+
+    #[test]
+    fn esc_hts_set_tab_stop() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 15;
+        parser.parse(b"\x1bH", &mut screen); // HTS
+        // Tab stop should be set at column 15
+        let next = screen.next_tab_stop(14);
+        assert_eq!(next, 15);
+    }
+
+    #[test]
+    fn esc_ris_full_reset() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Set some state
+        parser.parse(b"\x1b(0", &mut screen); // Line drawing
+        screen.cursor.x = 10;
+        screen.cursor.y = 5;
+        parser.parse(b"\x1bc", &mut screen); // RIS
+        assert!(!parser.g0_line_drawing);
+        assert_eq!(screen.cursor.x, 0);
+        assert_eq!(screen.cursor.y, 0);
+    }
+
+    #[test]
+    fn csi_decstr_soft_reset() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 10;
+        screen.cursor.y = 5;
+        parser.parse(b"\x1b[!p", &mut screen); // DECSTR
+        assert_eq!(screen.cursor.x, 0);
+        assert_eq!(screen.cursor.y, 0);
+    }
+
+    // ============================================================
+    // DECSET/DECRST modes
+    // ============================================================
+
+    #[test]
+    fn decset_cursor_keys() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?1h", &mut screen); // Set
+        assert!(screen.mode.contains(ModeFlags::CURSOR_KEYS));
+        parser.parse(b"\x1b[?1l", &mut screen); // Reset
+        assert!(!screen.mode.contains(ModeFlags::CURSOR_KEYS));
+    }
+
+    #[test]
+    fn decset_wrap_mode() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Wrap is on by default, turn it off
+        parser.parse(b"\x1b[?7l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::WRAP));
+        parser.parse(b"\x1b[?7h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::WRAP));
+    }
+
+    #[test]
+    fn decset_cursor_visible() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?25l", &mut screen); // Hide cursor
+        assert!(!screen.mode.contains(ModeFlags::CURSOR_VISIBLE));
+        parser.parse(b"\x1b[?25h", &mut screen); // Show cursor
+        assert!(screen.mode.contains(ModeFlags::CURSOR_VISIBLE));
+    }
+
+    #[test]
+    fn decset_mouse_modes() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?1000h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::MOUSE_STANDARD));
+        parser.parse(b"\x1b[?1002h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::MOUSE_BUTTON));
+        parser.parse(b"\x1b[?1003h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::MOUSE_ANY));
+        parser.parse(b"\x1b[?1006h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::MOUSE_SGR));
+        // Reset them
+        parser.parse(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::MOUSE_STANDARD));
+        assert!(!screen.mode.contains(ModeFlags::MOUSE_ANY));
+    }
+
+    #[test]
+    fn decset_focus_events() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?1004h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::FOCUSON));
+        parser.parse(b"\x1b[?1004l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::FOCUSON));
+    }
+
+    #[test]
+    fn decset_bracketed_paste() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?2004h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::BRACKETPASTE));
+        parser.parse(b"\x1b[?2004l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::BRACKETPASTE));
+    }
+
+    #[test]
+    fn decset_sync_output() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?2026h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::SYNC_OUTPUT));
+        parser.parse(b"\x1b[?2026l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::SYNC_OUTPUT));
+    }
+
+    // ============================================================
+    // OSC reset sequences
+    // ============================================================
+
+    #[test]
+    fn osc_104_reset_palette_color_all() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]104\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::ResetPaletteColor(None));
+    }
+
+    #[test]
+    fn osc_104_reset_palette_color_specific() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]104;5\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::ResetPaletteColor(Some(5)));
+    }
+
+    #[test]
+    fn osc_110_reset_foreground() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]110\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::ResetForegroundColor);
+    }
+
+    #[test]
+    fn osc_111_reset_background() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]111\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::ResetBackgroundColor);
+    }
+
+    // ============================================================
+    // Misc CSI
+    // ============================================================
+
+    #[test]
+    fn csi_cbt_cursor_backward_tab() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 20;
+        parser.parse(b"\x1b[1Z", &mut screen); // CBT
+        assert!(screen.cursor.x < 20);
+    }
+
+    #[test]
+    fn csi_rep_repeat_character() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"A\x1b[3b", &mut screen); // Print 'A' then repeat 3 times
+        // Should have 'A' at positions 0,1,2,3
+        for i in 0..4 {
+            let cell = screen.grid.get_cell(i, 0);
+            assert_eq!(cell.data.as_str(), Some("A"));
+        }
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
@@ -1684,6 +2354,16 @@ mod tests {
                 parser.parse(&data, &mut screen);
                 prop_assert_eq!(screen.width(), width);
             }
+        }
+
+        #[test]
+        fn fuzz_crash_0xff_esc_sequence() {
+            // Regression: 0xFF followed by ESC sequences must not crash
+            let data: &[u8] =
+                &[0xff, 0x1b, 0x1b, 0x4d, 0x1b, 0x4d, 0x1b, 0x5b, 0x3b, 0x58, 0x58, 0x58];
+            let mut screen = Screen::new(80, 24, 100);
+            let mut parser = InputParser::new();
+            parser.parse(data, &mut screen);
         }
     }
 }

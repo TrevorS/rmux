@@ -231,6 +231,7 @@ impl Server {
             for window in session.windows.values_mut() {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
                     pane.process_input(data);
+                    pane.pipe_output(data);
                     notifications = pane.screen.drain_notifications();
                     let reply_data = pane.screen.take_replies();
                     if !reply_data.is_empty() && pane.pty_fd >= 0 {
@@ -247,10 +248,15 @@ impl Server {
                             window.name.clone_from(&pane.screen.title);
                         }
                     }
-                    // Mark attached clients for redraw
-                    for client in self.clients.values_mut() {
-                        if client.session_id == Some(session.id) && client.is_attached() {
-                            client.mark_redraw();
+                    // Mark attached clients for redraw — but defer if
+                    // the pane is in synchronized output mode (mode 2026).
+                    let in_sync =
+                        pane.screen.mode.contains(rmux_core::screen::ModeFlags::SYNC_OUTPUT);
+                    if !in_sync {
+                        for client in self.clients.values_mut() {
+                            if client.session_id == Some(session.id) && client.is_attached() {
+                                client.mark_redraw();
+                            }
                         }
                     }
                     break;
@@ -288,7 +294,10 @@ impl Server {
             Notification::SetPaletteColor(_, _, _, _)
             | Notification::SetForegroundColor(_)
             | Notification::SetBackgroundColor(_)
-            | Notification::ResetCursorColor => {
+            | Notification::ResetCursorColor
+            | Notification::ResetPaletteColor(_)
+            | Notification::ResetForegroundColor
+            | Notification::ResetBackgroundColor => {
                 // Color notifications — stored for future use
             }
         }
@@ -988,69 +997,111 @@ impl Server {
     fn handle_copy_mode_input(&mut self, client_id: u64, session_id: u32, data: &[u8]) {
         use rmux_terminal::keys::parse_key;
 
-        // Parse the raw input into a key code
         let Some((key, _consumed)) = parse_key(data) else {
             return;
         };
 
-        // Get the key table name from the copy mode state
-        let key_table = {
-            let Some(session) = self.sessions.find_by_id(session_id) else {
-                return;
-            };
-            let Some(window) = session.active_window() else {
-                return;
-            };
-            let Some(pane) = window.active_pane() else {
-                return;
-            };
-            let Some(cm) = &pane.copy_mode else {
-                return;
-            };
-            cm.key_table.clone()
+        // Check for pending jump (f/F/t/T waiting for a character)
+        if self.handle_copy_mode_pending_jump(session_id, key) {
+            return;
+        }
+
+        // Look up binding and dispatch
+        let Some((_key_table, action_name)) = self.copy_mode_lookup(session_id, key) else {
+            return;
         };
 
-        // Look up the key in the copy mode key table
+        let action = {
+            let Some(session) = self.sessions.find_by_id_mut(session_id) else { return };
+            let Some(window) = session.active_window_mut() else { return };
+            let Some(pane) = window.active_pane_mut() else { return };
+            let Some(cm) = &mut pane.copy_mode else { return };
+            copymode::dispatch_copy_mode_action(&pane.screen, cm, &action_name)
+        };
+
+        self.handle_copy_mode_action(client_id, session_id, action);
+    }
+
+    /// If copy mode has a pending jump, handle the character and return true.
+    fn handle_copy_mode_pending_jump(
+        &mut self,
+        session_id: u32,
+        key: rmux_core::key::KeyCode,
+    ) -> bool {
+        let pending = self
+            .sessions
+            .find_by_id(session_id)
+            .and_then(|s| s.active_window())
+            .and_then(|w| w.active_pane())
+            .and_then(|p| p.copy_mode.as_ref())
+            .and_then(|cm| cm.pending_jump);
+
+        let Some(jump_type) = pending else { return false };
+        let base = rmux_core::key::keyc_base(key);
+        if base >= 128 {
+            return false;
+        }
+
+        let ch = base as u8 as char;
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    if let Some(cm) = &mut pane.copy_mode {
+                        cm.pending_jump = None;
+                        match jump_type {
+                            copymode::JumpType::Forward => cm.jump_forward(&pane.screen, ch),
+                            copymode::JumpType::Backward => cm.jump_backward(&pane.screen, ch),
+                            copymode::JumpType::ForwardTill => {
+                                cm.jump_forward_till(&pane.screen, ch);
+                            }
+                            copymode::JumpType::BackwardTill => {
+                                cm.jump_backward_till(&pane.screen, ch);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.mark_clients_redraw(session_id);
+        true
+    }
+
+    /// Look up a copy-mode key binding and return (table_name, action_name).
+    fn copy_mode_lookup(
+        &self,
+        session_id: u32,
+        key: rmux_core::key::KeyCode,
+    ) -> Option<(String, String)> {
+        let key_table = self
+            .sessions
+            .find_by_id(session_id)?
+            .active_window()?
+            .active_pane()?
+            .copy_mode
+            .as_ref()?
+            .key_table
+            .clone();
+
         let base = rmux_core::key::keyc_base(key);
         let action_name = self
             .keybindings
             .lookup_in_table(&key_table, base)
             .or_else(|| self.keybindings.lookup_in_table(&key_table, key))
-            .map(|argv| argv[0].clone());
+            .map(|argv| argv[0].clone())?;
 
-        let Some(action_name) = action_name else {
-            // Key not bound in copy mode — ignore
-            return;
-        };
+        Some((key_table, action_name))
+    }
 
-        // Dispatch the action on the pane's copy mode state
-        let action = {
-            let Some(session) = self.sessions.find_by_id_mut(session_id) else {
-                return;
-            };
-            let Some(window) = session.active_window_mut() else {
-                return;
-            };
-            let Some(pane) = window.active_pane_mut() else {
-                return;
-            };
-            let Some(cm) = &mut pane.copy_mode else {
-                return;
-            };
-            copymode::dispatch_copy_mode_action(&pane.screen, cm, &action_name)
-        };
-
+    /// Handle the result of dispatching a copy-mode action.
+    fn handle_copy_mode_action(&mut self, client_id: u64, session_id: u32, action: CopyModeAction) {
         match action {
             CopyModeAction::Handled => {
-                // Redraw needed
                 self.mark_clients_redraw(session_id);
             }
             CopyModeAction::Exit { copy_data } => {
-                // Add copied data to paste buffer store
                 if let Some(data) = copy_data {
                     self.paste_buffers.add(data);
                 }
-                // Exit copy mode on the pane
                 if let Some(session) = self.sessions.find_by_id_mut(session_id) {
                     if let Some(window) = session.active_window_mut() {
                         if let Some(pane) = window.active_pane_mut() {
@@ -1061,7 +1112,6 @@ impl Server {
                 self.mark_clients_redraw(session_id);
             }
             CopyModeAction::SearchPrompt { forward } => {
-                // Enter search prompt
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     use crate::client::PromptType;
                     client.prompt = Some(PromptState {
@@ -1075,9 +1125,18 @@ impl Server {
                 }
                 self.mark_clients_redraw(session_id);
             }
-            CopyModeAction::Unhandled => {
-                // Not recognized — ignore
+            CopyModeAction::JumpPrompt { jump_type } => {
+                if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                    if let Some(window) = session.active_window_mut() {
+                        if let Some(pane) = window.active_pane_mut() {
+                            if let Some(cm) = &mut pane.copy_mode {
+                                cm.pending_jump = Some(jump_type);
+                            }
+                        }
+                    }
+                }
             }
+            CopyModeAction::Unhandled => {}
         }
     }
 
@@ -1117,94 +1176,42 @@ impl Server {
 
     /// Handle input when the client is in command prompt mode.
     fn handle_prompt_input(&mut self, client_id: u64, data: &[u8]) {
+        use crate::client::{PromptAction, process_prompt_input};
+
         let mut offset = 0;
         while offset < data.len() {
             let remaining = &data[offset..];
 
-            // Handle raw bytes directly for control chars that parse_key
-            // encodes as Ctrl+letter (losing the original semantic).
-            match remaining[0] {
-                // Enter (\r or \n) — parse_key maps these to Ctrl-M / Ctrl-J
-                0x0D | 0x0A => {
+            let Some(client) = self.clients.get_mut(&client_id) else {
+                return;
+            };
+            let Some(prompt) = &mut client.prompt else {
+                return;
+            };
+
+            let (action, consumed) = process_prompt_input(prompt, remaining);
+
+            match action {
+                PromptAction::Submit => {
                     self.submit_prompt(client_id);
-                    return; // Enter always ends prompt input
+                    return;
                 }
-                // Escape — parse_key returns None for bare ESC (wants more bytes)
-                0x1B if remaining.len() == 1 || remaining[1] == 0x1B => {
+                PromptAction::Cancel => {
                     if let Some(client) = self.clients.get_mut(&client_id) {
                         client.prompt = None;
                     }
                     self.mark_prompt_redraw(client_id);
-                    return; // Escape always ends prompt input
+                    return;
                 }
-                // Backspace (DEL) or Ctrl-H
-                0x7F | 0x08 => {
-                    if let Some(client) = self.clients.get_mut(&client_id) {
-                        if let Some(prompt) = &mut client.prompt {
-                            prompt.buffer.pop();
-                        }
-                    }
+                PromptAction::Changed => {
                     self.mark_prompt_redraw(client_id);
-                    offset += 1;
-                }
-                // Ctrl-U — clear the line
-                0x15 => {
-                    if let Some(client) = self.clients.get_mut(&client_id) {
-                        if let Some(prompt) = &mut client.prompt {
-                            prompt.buffer.clear();
-                        }
-                    }
-                    self.mark_prompt_redraw(client_id);
-                    offset += 1;
-                }
-                // Printable ASCII
-                0x20..=0x7E => {
-                    if let Some(client) = self.clients.get_mut(&client_id) {
-                        if let Some(prompt) = &mut client.prompt {
-                            prompt.buffer.push(remaining[0] as char);
-                        }
-                    }
-                    self.mark_prompt_redraw(client_id);
-                    offset += 1;
-                }
-                // UTF-8 multi-byte sequences — accept printable Unicode in prompt
-                0xC2..=0xF4 => {
-                    let utf8_len = match remaining[0] {
-                        0xC2..=0xDF => 2,
-                        0xE0..=0xEF => 3,
-                        0xF0..=0xF4 => 4,
-                        _ => 1,
-                    };
-                    if remaining.len() >= utf8_len {
-                        if let Ok(s) = std::str::from_utf8(&remaining[..utf8_len]) {
-                            if let Some(ch) = s.chars().next() {
-                                if !ch.is_control() {
-                                    if let Some(client) = self.clients.get_mut(&client_id) {
-                                        if let Some(prompt) = &mut client.prompt {
-                                            prompt.buffer.push(ch);
-                                        }
-                                    }
-                                    self.mark_prompt_redraw(client_id);
-                                }
-                            }
-                            offset += utf8_len;
-                        } else {
-                            offset += 1;
-                        }
-                    } else {
-                        break; // Incomplete UTF-8 sequence, wait for more data
-                    }
-                }
-                // ESC sequence (not bare ESC) — skip it, not meaningful in prompt
-                0x1B => {
-                    // Consume the escape sequence so we don't get stuck
-                    let (_, consumed) = rmux_terminal::keys::parse_key(remaining)
-                        .unwrap_or((rmux_core::key::KEYC_UNKNOWN, 1));
                     offset += consumed;
                 }
-                // Other control chars — ignore
-                _ => {
-                    offset += 1;
+                PromptAction::Ignored => {
+                    offset += consumed;
+                }
+                PromptAction::NeedMore => {
+                    break;
                 }
             }
         }
@@ -1301,13 +1308,22 @@ impl Server {
         let Some(window) = session.active_window() else {
             return;
         };
-        let Some(pane) = window.active_pane() else {
-            return;
-        };
 
-        // Write to PTY master fd
-        if let Some(fd) = self.pty_fds.get(&pane.id) {
-            nix::unistd::write(fd, data).ok();
+        // When synchronize-panes is on, send input to all panes in the window
+        let sync = window.options.get_flag("synchronize-panes").unwrap_or(false);
+        if sync {
+            for pane in window.panes.values() {
+                if let Some(fd) = self.pty_fds.get(&pane.id) {
+                    nix::unistd::write(fd, data).ok();
+                }
+            }
+        } else {
+            let Some(pane) = window.active_pane() else {
+                return;
+            };
+            if let Some(fd) = self.pty_fds.get(&pane.id) {
+                nix::unistd::write(fd, data).ok();
+            }
         }
     }
 
@@ -1441,6 +1457,32 @@ impl Server {
             status_position_top: session.options.get_string("status-position").unwrap_or("bottom")
                 == "top",
             status_enabled: session.options.get_flag("status").unwrap_or(true),
+            status_justify: session
+                .options
+                .get_string("status-justify")
+                .unwrap_or("left")
+                .to_string(),
+            status_left_length: session.options.get_number("status-left-length").unwrap_or(10)
+                as usize,
+            status_right_length: session.options.get_number("status-right-length").unwrap_or(40)
+                as usize,
+            window_status_separator: session
+                .options
+                .get_string("window-status-separator")
+                .unwrap_or(" ")
+                .to_string(),
+            window_status_style: rmux_core::style::parse_style(
+                session.options.get_string("window-status-style").unwrap_or("default"),
+            ),
+            window_status_current_style: rmux_core::style::parse_style(
+                session.options.get_string("window-status-current-style").unwrap_or("default"),
+            ),
+            set_titles: session.options.get_flag("set-titles").unwrap_or(false),
+            set_titles_string: session
+                .options
+                .get_string("set-titles-string")
+                .unwrap_or("#S:#I:#W")
+                .to_string(),
         };
 
         render::render_window(
@@ -2161,12 +2203,16 @@ impl CommandServer for Server {
         if let Some(session_id) = self.client_session_id() {
             if let Some(session) = self.sessions.find_by_id(session_id) {
                 ctx.set("session_name", &*session.name);
+                ctx.set("session_id", format!("${session_id}"));
                 ctx.set("session_windows", session.windows.len().to_string());
+                ctx.set("session_attached", session.attached.to_string());
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
                     if let Some(window) = session.windows.get(&widx) {
                         ctx.set("window_name", &*window.name);
+                        ctx.set("window_id", format!("@{}", window.id));
                         ctx.set("window_panes", window.pane_count().to_string());
+                        ctx.set("window_active", "1");
                         if let Some(pane) = window.active_pane() {
                             ctx.set("pane_id", format!("%{}", pane.id));
                             ctx.set("pane_index", pane.id.to_string());
@@ -2174,11 +2220,30 @@ impl CommandServer for Server {
                             ctx.set("pane_width", pane.screen.width().to_string());
                             ctx.set("pane_height", pane.screen.height().to_string());
                             ctx.set("pane_active", "1");
+                            ctx.set("pane_current_command", &*window.name);
+                            // Use per-pane CWD from OSC 7, fall back to session CWD
+                            let path = pane.screen.path.as_deref().unwrap_or(&session.cwd);
+                            ctx.set("pane_current_path", path);
+                            ctx.set("pane_pid", pane.pid.to_string());
+                            ctx.set("cursor_x", pane.screen.cursor.x.to_string());
+                            ctx.set("cursor_y", pane.screen.cursor.y.to_string());
+                            ctx.set(
+                                "pane_in_mode",
+                                if pane.copy_mode.is_some() { "1" } else { "0" },
+                            );
+                            ctx.set(
+                                "alternate_on",
+                                if pane.screen.alternate.is_some() { "1" } else { "0" },
+                            );
                         }
                     }
                 }
             }
         }
+        // Client info
+        let client_id = self.command_client;
+        ctx.set("client_name", format!("client-{client_id}"));
+        ctx.set("client_tty", "/dev/tty");
         if let Ok(hostname) = nix::unistd::gethostname() {
             let h = hostname.to_string_lossy().to_string();
             if let Some(short) = h.split('.').next() {
@@ -2258,6 +2323,37 @@ impl CommandServer for Server {
                 client.mark_redraw();
             }
         }
+    }
+
+    // --- Pipe ---
+
+    fn pipe_pane(&mut self, command: Option<&str>) -> Result<(), ServerError> {
+        let session_id =
+            self.client_session_id().ok_or_else(|| ServerError::Command("no session".into()))?;
+        let window_idx =
+            self.client_active_window().ok_or_else(|| ServerError::Command("no window".into()))?;
+        let pane_id =
+            self.client_active_pane_id().ok_or_else(|| ServerError::Command("no pane".into()))?;
+
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command("window not found".into()))?;
+        let pane = window
+            .panes
+            .get_mut(&pane_id)
+            .ok_or_else(|| ServerError::Command("pane not found".into()))?;
+
+        if let Some(cmd) = command {
+            pane.start_pipe(cmd).map_err(|e| ServerError::Command(format!("pipe-pane: {e}")))?;
+        } else {
+            pane.stop_pipe();
+        }
+        Ok(())
     }
 
     // --- PTY I/O ---

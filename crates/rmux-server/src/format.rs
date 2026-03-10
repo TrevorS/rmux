@@ -40,7 +40,10 @@ impl Default for FormatContext {
 /// - `#{?cond,true_branch,false_branch}` — conditionals
 /// - `#{==:#{a},#{b}}` — equality comparison (also `!=`, `<`, `>`, `<=`, `>=`)
 /// - `#{=N:variable}` — width truncation (positive=right, negative=left)
+/// - `#{l:text}` — literal string (no expansion)
+/// - `#{s/pat/rep:expr}` — regex substitution
 /// - `#S`, `#W`, `#I`, etc. — short aliases
+/// - `#[style]` — inline style (passed through for renderer)
 /// - `##` — literal `#`
 pub fn format_expand(template: &str, ctx: &FormatContext) -> String {
     let mut result = String::with_capacity(template.len());
@@ -74,6 +77,19 @@ pub fn format_expand(template: &str, ctx: &FormatContext) -> String {
                         result.push('#');
                         result.push('{');
                         i += 2;
+                    }
+                }
+                b'[' => {
+                    // #[style] — inline style directive, pass through as-is
+                    let start = i + 2;
+                    if let Some(end_bracket) = template[start..].find(']') {
+                        let end = start + end_bracket;
+                        // Pass through #[...] verbatim for the renderer
+                        result.push_str(&template[i..=end]);
+                        i = end + 1;
+                    } else {
+                        result.push('#');
+                        i += 1;
                     }
                 }
                 ch => {
@@ -140,6 +156,18 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
     // Conditional: ?cond,true,false
     if let Some(rest) = inner.strip_prefix('?') {
         return expand_conditional(rest, ctx);
+    }
+
+    // Literal: l:text (no further expansion)
+    if let Some(rest) = inner.strip_prefix("l:") {
+        return rest.to_string();
+    }
+
+    // Substitution: s/pattern/replacement:expr
+    if inner.starts_with("s/") {
+        if let Some(result) = expand_substitution(inner, ctx) {
+            return result;
+        }
     }
 
     // Comparison operators: ==:a,b  !=:a,b  <:a,b  etc.
@@ -236,6 +264,25 @@ fn expand_comparison(rest: &str, ctx: &FormatContext, cmp: fn(&str, &str) -> boo
     if cmp(&a, &b) { "1".to_string() } else { "0".to_string() }
 }
 
+/// Expand substitution: `s/pattern/replacement:expr`
+fn expand_substitution(inner: &str, ctx: &FormatContext) -> Option<String> {
+    // Format: s/pattern/replacement:expr
+    let rest = inner.strip_prefix("s/")?;
+
+    // Find the second / delimiter
+    let second_slash = rest.find('/')?;
+    let pattern = &rest[..second_slash];
+    let after_slash = &rest[second_slash + 1..];
+
+    // Find the : separator between replacement and expression
+    let colon = after_slash.find(':')?;
+    let replacement = &after_slash[..colon];
+    let expr = &after_slash[colon + 1..];
+
+    let expanded = format_expand(expr, ctx);
+    Some(expanded.replace(pattern, replacement))
+}
+
 /// Expand width truncation: `=N:expr`
 fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
     // Parse =N: or =-N:
@@ -247,19 +294,19 @@ fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
     let n: i32 = n_str.parse().ok()?;
     let expanded = format_expand(expr, ctx);
 
-    let width = expanded.len();
+    let char_count = expanded.chars().count();
     let abs_n = n.unsigned_abs() as usize;
 
-    if abs_n >= width {
+    if abs_n >= char_count {
         return Some(expanded);
     }
 
     if n >= 0 {
         // Positive: keep first N chars
-        Some(expanded[..abs_n].to_string())
+        Some(expanded.chars().take(abs_n).collect())
     } else {
         // Negative: keep last N chars
-        Some(expanded[width - abs_n..].to_string())
+        Some(expanded.chars().skip(char_count - abs_n).collect())
     }
 }
 
@@ -521,6 +568,41 @@ mod tests {
         ctx.set("window_flags", "*");
         let tmpl = "[#S] #I:#W#F";
         assert_eq!(format_expand(tmpl, &ctx), "[dev] 0:bash*");
+    }
+
+    #[test]
+    fn literal_format() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{l:hello world}", &ctx), "hello world");
+        // Literal should NOT expand variables
+        assert_eq!(format_expand("#{l:#{session_name}}", &ctx), "#{session_name}");
+    }
+
+    #[test]
+    fn substitution_format() {
+        let mut ctx = FormatContext::new();
+        ctx.set("session_name", "my-session");
+        assert_eq!(format_expand("#{s/-/_:#{session_name}}", &ctx), "my_session");
+    }
+
+    #[test]
+    fn substitution_no_match() {
+        let mut ctx = FormatContext::new();
+        ctx.set("x", "hello");
+        assert_eq!(format_expand("#{s/z/a:#{x}}", &ctx), "hello");
+    }
+
+    #[test]
+    fn inline_style_passthrough() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#[fg=red]text#[default]", &ctx), "#[fg=red]text#[default]");
+    }
+
+    #[test]
+    fn inline_style_with_variables() {
+        let mut ctx = FormatContext::new();
+        ctx.set("session_name", "dev");
+        assert_eq!(format_expand("#[fg=green]#S#[default]", &ctx), "#[fg=green]dev#[default]");
     }
 
     mod prop_tests {

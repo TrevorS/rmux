@@ -30,110 +30,7 @@ impl KeyBindings {
     /// Create default key bindings matching tmux.
     pub fn default_bindings() -> Self {
         let prefix = keyc_build(b'b'.into(), KeyModifiers::CTRL);
-
-        let mut prefix_table: HashMap<KeyCode, Vec<String>> = HashMap::new();
-
-        // Detach
-        prefix_table.insert(b'd' as KeyCode, vec!["detach-client".into()]);
-
-        // Window management
-        prefix_table.insert(b'c' as KeyCode, vec!["new-window".into()]);
-        prefix_table.insert(b'n' as KeyCode, vec!["next-window".into()]);
-        prefix_table.insert(b'p' as KeyCode, vec!["previous-window".into()]);
-        prefix_table.insert(b'l' as KeyCode, vec!["last-window".into()]);
-        prefix_table.insert(b'&' as KeyCode, vec!["kill-window".into()]);
-
-        // Pane splitting
-        prefix_table.insert(b'"' as KeyCode, vec!["split-window".into()]);
-        prefix_table.insert(b'%' as KeyCode, vec!["split-window".into(), "-h".into()]);
-
-        // Pane navigation
-        prefix_table.insert(b'o' as KeyCode, vec!["select-pane".into(), "-t".into(), "+".into()]);
-        prefix_table.insert(b'x' as KeyCode, vec!["kill-pane".into()]);
-
-        // Arrow key pane navigation
-        prefix_table.insert(KEYC_UP, vec!["select-pane".into(), "-U".into()]);
-        prefix_table.insert(KEYC_DOWN, vec!["select-pane".into(), "-D".into()]);
-        prefix_table.insert(KEYC_LEFT, vec!["select-pane".into(), "-L".into()]);
-        prefix_table.insert(KEYC_RIGHT, vec!["select-pane".into(), "-R".into()]);
-
-        // Window selection by number (0-9)
-        for i in 0u8..=9 {
-            prefix_table.insert(
-                (b'0' + i) as KeyCode,
-                vec!["select-window".into(), "-t".into(), i.to_string()],
-            );
-        }
-
-        // Command prompt
-        prefix_table.insert(b':' as KeyCode, vec!["command-prompt".into()]);
-
-        // Copy mode
-        prefix_table.insert(b'[' as KeyCode, vec!["copy-mode".into()]);
-        // Paste buffer
-        prefix_table.insert(b']' as KeyCode, vec!["paste-buffer".into()]);
-
-        // Send prefix (C-b C-b sends literal C-b to pane)
-        prefix_table
-            .insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), vec!["send-prefix".into()]);
-
-        // Layout cycling
-        prefix_table.insert(KEYC_SPACE, vec!["next-layout".into()]);
-
-        // Break pane out to its own window
-        prefix_table.insert(b'!' as KeyCode, vec!["break-pane".into()]);
-
-        // Last pane
-        prefix_table.insert(b';' as KeyCode, vec!["last-pane".into()]);
-
-        // Swap pane
-        prefix_table.insert(b'{' as KeyCode, vec!["swap-pane".into(), "-U".into()]);
-        prefix_table.insert(b'}' as KeyCode, vec!["swap-pane".into(), "-D".into()]);
-
-        // Rename window
-        prefix_table.insert(
-            b',' as KeyCode,
-            vec!["command-prompt".into(), "-I".into(), "#W".into(), "rename-window -- '%%'".into()],
-        );
-
-        // List keys
-        prefix_table.insert(b'?' as KeyCode, vec!["list-keys".into()]);
-
-        // Resize pane with Ctrl+arrows (by 1 cell)
-        prefix_table.insert(
-            keyc_build(KEYC_UP, KeyModifiers::CTRL),
-            vec!["resize-pane".into(), "-U".into()],
-        );
-        prefix_table.insert(
-            keyc_build(KEYC_DOWN, KeyModifiers::CTRL),
-            vec!["resize-pane".into(), "-D".into()],
-        );
-        prefix_table.insert(
-            keyc_build(KEYC_LEFT, KeyModifiers::CTRL),
-            vec!["resize-pane".into(), "-L".into()],
-        );
-        prefix_table.insert(
-            keyc_build(KEYC_RIGHT, KeyModifiers::CTRL),
-            vec!["resize-pane".into(), "-R".into()],
-        );
-
-        // Resize pane with Meta+arrows (by 5 cells)
-        prefix_table.insert(
-            keyc_build(KEYC_UP, KeyModifiers::META),
-            vec!["resize-pane".into(), "-U".into(), "5".into()],
-        );
-        prefix_table.insert(
-            keyc_build(KEYC_DOWN, KeyModifiers::META),
-            vec!["resize-pane".into(), "-D".into(), "5".into()],
-        );
-        prefix_table.insert(
-            keyc_build(KEYC_LEFT, KeyModifiers::META),
-            vec!["resize-pane".into(), "-L".into(), "5".into()],
-        );
-        prefix_table.insert(
-            keyc_build(KEYC_RIGHT, KeyModifiers::META),
-            vec!["resize-pane".into(), "-R".into(), "5".into()],
-        );
+        let prefix_table = default_prefix_table();
 
         let mut tables = HashMap::new();
         tables.insert("prefix".to_string(), prefix_table);
@@ -230,6 +127,128 @@ impl KeyBindings {
     }
 }
 
+/// Default prefix key bindings matching tmux.
+fn default_prefix_table() -> HashMap<KeyCode, Vec<String>> {
+    let mut t: HashMap<KeyCode, Vec<String>> = HashMap::new();
+
+    // Detach
+    t.insert(b'd' as KeyCode, vec!["detach-client".into()]);
+
+    // Window management
+    t.insert(b'c' as KeyCode, vec!["new-window".into()]);
+    t.insert(b'n' as KeyCode, vec!["next-window".into()]);
+    t.insert(b'p' as KeyCode, vec!["previous-window".into()]);
+    t.insert(b'l' as KeyCode, vec!["last-window".into()]);
+    t.insert(b'&' as KeyCode, vec!["kill-window".into()]);
+
+    // Pane splitting
+    t.insert(b'"' as KeyCode, vec!["split-window".into()]);
+    t.insert(b'%' as KeyCode, vec!["split-window".into(), "-h".into()]);
+
+    // Pane navigation
+    t.insert(b'o' as KeyCode, vec!["select-pane".into(), "-t".into(), "+".into()]);
+    t.insert(b'x' as KeyCode, vec!["kill-pane".into()]);
+
+    // Arrow key pane navigation
+    t.insert(KEYC_UP, vec!["select-pane".into(), "-U".into()]);
+    t.insert(KEYC_DOWN, vec!["select-pane".into(), "-D".into()]);
+    t.insert(KEYC_LEFT, vec!["select-pane".into(), "-L".into()]);
+    t.insert(KEYC_RIGHT, vec!["select-pane".into(), "-R".into()]);
+
+    // Window selection by number (0-9)
+    for i in 0u8..=9 {
+        t.insert((b'0' + i) as KeyCode, vec!["select-window".into(), "-t".into(), i.to_string()]);
+    }
+
+    // Command prompt & copy/paste
+    t.insert(b':' as KeyCode, vec!["command-prompt".into()]);
+    t.insert(b'[' as KeyCode, vec!["copy-mode".into()]);
+    t.insert(b']' as KeyCode, vec!["paste-buffer".into()]);
+    t.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), vec!["send-prefix".into()]);
+    t.insert(KEYC_SPACE, vec!["next-layout".into()]);
+    t.insert(b'!' as KeyCode, vec!["break-pane".into()]);
+    t.insert(b';' as KeyCode, vec!["last-pane".into()]);
+    t.insert(b'{' as KeyCode, vec!["swap-pane".into(), "-U".into()]);
+    t.insert(b'}' as KeyCode, vec!["swap-pane".into(), "-D".into()]);
+
+    // Prompts
+    t.insert(
+        b',' as KeyCode,
+        vec!["command-prompt".into(), "-I".into(), "#W".into(), "rename-window -- '%%'".into()],
+    );
+    t.insert(
+        b'$' as KeyCode,
+        vec!["command-prompt".into(), "-I".into(), "#S".into(), "rename-session -- '%%'".into()],
+    );
+    t.insert(
+        b'\'' as KeyCode,
+        vec!["command-prompt".into(), "-p".into(), "index".into(), "select-window -t '%%'".into()],
+    );
+    t.insert(b'.' as KeyCode, vec!["command-prompt".into(), "move-window -t '%%'".into()]);
+    t.insert(b'f' as KeyCode, vec!["command-prompt".into(), "find-window -- '%%'".into()]);
+
+    // Info & display
+    t.insert(b'?' as KeyCode, vec!["list-keys".into()]);
+    t.insert(b'w' as KeyCode, vec!["choose-tree".into()]);
+    t.insert(b's' as KeyCode, vec!["choose-tree".into()]);
+    t.insert(b'=' as KeyCode, vec!["choose-buffer".into()]);
+    t.insert(b'D' as KeyCode, vec!["choose-client".into()]);
+    t.insert(b'~' as KeyCode, vec!["show-messages".into()]);
+    t.insert(b'#' as KeyCode, vec!["list-buffers".into()]);
+    t.insert(b't' as KeyCode, vec!["clock-mode".into()]);
+    t.insert(b'q' as KeyCode, vec!["display-panes".into()]);
+    t.insert(b'i' as KeyCode, vec!["display-message".into()]);
+    t.insert(b'r' as KeyCode, vec!["refresh-client".into()]);
+
+    // Session switching
+    t.insert(b'(' as KeyCode, vec!["switch-client".into(), "-p".into()]);
+    t.insert(b')' as KeyCode, vec!["switch-client".into(), "-n".into()]);
+
+    // Rotate window
+    t.insert(keyc_build(b'o'.into(), KeyModifiers::CTRL), vec!["rotate-window".into()]);
+    t.insert(
+        keyc_build(b'o'.into(), KeyModifiers::META),
+        vec!["rotate-window".into(), "-D".into()],
+    );
+
+    // Page up enters copy mode
+    t.insert(KEYC_PPAGE, vec!["copy-mode".into(), "-u".into()]);
+
+    default_prefix_resize(&mut t);
+    default_prefix_layouts(&mut t);
+
+    t
+}
+
+/// Resize bindings for the prefix table.
+fn default_prefix_resize(t: &mut HashMap<KeyCode, Vec<String>>) {
+    for (arrow, dir) in [(KEYC_UP, "-U"), (KEYC_DOWN, "-D"), (KEYC_LEFT, "-L"), (KEYC_RIGHT, "-R")]
+    {
+        t.insert(keyc_build(arrow, KeyModifiers::CTRL), vec!["resize-pane".into(), dir.into()]);
+        t.insert(
+            keyc_build(arrow, KeyModifiers::META),
+            vec!["resize-pane".into(), dir.into(), "5".into()],
+        );
+    }
+}
+
+/// Layout selection bindings (M-1..5) for the prefix table.
+fn default_prefix_layouts(t: &mut HashMap<KeyCode, Vec<String>>) {
+    let layouts = [
+        (b'1', "even-horizontal"),
+        (b'2', "even-vertical"),
+        (b'3', "main-horizontal"),
+        (b'4', "main-vertical"),
+        (b'5', "tiled"),
+    ];
+    for (digit, name) in layouts {
+        t.insert(
+            keyc_build(digit.into(), KeyModifiers::META),
+            vec!["select-layout".into(), name.into()],
+        );
+    }
+}
+
 /// Default copy-mode-vi key bindings.
 fn default_copy_mode_vi() -> HashMap<KeyCode, Vec<String>> {
     let mut m = HashMap::new();
@@ -275,6 +294,14 @@ fn default_copy_mode_vi() -> HashMap<KeyCode, Vec<String>> {
     m.insert(KEYC_SPACE, vec!["begin-selection".into()]);
     m.insert(b'V' as KeyCode, vec!["select-line".into()]);
     m.insert(keyc_build(b'v'.into(), KeyModifiers::CTRL), vec!["rectangle-toggle".into()]);
+
+    // Jump to character
+    m.insert(b'f' as KeyCode, vec!["jump-forward".into()]);
+    m.insert(b'F' as KeyCode, vec!["jump-backward".into()]);
+    m.insert(b't' as KeyCode, vec!["jump-to-forward".into()]);
+    m.insert(b'T' as KeyCode, vec!["jump-to-backward".into()]);
+    m.insert(b';' as KeyCode, vec!["jump-again".into()]);
+    m.insert(b',' as KeyCode, vec!["jump-reverse".into()]);
 
     // Search
     m.insert(b'/' as KeyCode, vec!["search-forward".into()]);

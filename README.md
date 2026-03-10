@@ -43,7 +43,9 @@ cargo build --release                              # Release build
 cargo test                                         # Run all tests
 cargo clippy --all-targets --all-features          # Lint
 cargo bench -p rmux-core                           # Benchmarks
+make check                                         # Format + lint + test
 make e2e                                           # E2E tests (requires tmux)
+make fuzz                                          # Fuzz all targets (requires nightly)
 ```
 
 ## Architecture
@@ -60,9 +62,11 @@ Client and server communicate over a Unix domain socket at `$TMPDIR/rmux-$UID/de
 
 ## Testing
 
-Unit and integration tests run via `cargo test` (433 tests across all crates). Command integration tests use a `MockCommandServer` to verify behavior without I/O.
+Unit and integration tests run via `cargo test`. Command integration tests use a `MockCommandServer` to verify behavior without I/O. Property-based tests use `proptest` for data structure invariants.
 
-E2E tests (`make e2e`) launch rmux inside a real tmux session and exercise the full stack — pane splitting, copy mode, window management, non-attached client commands, detach/reattach, and more. The harness in `scripts/test-harness.sh` provides helpers for sending keys, capturing screen output, and running non-attached rmux commands against the test instance.
+E2E tests (`make e2e`) launch rmux inside a real tmux session and exercise the full stack — pane splitting, copy mode, window management, non-attached client commands, detach/reattach, and more.
+
+Fuzz targets (`make fuzz`) cover all parsers and data ingestion points.
 
 ## License
 

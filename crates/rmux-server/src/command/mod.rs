@@ -8,6 +8,8 @@ mod phase4_tests;
 #[cfg(test)]
 mod phase5_tests;
 #[cfg(test)]
+mod phase6_tests;
+#[cfg(test)]
 mod test_helpers;
 
 use crate::server::ServerError;
@@ -341,6 +343,11 @@ pub trait CommandServer {
 
     // --- Redraw ---
     fn mark_clients_redraw(&mut self, session_id: u32);
+
+    // --- Pipe ---
+    /// Start or stop piping a pane's output to a shell command.
+    /// If `command` is `None`, stop the existing pipe.
+    fn pipe_pane(&mut self, command: Option<&str>) -> Result<(), ServerError>;
 }
 
 /// Look up a command by name or unambiguous prefix (matching tmux behavior).

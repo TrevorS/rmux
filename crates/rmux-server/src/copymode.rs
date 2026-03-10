@@ -54,6 +54,8 @@ pub struct CopyModeState {
     pub key_table: String,
     /// Last jump-to-char character and direction for repeat (`;` / `,`).
     pub last_jump: Option<JumpState>,
+    /// Pending jump type — waiting for user to type the target character.
+    pub pending_jump: Option<JumpType>,
 }
 
 impl CopyModeState {
@@ -77,6 +79,7 @@ impl CopyModeState {
                 "copy-mode-emacs".to_string()
             },
             last_jump: None,
+            pending_jump: None,
         }
     }
 
@@ -600,6 +603,8 @@ pub enum CopyModeAction {
     Exit { copy_data: Option<Vec<u8>> },
     /// Enter search prompt (forward or backward).
     SearchPrompt { forward: bool },
+    /// Wait for next character for jump-to-char (f/F/t/T).
+    JumpPrompt { jump_type: JumpType },
     /// Key not recognized in copy mode.
     Unhandled,
 }
@@ -815,6 +820,16 @@ fn dispatch_search_and_jump(
         "search-backward" => return Some(CopyModeAction::SearchPrompt { forward: false }),
         "search-again" => cm.search_again(screen),
         "search-reverse" => cm.search_reverse(screen),
+        "jump-forward" => return Some(CopyModeAction::JumpPrompt { jump_type: JumpType::Forward }),
+        "jump-backward" => {
+            return Some(CopyModeAction::JumpPrompt { jump_type: JumpType::Backward });
+        }
+        "jump-to-forward" => {
+            return Some(CopyModeAction::JumpPrompt { jump_type: JumpType::ForwardTill });
+        }
+        "jump-to-backward" => {
+            return Some(CopyModeAction::JumpPrompt { jump_type: JumpType::BackwardTill });
+        }
         "jump-again" => cm.jump_again(screen),
         "jump-reverse" => cm.jump_reverse(screen),
         _ => return None,
