@@ -50,6 +50,52 @@ pub struct ServerClient {
     pub sy: u32,
     /// Command prompt state (Some = prompt mode active).
     pub prompt: Option<PromptState>,
+    /// Mouse click tracking for double/triple-click detection.
+    pub click_state: ClickState,
+}
+
+/// State for detecting double/triple-click sequences.
+#[derive(Debug, Clone)]
+pub struct ClickState {
+    /// Timestamp of the last click.
+    pub last_click: std::time::Instant,
+    /// Position of the last click (x, y).
+    pub last_x: u32,
+    pub last_y: u32,
+    /// Number of rapid consecutive clicks at the same position (1, 2, 3).
+    pub count: u32,
+}
+
+impl Default for ClickState {
+    fn default() -> Self {
+        Self {
+            last_click: std::time::Instant::now(),
+            last_x: 0,
+            last_y: 0,
+            count: 0,
+        }
+    }
+}
+
+impl ClickState {
+    /// Register a click and return the click count (1=single, 2=double, 3=triple).
+    /// Double-click threshold is 500ms and must be at the same position.
+    pub fn register_click(&mut self, x: u32, y: u32) -> u32 {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last_click);
+        let same_pos = self.last_x == x && self.last_y == y;
+
+        if same_pos && elapsed.as_millis() < 500 && self.count < 3 {
+            self.count += 1;
+        } else {
+            self.count = 1;
+        }
+
+        self.last_click = now;
+        self.last_x = x;
+        self.last_y = y;
+        self.count
+    }
 }
 
 impl ServerClient {
@@ -64,6 +110,7 @@ impl ServerClient {
             sx: 80,
             sy: 24,
             prompt: None,
+            click_state: ClickState::default(),
         }
     }
 
@@ -114,5 +161,59 @@ impl ServerClient {
     /// Send a message to this client.
     pub async fn send(&mut self, msg: &Message) -> Result<(), rmux_protocol::codec::CodecError> {
         self.writer.write_message(msg).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_state_single_click() {
+        let mut cs = ClickState::default();
+        assert_eq!(cs.register_click(5, 10), 1);
+    }
+
+    #[test]
+    fn click_state_double_click() {
+        let mut cs = ClickState::default();
+        assert_eq!(cs.register_click(5, 10), 1);
+        assert_eq!(cs.register_click(5, 10), 2);
+    }
+
+    #[test]
+    fn click_state_triple_click() {
+        let mut cs = ClickState::default();
+        assert_eq!(cs.register_click(5, 10), 1);
+        assert_eq!(cs.register_click(5, 10), 2);
+        assert_eq!(cs.register_click(5, 10), 3);
+    }
+
+    #[test]
+    fn click_state_caps_at_three() {
+        let mut cs = ClickState::default();
+        cs.register_click(5, 10);
+        cs.register_click(5, 10);
+        cs.register_click(5, 10);
+        // Fourth click resets to 1
+        assert_eq!(cs.register_click(5, 10), 1);
+    }
+
+    #[test]
+    fn click_state_different_position_resets() {
+        let mut cs = ClickState::default();
+        assert_eq!(cs.register_click(5, 10), 1);
+        assert_eq!(cs.register_click(20, 10), 1); // Different x
+    }
+
+    #[test]
+    fn click_state_timeout_resets() {
+        let mut cs = ClickState::default();
+        assert_eq!(cs.register_click(5, 10), 1);
+        // Simulate timeout by backdating last_click
+        cs.last_click = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(600))
+            .unwrap();
+        assert_eq!(cs.register_click(5, 10), 1); // Should reset due to timeout
     }
 }

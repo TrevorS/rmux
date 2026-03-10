@@ -536,20 +536,51 @@ impl Server {
 
         match base {
             KEYC_MOUSEDOWN1 => {
-                // Click: select pane at position, or position cursor in copy mode
-                if self.is_active_pane_in_copy_mode(session_id) {
-                    // In copy mode: position cursor
-                    self.copy_mode_position_cursor(session_id, mx, my);
+                // Track click count for double/triple-click detection
+                let click_count = if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.click_state.register_click(mx, my)
                 } else {
-                    // Select the pane at the click position
-                    self.select_pane_at_position(session_id, mx, my);
+                    1
+                };
+
+                match click_count {
+                    2 => {
+                        // Double-click: select word at position
+                        if !self.is_active_pane_in_copy_mode(session_id) {
+                            self.enter_copy_mode_for_active_pane(session_id);
+                        }
+                        self.copy_mode_select_word(session_id, mx, my);
+                    }
+                    3 => {
+                        // Triple-click: select line
+                        if !self.is_active_pane_in_copy_mode(session_id) {
+                            self.enter_copy_mode_for_active_pane(session_id);
+                        }
+                        self.copy_mode_select_line(session_id, my);
+                    }
+                    _ => {
+                        // Single click: select pane or position cursor
+                        if self.is_active_pane_in_copy_mode(session_id) {
+                            self.copy_mode_position_cursor(session_id, mx, my);
+                        } else {
+                            self.select_pane_at_position(session_id, mx, my);
+                        }
+                    }
                 }
+                self.mark_clients_redraw(session_id);
+            }
+            KEYC_MOUSEDOWN2 => {
+                // Middle-click: paste from top buffer
+                self.paste_top_buffer_to_active_pane(session_id);
+            }
+            KEYC_MOUSEDOWN3 => {
+                // Right-click: select pane at position (no context menu yet)
+                self.select_pane_at_position(session_id, mx, my);
                 self.mark_clients_redraw(session_id);
             }
             KEYC_MOUSEDRAG1 => {
                 // Drag: begin/extend selection in copy mode
                 if !self.is_active_pane_in_copy_mode(session_id) {
-                    // Enter copy mode first
                     self.enter_copy_mode_for_active_pane(session_id);
                 }
                 self.copy_mode_drag_selection(session_id, mx, my);
@@ -578,13 +609,8 @@ impl Server {
                     self.mark_clients_redraw(session_id);
                 }
             }
-            _ => {
-                // Other mouse events (middle/right click, etc.) - ignore for now
-            }
+            _ => {}
         }
-
-        // Suppress unused warning for client_id; may be needed for per-client mouse state later
-        let _ = client_id;
     }
 
     /// Check if the active pane's screen has mouse mode flags (for vim/htop forwarding).
@@ -770,6 +796,87 @@ impl Server {
                     }
                 }
             }
+        }
+    }
+
+    /// Double-click: select the word at the given screen position.
+    fn copy_mode_select_word(&mut self, session_id: u32, x: u32, y: u32) {
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    if let Some(cm) = &mut pane.copy_mode {
+                        cm.cx = x;
+                        cm.cy = y;
+                        // Find word boundaries
+                        let abs_y = cm.absolute_y(pane.screen.grid.history_size());
+                        if let Some(line) = pane.screen.grid.get_line_absolute(abs_y) {
+                            let max = line.cell_count();
+                            // Find word start
+                            let mut start = x;
+                            while start > 0 {
+                                let cell = line.get_cell(start - 1);
+                                let bytes = cell.data.as_bytes();
+                                if bytes.is_empty() || bytes == [b' '] {
+                                    break;
+                                }
+                                start -= 1;
+                            }
+                            // Find word end
+                            let mut end = x;
+                            while end + 1 < max {
+                                let cell = line.get_cell(end + 1);
+                                let bytes = cell.data.as_bytes();
+                                if bytes.is_empty() || bytes == [b' '] {
+                                    break;
+                                }
+                                end += 1;
+                            }
+                            // Set selection
+                            let hs = pane.screen.grid.history_size();
+                            cm.selecting = true;
+                            cm.sel_type =
+                                rmux_core::screen::selection::SelectionType::Normal;
+                            cm.sel_start_x = start;
+                            cm.sel_start_y = cm.absolute_y(hs);
+                            cm.cx = end;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Triple-click: select the entire line at the given row.
+    fn copy_mode_select_line(&mut self, session_id: u32, y: u32) {
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            if let Some(window) = session.active_window_mut() {
+                if let Some(pane) = window.active_pane_mut() {
+                    if let Some(cm) = &mut pane.copy_mode {
+                        cm.cy = y;
+                        let hs = pane.screen.grid.history_size();
+                        cm.select_line(hs);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Middle-click: paste the top buffer to the active pane.
+    fn paste_top_buffer_to_active_pane(&self, session_id: u32) {
+        let Some(buf) = self.paste_buffers.get_top() else {
+            return;
+        };
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return;
+        };
+        let Some(window) = session.active_window() else {
+            return;
+        };
+        let Some(pane) = window.active_pane() else {
+            return;
+        };
+        if let Some(fd) = self.pty_fds.get(&pane.id) {
+            let _ = nix::unistd::write(fd, &buf.data);
         }
     }
 
