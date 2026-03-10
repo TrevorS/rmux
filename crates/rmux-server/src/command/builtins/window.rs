@@ -187,6 +187,45 @@ pub fn cmd_select_layout(
     Ok(CommandResult::Ok)
 }
 
+/// Layout names in cycle order.
+const LAYOUT_CYCLE: &[&str] = &[
+    "even-horizontal",
+    "even-vertical",
+    "main-horizontal",
+    "main-vertical",
+    "tiled",
+];
+
+/// next-layout [-t target-window]
+pub fn cmd_next_layout(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let session_id = resolve_session(args, server)?;
+    let window_idx = resolve_window_idx(args, server, session_id)?;
+
+    let current = server.current_layout_name(session_id, window_idx);
+    let idx = LAYOUT_CYCLE.iter().position(|&n| n == current).unwrap_or(0);
+    let next = LAYOUT_CYCLE[(idx + 1) % LAYOUT_CYCLE.len()];
+    server.select_layout(session_id, window_idx, next)?;
+    Ok(CommandResult::Ok)
+}
+
+/// previous-layout [-t target-window]
+pub fn cmd_previous_layout(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let session_id = resolve_session(args, server)?;
+    let window_idx = resolve_window_idx(args, server, session_id)?;
+
+    let current = server.current_layout_name(session_id, window_idx);
+    let idx = LAYOUT_CYCLE.iter().position(|&n| n == current).unwrap_or(0);
+    let prev = LAYOUT_CYCLE[(idx + LAYOUT_CYCLE.len() - 1) % LAYOUT_CYCLE.len()];
+    server.select_layout(session_id, window_idx, prev)?;
+    Ok(CommandResult::Ok)
+}
+
 /// respawn-window [-t target-window]
 pub fn cmd_respawn_window(
     args: &[String],

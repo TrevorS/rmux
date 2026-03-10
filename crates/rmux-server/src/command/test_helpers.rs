@@ -1057,6 +1057,13 @@ impl CommandServer for MockCommandServer {
         let layout = match layout_name {
             "even-horizontal" | "eh" => layout_even_horizontal(window.sx, window.sy, &pane_ids),
             "even-vertical" | "ev" => layout_even_vertical(window.sx, window.sy, &pane_ids),
+            "main-horizontal" | "mh" => {
+                rmux_core::layout::layout_main_horizontal(window.sx, window.sy, &pane_ids)
+            }
+            "main-vertical" | "mv" => {
+                rmux_core::layout::layout_main_vertical(window.sx, window.sy, &pane_ids)
+            }
+            "tiled" => rmux_core::layout::layout_tiled(window.sx, window.sy, &pane_ids),
             _ => return Err(ServerError::Command(format!("unknown layout: {layout_name}"))),
         };
         for &pid in &pane_ids {
@@ -1203,6 +1210,58 @@ impl CommandServer for MockCommandServer {
     }
 
     // --- Redraw ---
+
+    fn current_layout_name(&self, session_id: u32, window_idx: u32) -> String {
+        if let Some(session) = self.sessions.find_by_id(session_id) {
+            if let Some(window) = session.windows.get(&window_idx) {
+                if let Some(layout) = &window.layout {
+                    return match layout.cell_type {
+                        rmux_core::layout::LayoutType::TopBottom => "even-vertical".to_string(),
+                        rmux_core::layout::LayoutType::LeftRight
+                        | rmux_core::layout::LayoutType::Pane => "even-horizontal".to_string(),
+                    };
+                }
+            }
+        }
+        "even-horizontal".to_string()
+    }
+
+    fn execute_command(
+        &mut self,
+        argv: &[String],
+    ) -> Result<crate::command::CommandResult, ServerError> {
+        crate::command::execute_command(argv, self)
+    }
+
+    fn send_bytes_to_pane(&self, _bytes: &[u8]) -> Result<(), ServerError> {
+        Ok(())
+    }
+
+    fn clear_history(&mut self) -> Result<(), ServerError> {
+        let session_id =
+            self.client_session_id().ok_or_else(|| ServerError::Command("no session".into()))?;
+        let window_idx = self
+            .client_active_window()
+            .ok_or_else(|| ServerError::Command("no window".into()))?;
+        let pane_id = self
+            .client_active_pane_id()
+            .ok_or_else(|| ServerError::Command("no pane".into()))?;
+
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command("window not found".into()))?;
+        let pane = window
+            .panes
+            .get_mut(&pane_id)
+            .ok_or_else(|| ServerError::Command("pane not found".into()))?;
+        pane.screen.grid.clear_history();
+        Ok(())
+    }
 
     fn mark_clients_redraw(&mut self, session_id: u32) {
         self.redraw_sessions.push(session_id);

@@ -286,6 +286,18 @@ pub trait CommandServer {
     fn list_all_commands(&self) -> Vec<String>;
     fn list_key_bindings(&self) -> Vec<String>;
 
+    // --- Layout ---
+    /// Get the name of the current layout for a window.
+    fn current_layout_name(&self, session_id: u32, window_idx: u32) -> String;
+
+    // --- Misc ---
+    /// Execute a parsed command (for if-shell, etc.).
+    fn execute_command(&mut self, argv: &[String]) -> Result<CommandResult, ServerError>;
+    /// Send raw bytes to the active pane's PTY.
+    fn send_bytes_to_pane(&self, bytes: &[u8]) -> Result<(), ServerError>;
+    /// Clear scrollback history for the active pane.
+    fn clear_history(&mut self) -> Result<(), ServerError>;
+
     // --- Redraw ---
     fn mark_clients_redraw(&mut self, session_id: u32);
 }

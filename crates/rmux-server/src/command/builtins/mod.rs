@@ -385,6 +385,64 @@ pub static COMMANDS: &[CommandEntry] = &[
         handler: window::cmd_respawn_window,
         usage: "[-t target-window]",
     },
+    // Layout cycling
+    CommandEntry {
+        name: "next-layout",
+        min_args: 0,
+        handler: window::cmd_next_layout,
+        usage: "[-t target-window]",
+    },
+    CommandEntry {
+        name: "nextl",
+        min_args: 0,
+        handler: window::cmd_next_layout,
+        usage: "[-t target-window]",
+    },
+    CommandEntry {
+        name: "previous-layout",
+        min_args: 0,
+        handler: window::cmd_previous_layout,
+        usage: "[-t target-window]",
+    },
+    CommandEntry {
+        name: "prevl",
+        min_args: 0,
+        handler: window::cmd_previous_layout,
+        usage: "[-t target-window]",
+    },
+    // if-shell
+    CommandEntry {
+        name: "if-shell",
+        min_args: 2,
+        handler: server_cmds::cmd_if_shell,
+        usage: "shell-command command [command]",
+    },
+    CommandEntry {
+        name: "if",
+        min_args: 2,
+        handler: server_cmds::cmd_if_shell,
+        usage: "shell-command command [command]",
+    },
+    // send-prefix
+    CommandEntry {
+        name: "send-prefix",
+        min_args: 0,
+        handler: server_cmds::cmd_send_prefix,
+        usage: "[-2]",
+    },
+    // clear-history
+    CommandEntry {
+        name: "clear-history",
+        min_args: 0,
+        handler: server_cmds::cmd_clear_history,
+        usage: "[-t target-pane]",
+    },
+    CommandEntry {
+        name: "clearhist",
+        min_args: 0,
+        handler: server_cmds::cmd_clear_history,
+        usage: "[-t target-pane]",
+    },
     // Run shell
     CommandEntry {
         name: "run-shell",

@@ -168,3 +168,65 @@ pub fn cmd_command_prompt(
     server.enter_command_prompt();
     Ok(CommandResult::Ok)
 }
+
+/// if-shell [-b] shell-command command [command]
+///
+/// Execute shell-command; if it returns success (exit 0), run the first command,
+/// otherwise run the second command (if given).
+pub fn cmd_if_shell(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let positional = positional_args(args, &[]);
+    if positional.len() < 2 {
+        return Err(ServerError::Command(
+            "if-shell: requires shell-command and command".into(),
+        ));
+    }
+
+    let shell_cmd = positional[0];
+    let true_cmd = positional[1];
+    let false_cmd = positional.get(2).copied();
+
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(shell_cmd)
+        .output();
+
+    let success = output.is_ok_and(|o| o.status.success());
+    let cmd_str = if success { true_cmd } else if let Some(fc) = false_cmd { fc } else { return Ok(CommandResult::Ok) };
+
+    // Parse and execute the resulting command
+    let cmd_args: Vec<String> = cmd_str.split_whitespace().map(String::from).collect();
+    if !cmd_args.is_empty() {
+        server.execute_command(&cmd_args)?;
+    }
+    Ok(CommandResult::Ok)
+}
+
+/// send-prefix [-2] [-t target-pane]
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_send_prefix(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    // Send the prefix key (Ctrl-b by default) to the active pane
+    let prefix_bytes = if has_flag(args, "-2") {
+        // prefix2 — not commonly used, default to Ctrl-b
+        vec![0x02]
+    } else {
+        vec![0x02] // Ctrl-b
+    };
+    server.send_bytes_to_pane(&prefix_bytes)?;
+    Ok(CommandResult::Ok)
+}
+
+/// clear-history [-t target-pane]
+pub fn cmd_clear_history(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    server.clear_history()?;
+    Ok(CommandResult::Ok)
+}
