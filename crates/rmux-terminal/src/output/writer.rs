@@ -85,6 +85,21 @@ impl TermWriter {
         if new_attrs.contains(Attrs::STRIKETHROUGH) {
             self.write_raw(b"\x1b[9m");
         }
+        if new_attrs.contains(Attrs::DOUBLE_UNDERSCORE) {
+            self.write_raw(b"\x1b[21m");
+        }
+        if new_attrs.contains(Attrs::CURLY_UNDERSCORE) {
+            self.write_raw(b"\x1b[4:3m");
+        }
+        if new_attrs.contains(Attrs::DOTTED_UNDERSCORE) {
+            self.write_raw(b"\x1b[4:4m");
+        }
+        if new_attrs.contains(Attrs::DASHED_UNDERSCORE) {
+            self.write_raw(b"\x1b[4:5m");
+        }
+        if new_attrs.contains(Attrs::OVERLINE) {
+            self.write_raw(b"\x1b[53m");
+        }
 
         // Apply colors
         if style.fg != self.current_style.fg {
@@ -92,6 +107,9 @@ impl TermWriter {
         }
         if style.bg != self.current_style.bg {
             self.write_bg(style.bg);
+        }
+        if style.us != self.current_style.us {
+            self.write_us(style.us);
         }
 
         self.current_style = *style;
@@ -131,6 +149,19 @@ impl TermWriter {
             }
             Color::Rgb { r, g, b } => {
                 write!(self.buf, "\x1b[48;2;{r};{g};{b}m").ok();
+            }
+        }
+    }
+
+    fn write_us(&mut self, color: Color) {
+        use std::fmt::Write;
+        match color {
+            Color::Default => self.write_raw(b"\x1b[59m"),
+            Color::Palette(n) => {
+                write!(self.buf, "\x1b[58;5;{n}m").ok();
+            }
+            Color::Rgb { r, g, b } => {
+                write!(self.buf, "\x1b[58;2;{r};{g};{b}m").ok();
             }
         }
     }
@@ -326,6 +357,48 @@ mod tests {
         // Change back to default: should emit reset
         w.set_style(&Style::DEFAULT);
         assert!(w.buffer().windows(4).any(|w| w == b"\x1b[0m"));
+    }
+
+    #[test]
+    fn style_overline() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::OVERLINE, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(5).any(|w| w == b"\x1b[53m"));
+    }
+
+    #[test]
+    fn style_double_underscore() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::DOUBLE_UNDERSCORE, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(5).any(|w| w == b"\x1b[21m"));
+    }
+
+    #[test]
+    fn style_curly_underscore() {
+        let mut w = TermWriter::new(256);
+        let style = Style { attrs: Attrs::CURLY_UNDERSCORE, ..Style::DEFAULT };
+        w.set_style(&style);
+        assert!(w.buffer().windows(6).any(|w| w == b"\x1b[4:3m"));
+    }
+
+    #[test]
+    fn underline_color() {
+        let mut w = TermWriter::new(256);
+        let style = Style { us: Color::RED, ..Style::DEFAULT };
+        w.set_style(&style);
+        let output = std::str::from_utf8(w.buffer()).unwrap();
+        assert!(output.contains("\x1b[58;5;1m"));
+    }
+
+    #[test]
+    fn underline_color_rgb() {
+        let mut w = TermWriter::new(256);
+        let style = Style { us: Color::Rgb { r: 255, g: 128, b: 0 }, ..Style::DEFAULT };
+        w.set_style(&style);
+        let output = std::str::from_utf8(w.buffer()).unwrap();
+        assert!(output.contains("\x1b[58;2;255;128;0m"));
     }
 
     #[test]
