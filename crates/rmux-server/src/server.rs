@@ -1041,9 +1041,10 @@ impl Server {
                         cmd
                     };
                     if !cmd_str.is_empty() {
-                        let argv: Vec<String> =
-                            cmd_str.split_whitespace().map(String::from).collect();
-                        self.queue_command(client_id, argv);
+                        let argv = crate::config::tokenize_command(&cmd_str);
+                        if !argv.is_empty() {
+                            self.queue_command(client_id, argv);
+                        }
                     }
                     self.mark_prompt_redraw(client_id);
                     return; // Enter always ends prompt input

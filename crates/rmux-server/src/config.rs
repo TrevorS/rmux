@@ -64,7 +64,7 @@ fn split_on_semicolons(line: &str) -> Vec<&str> {
 }
 
 /// Tokenize a command string into arguments, handling quotes.
-fn tokenize_command(input: &str) -> Vec<String> {
+pub fn tokenize_command(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut chars = input.chars().peekable();

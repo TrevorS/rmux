@@ -198,7 +198,7 @@ pub fn cmd_if_shell(
     };
 
     // Parse and execute the resulting command
-    let cmd_args: Vec<String> = cmd_str.split_whitespace().map(String::from).collect();
+    let cmd_args = crate::config::tokenize_command(cmd_str);
     if !cmd_args.is_empty() {
         server.execute_command(&cmd_args)?;
     }
