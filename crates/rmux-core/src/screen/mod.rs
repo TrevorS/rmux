@@ -121,6 +121,8 @@ pub struct Screen {
     pub selection: Option<Selection>,
     /// Side-channel notifications for the server.
     pub notifications: VecDeque<Notification>,
+    /// Replies to write back to the PTY (e.g., CPR responses).
+    pub replies: Vec<u8>,
 }
 
 impl Screen {
@@ -147,6 +149,7 @@ impl Screen {
             alternate: None,
             selection: None,
             notifications: VecDeque::new(),
+            replies: Vec::new(),
         }
     }
 
@@ -220,6 +223,11 @@ impl Screen {
     /// Drain all pending notifications.
     pub fn drain_notifications(&mut self) -> Vec<Notification> {
         self.notifications.drain(..).collect()
+    }
+
+    /// Take any pending reply data (to write back to PTY).
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replies)
     }
 
     /// Get the next tab stop after the given column.

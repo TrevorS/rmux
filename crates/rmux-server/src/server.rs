@@ -226,11 +226,16 @@ impl Server {
 
         // Find the pane and feed data through its parser
         let mut notifications = Vec::new();
+        let mut replies: Option<(i32, Vec<u8>)> = None;
         for session in self.sessions.iter_mut() {
             for window in session.windows.values_mut() {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
                     pane.process_input(data);
                     notifications = pane.screen.drain_notifications();
+                    let reply_data = pane.screen.take_replies();
+                    if !reply_data.is_empty() && pane.pty_fd >= 0 {
+                        replies = Some((pane.pty_fd, reply_data));
+                    }
                     // Mark attached clients for redraw
                     for client in self.clients.values_mut() {
                         if client.session_id == Some(session.id) && client.is_attached() {
@@ -243,6 +248,12 @@ impl Server {
         }
         for notification in notifications {
             self.handle_screen_notification(notification);
+        }
+        // Write replies (e.g., CPR) back to the PTY
+        if let Some((raw_fd, reply_bytes)) = replies {
+            // SAFETY: raw_fd is a valid PTY master fd owned by the pane.
+            let fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+            nix::unistd::write(fd, &reply_bytes).ok();
         }
     }
 

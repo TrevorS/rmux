@@ -723,6 +723,23 @@ impl InputParser {
                     _ => CursorStyle::Default,
                 };
             }
+            // DSR — Device Status Report
+            (b'n', None) => {
+                match self.params.get_u32(0, 0) {
+                    // Status report → respond "OK"
+                    5 => {
+                        screen.replies.extend_from_slice(b"\x1b[0n");
+                    }
+                    // Cursor position report → respond with position
+                    6 => {
+                        use std::fmt::Write;
+                        let mut reply = String::new();
+                        write!(reply, "\x1b[{};{}R", screen.cursor.y + 1, screen.cursor.x + 1).ok();
+                        screen.replies.extend_from_slice(reply.as_bytes());
+                    }
+                    _ => {}
+                }
+            }
             _ => {} // Unhandled CSI sequences
         }
     }
@@ -1423,6 +1440,36 @@ mod tests {
         let mut parser = InputParser::new();
         parser.parse(b"\x1b[1mA", &mut screen);
         assert_eq!(parser.state(), State::Ground);
+    }
+
+    #[test]
+    fn dsr_status_report() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // CSI 5 n → DSR status report
+        parser.parse(b"\x1b[5n", &mut screen);
+        assert_eq!(screen.replies, b"\x1b[0n");
+    }
+
+    #[test]
+    fn dsr_cursor_position_report() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Move cursor to (5, 3) then query
+        screen.cursor.x = 5;
+        screen.cursor.y = 3;
+        parser.parse(b"\x1b[6n", &mut screen);
+        // CPR is 1-based: row 4, col 6
+        assert_eq!(screen.replies, b"\x1b[4;6R");
+    }
+
+    #[test]
+    fn dsr_cursor_position_origin() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Cursor at origin (0,0) → CPR should be 1;1
+        parser.parse(b"\x1b[6n", &mut screen);
+        assert_eq!(screen.replies, b"\x1b[1;1R");
     }
 
     mod prop_tests {
