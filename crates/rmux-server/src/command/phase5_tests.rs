@@ -2083,15 +2083,15 @@ mod key_input_tests {
     }
 
     #[test]
-    fn double_prefix_sends_ctrl_b() {
+    fn double_prefix_sends_prefix() {
         let mut kb = KeyBindings::default_bindings();
         let _ = kb.process_input(b"\x02"); // First prefix
         let (result, _) = kb.process_input(b"\x02"); // Second prefix
         match result {
-            Some(KeyAction::SendToPane(data)) => {
-                assert_eq!(data, vec![0x02]);
+            Some(KeyAction::Command(argv)) => {
+                assert_eq!(argv, vec!["send-prefix"]);
             }
-            _ => panic!("expected SendToPane"),
+            _ => panic!("expected Command(send-prefix)"),
         }
     }
 

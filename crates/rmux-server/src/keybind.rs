@@ -73,6 +73,68 @@ impl KeyBindings {
         // Paste buffer
         prefix_table.insert(b']' as KeyCode, vec!["paste-buffer".into()]);
 
+        // Send prefix (C-b C-b sends literal C-b to pane)
+        prefix_table
+            .insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), vec!["send-prefix".into()]);
+
+        // Layout cycling
+        prefix_table.insert(KEYC_SPACE, vec!["next-layout".into()]);
+
+        // Break pane out to its own window
+        prefix_table.insert(b'!' as KeyCode, vec!["break-pane".into()]);
+
+        // Last pane
+        prefix_table.insert(b';' as KeyCode, vec!["last-pane".into()]);
+
+        // Swap pane
+        prefix_table.insert(b'{' as KeyCode, vec!["swap-pane".into(), "-U".into()]);
+        prefix_table.insert(b'}' as KeyCode, vec!["swap-pane".into(), "-D".into()]);
+
+        // Rename window
+        prefix_table.insert(
+            b',' as KeyCode,
+            vec!["command-prompt".into(), "-I".into(), "#W".into(), "rename-window -- '%%'".into()],
+        );
+
+        // List keys
+        prefix_table.insert(b'?' as KeyCode, vec!["list-keys".into()]);
+
+        // Resize pane with Ctrl+arrows (by 1 cell)
+        prefix_table.insert(
+            keyc_build(KEYC_UP, KeyModifiers::CTRL),
+            vec!["resize-pane".into(), "-U".into()],
+        );
+        prefix_table.insert(
+            keyc_build(KEYC_DOWN, KeyModifiers::CTRL),
+            vec!["resize-pane".into(), "-D".into()],
+        );
+        prefix_table.insert(
+            keyc_build(KEYC_LEFT, KeyModifiers::CTRL),
+            vec!["resize-pane".into(), "-L".into()],
+        );
+        prefix_table.insert(
+            keyc_build(KEYC_RIGHT, KeyModifiers::CTRL),
+            vec!["resize-pane".into(), "-R".into()],
+        );
+
+        // Resize pane with Meta+arrows (by 5 cells)
+        prefix_table.insert(
+            keyc_build(KEYC_UP, KeyModifiers::META),
+            vec!["resize-pane".into(), "-U".into(), "5".into()],
+        );
+        prefix_table.insert(
+            keyc_build(KEYC_DOWN, KeyModifiers::META),
+            vec!["resize-pane".into(), "-D".into(), "5".into()],
+        );
+        prefix_table.insert(
+            keyc_build(KEYC_LEFT, KeyModifiers::META),
+            vec!["resize-pane".into(), "-L".into(), "5".into()],
+        );
+        prefix_table.insert(
+            keyc_build(KEYC_RIGHT, KeyModifiers::META),
+            vec!["resize-pane".into(), "-R".into(), "5".into()],
+        );
+
         let mut tables = HashMap::new();
         tables.insert("prefix".to_string(), prefix_table);
         tables.insert("root".to_string(), HashMap::new());
@@ -93,10 +155,12 @@ impl KeyBindings {
     }
 
     /// Look up a binding in a specific table.
+    ///
+    /// Checks exact key (with modifiers) first, then falls back to base key.
     pub fn lookup_in_table(&self, table: &str, key: KeyCode) -> Option<&Vec<String>> {
         let t = self.tables.get(table)?;
         let base = keyc_base(key);
-        t.get(&base).or_else(|| t.get(&key))
+        t.get(&key).or_else(|| t.get(&base))
     }
 
     /// Process input bytes and return the action to take.
@@ -118,16 +182,13 @@ impl KeyBindings {
         if self.in_prefix {
             self.in_prefix = false;
 
-            // Check if this key has a binding in the prefix table
+            // Check if this key has a binding in the prefix table.
+            // Try exact match (with modifiers) first, then base key.
             let base = keyc_base(key);
-            if let Some(argv) = self.tables.get("prefix").and_then(|t| t.get(&base)) {
+            if let Some(argv) =
+                self.tables.get("prefix").and_then(|t| t.get(&key).or_else(|| t.get(&base)))
+            {
                 return (Some(KeyAction::Command(argv.clone())), consumed);
-            }
-
-            // If the key after prefix is the prefix key itself, send the prefix key to the pane
-            if key == self.prefix {
-                // Send Ctrl-b to the pane
-                return (Some(KeyAction::SendToPane(vec![0x02])), consumed);
             }
 
             // Unknown binding, ignore
@@ -584,6 +645,104 @@ mod tests {
             let action = kb.lookup_in_table("copy-mode-vi", key_char as KeyCode);
             assert!(action.is_some(), "expected copy-mode-vi binding for '{}'", key_char as char);
         }
+    }
+
+    #[test]
+    fn prefix_space_next_layout() {
+        let mut kb = KeyBindings::default_bindings();
+        let _ = kb.process_input(b"\x02");
+        // Space is a special key, need to send it as raw
+        let action = kb.lookup_in_table("prefix", KEYC_SPACE);
+        assert_eq!(action, Some(&vec!["next-layout".to_string()]));
+    }
+
+    #[test]
+    fn prefix_bang_break_pane() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("prefix", b'!' as KeyCode);
+        assert_eq!(action, Some(&vec!["break-pane".to_string()]));
+    }
+
+    #[test]
+    fn prefix_semicolon_last_pane() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("prefix", b';' as KeyCode);
+        assert_eq!(action, Some(&vec!["last-pane".to_string()]));
+    }
+
+    #[test]
+    fn prefix_braces_swap_pane() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("prefix", b'{' as KeyCode);
+        assert_eq!(action, Some(&vec!["swap-pane".to_string(), "-U".to_string()]));
+        let action = kb.lookup_in_table("prefix", b'}' as KeyCode);
+        assert_eq!(action, Some(&vec!["swap-pane".to_string(), "-D".to_string()]));
+    }
+
+    #[test]
+    fn prefix_question_list_keys() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("prefix", b'?' as KeyCode);
+        assert_eq!(action, Some(&vec!["list-keys".to_string()]));
+    }
+
+    #[test]
+    fn prefix_comma_rename_window() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("prefix", b',' as KeyCode);
+        assert!(action.is_some());
+        assert_eq!(action.unwrap()[0], "command-prompt");
+    }
+
+    #[test]
+    fn prefix_ctrl_b_send_prefix() {
+        let kb = KeyBindings::default_bindings();
+        let ctrl_b = keyc_build(b'b'.into(), KeyModifiers::CTRL);
+        let action = kb.lookup_in_table("prefix", ctrl_b);
+        assert_eq!(action, Some(&vec!["send-prefix".to_string()]));
+    }
+
+    #[test]
+    fn prefix_ctrl_arrows_resize_by_1() {
+        let kb = KeyBindings::default_bindings();
+        for (arrow, dir) in
+            [(KEYC_UP, "-U"), (KEYC_DOWN, "-D"), (KEYC_LEFT, "-L"), (KEYC_RIGHT, "-R")]
+        {
+            let key = keyc_build(arrow, KeyModifiers::CTRL);
+            let action = kb.lookup_in_table("prefix", key);
+            assert_eq!(
+                action,
+                Some(&vec!["resize-pane".to_string(), dir.to_string()]),
+                "C-{dir} should resize by 1"
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_meta_arrows_resize_by_5() {
+        let kb = KeyBindings::default_bindings();
+        for (arrow, dir) in
+            [(KEYC_UP, "-U"), (KEYC_DOWN, "-D"), (KEYC_LEFT, "-L"), (KEYC_RIGHT, "-R")]
+        {
+            let key = keyc_build(arrow, KeyModifiers::META);
+            let action = kb.lookup_in_table("prefix", key);
+            assert_eq!(
+                action,
+                Some(&vec!["resize-pane".to_string(), dir.to_string(), "5".to_string()]),
+                "M-{dir} should resize by 5"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_arrow_not_confused_with_plain_arrow() {
+        let kb = KeyBindings::default_bindings();
+        // Plain Up → select-pane -U
+        let plain = kb.lookup_in_table("prefix", KEYC_UP);
+        assert_eq!(plain, Some(&vec!["select-pane".to_string(), "-U".to_string()]));
+        // Ctrl-Up → resize-pane -U
+        let ctrl = kb.lookup_in_table("prefix", keyc_build(KEYC_UP, KeyModifiers::CTRL));
+        assert_eq!(ctrl, Some(&vec!["resize-pane".to_string(), "-U".to_string()]));
     }
 
     #[test]
