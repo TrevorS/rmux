@@ -1411,6 +1411,11 @@ impl Server {
         window_list.sort_by_key(|w| w.idx);
 
         // Build status config from session options
+        let status_style_str = session
+            .options
+            .get_string("status-style")
+            .unwrap_or("bg=green,fg=black");
+        let status_style = rmux_core::style::parse_style(status_style_str);
         let status_config = render::StatusConfig {
             left: session
                 .options
@@ -1428,6 +1433,7 @@ impl Server {
                 .get_string("window-status-current-format")
                 .unwrap_or("#I:#W#F")
                 .to_string(),
+            status_style,
         };
 
         render::render_window(

@@ -54,6 +54,92 @@ impl Default for Style {
     }
 }
 
+/// Parse a tmux-style string like `fg=red,bg=green,bold` into a `Style`.
+///
+/// Supports: `fg=COLOR`, `bg=COLOR`, `bold`, `dim`, `underscore`, `blink`,
+/// `reverse`, `hidden`, `italics`, `strikethrough`, `overline`, `default`.
+/// Colors can be: named (`red`, `green`), `colour<N>`, `color<N>`, or `#RRGGBB`.
+#[must_use]
+pub fn parse_style(s: &str) -> Style {
+    let mut style = Style::DEFAULT;
+    for part in s.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some(color_str) = part.strip_prefix("fg=") {
+            if let Some(c) = parse_color_name(color_str) {
+                style.fg = c;
+            }
+        } else if let Some(color_str) = part.strip_prefix("bg=") {
+            if let Some(c) = parse_color_name(color_str) {
+                style.bg = c;
+            }
+        } else if let Some(color_str) = part.strip_prefix("us=") {
+            if let Some(c) = parse_color_name(color_str) {
+                style.us = c;
+            }
+        } else {
+            match part {
+                "bold" => style.attrs |= Attrs::BOLD,
+                "dim" => style.attrs |= Attrs::DIM,
+                "underscore" => style.attrs |= Attrs::UNDERSCORE,
+                "blink" => style.attrs |= Attrs::BLINK,
+                "reverse" => style.attrs |= Attrs::REVERSE,
+                "hidden" => style.attrs |= Attrs::HIDDEN,
+                "italics" => style.attrs |= Attrs::ITALICS,
+                "strikethrough" => style.attrs |= Attrs::STRIKETHROUGH,
+                "overline" => style.attrs |= Attrs::OVERLINE,
+                "default" => style = Style::DEFAULT,
+                "none" | "noattr" => style.attrs = Attrs::empty(),
+                _ => {} // ignore unknown
+            }
+        }
+    }
+    style
+}
+
+/// Parse a color name (tmux syntax).
+fn parse_color_name(s: &str) -> Option<Color> {
+    let s = s.trim();
+    // #RRGGBB hex
+    if let Some(hex) = s.strip_prefix('#') {
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            return Some(Color::Rgb { r, g, b });
+        }
+    }
+    // colour<N> or color<N>
+    if let Some(n) = s.strip_prefix("colour").or_else(|| s.strip_prefix("color")) {
+        if let Ok(idx) = n.parse::<u8>() {
+            return Some(Color::Palette(idx));
+        }
+    }
+    // Named colors
+    match s {
+        "default" => Some(Color::Default),
+        "black" => Some(Color::BLACK),
+        "red" => Some(Color::RED),
+        "green" => Some(Color::GREEN),
+        "yellow" => Some(Color::YELLOW),
+        "blue" => Some(Color::BLUE),
+        "magenta" => Some(Color::MAGENTA),
+        "cyan" => Some(Color::CYAN),
+        "white" => Some(Color::WHITE),
+        "brightblack" => Some(Color::BRIGHT_BLACK),
+        "brightred" => Some(Color::BRIGHT_RED),
+        "brightgreen" => Some(Color::BRIGHT_GREEN),
+        "brightyellow" => Some(Color::BRIGHT_YELLOW),
+        "brightblue" => Some(Color::BRIGHT_BLUE),
+        "brightmagenta" => Some(Color::BRIGHT_MAGENTA),
+        "brightcyan" => Some(Color::BRIGHT_CYAN),
+        "brightwhite" => Some(Color::BRIGHT_WHITE),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +199,38 @@ mod tests {
         // But if the underline colors are the same, they should look equal.
         let s3 = Style { us: Color::RED, ..Style::DEFAULT };
         assert!(s1.looks_equal(&s3));
+    }
+
+    #[test]
+    fn parse_style_fg_bg() {
+        let s = parse_style("fg=red,bg=green");
+        assert_eq!(s.fg, Color::RED);
+        assert_eq!(s.bg, Color::GREEN);
+    }
+
+    #[test]
+    fn parse_style_bold_italic() {
+        let s = parse_style("bold,italics");
+        assert!(s.attrs.contains(Attrs::BOLD));
+        assert!(s.attrs.contains(Attrs::ITALICS));
+    }
+
+    #[test]
+    fn parse_style_hex_color() {
+        let s = parse_style("fg=#ff0000");
+        assert_eq!(s.fg, Color::Rgb { r: 255, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn parse_style_colour_number() {
+        let s = parse_style("bg=colour231");
+        assert_eq!(s.bg, Color::Palette(231));
+    }
+
+    #[test]
+    fn parse_style_default_resets() {
+        let s = parse_style("fg=red,default");
+        assert_eq!(s, Style::DEFAULT);
     }
 
     #[test]

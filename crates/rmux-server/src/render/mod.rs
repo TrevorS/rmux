@@ -22,6 +22,7 @@ pub struct StatusConfig {
     pub right: String,
     pub window_status_format: String,
     pub window_status_current_format: String,
+    pub status_style: Style,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -272,8 +273,11 @@ fn render_status_line(
     use std::fmt::Write;
 
     writer.cursor_position(0, y);
-    let status_style =
-        Style { fg: Color::BLACK, bg: Color::GREEN, us: Color::Default, attrs: Attrs::empty() };
+    let status_style = if let Some(cfg) = status_config {
+        cfg.status_style
+    } else {
+        Style { fg: Color::BLACK, bg: Color::GREEN, us: Color::Default, attrs: Attrs::empty() }
+    };
     writer.set_style(&status_style);
 
     // Build format context for variable expansion
@@ -571,6 +575,12 @@ mod tests {
             right: "RIGHT".to_string(),
             window_status_format: "#I:#W#F".to_string(),
             window_status_current_format: "#I:#W#F".to_string(),
+            status_style: Style {
+                fg: Color::BLACK,
+                bg: Color::GREEN,
+                us: Color::Default,
+                attrs: Attrs::empty(),
+            },
         };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
@@ -612,6 +622,7 @@ mod tests {
             right: String::new(),
             window_status_format: "[#I]#W".to_string(),
             window_status_current_format: "[#I]#W*".to_string(),
+            status_style: Style::DEFAULT,
         };
         let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
         // Active window uses current format
