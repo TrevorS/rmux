@@ -242,14 +242,8 @@ pub fn default_session_options() -> Options {
     opts.set("automatic-rename", OptionValue::Flag(true));
     opts.set("status-style", OptionValue::String("bg=green,fg=black".into()));
     opts.set("status-position", OptionValue::String("bottom".into()));
-    opts.set(
-        "window-status-format",
-        OptionValue::String("#I:#W#F".into()),
-    );
-    opts.set(
-        "window-status-current-format",
-        OptionValue::String("#I:#W#F".into()),
-    );
+    opts.set("window-status-format", OptionValue::String("#I:#W#F".into()));
+    opts.set("window-status-current-format", OptionValue::String("#I:#W#F".into()));
     opts
 }
 

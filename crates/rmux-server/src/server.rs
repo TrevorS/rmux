@@ -1411,10 +1411,8 @@ impl Server {
         window_list.sort_by_key(|w| w.idx);
 
         // Build status config from session options
-        let status_style_str = session
-            .options
-            .get_string("status-style")
-            .unwrap_or("bg=green,fg=black");
+        let status_style_str =
+            session.options.get_string("status-style").unwrap_or("bg=green,fg=black");
         let status_style = rmux_core::style::parse_style(status_style_str);
         let status_config = render::StatusConfig {
             left: session
@@ -1435,21 +1433,12 @@ impl Server {
                 .to_string(),
             status_style,
             pane_border_style: rmux_core::style::parse_style(
-                window
-                    .options
-                    .get_string("pane-border-style")
-                    .unwrap_or("default"),
+                window.options.get_string("pane-border-style").unwrap_or("default"),
             ),
             pane_active_border_style: rmux_core::style::parse_style(
-                window
-                    .options
-                    .get_string("pane-active-border-style")
-                    .unwrap_or("fg=green"),
+                window.options.get_string("pane-active-border-style").unwrap_or("fg=green"),
             ),
-            status_position_top: session
-                .options
-                .get_string("status-position")
-                .unwrap_or("bottom")
+            status_position_top: session.options.get_string("status-position").unwrap_or("bottom")
                 == "top",
             status_enabled: session.options.get_flag("status").unwrap_or(true),
         };

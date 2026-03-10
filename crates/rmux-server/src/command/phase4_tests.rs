@@ -1118,8 +1118,10 @@ mod display_message_tests {
         let (sid, _widx, _pid) = s.create_test_session("work");
         s.client_session_id = Some(sid);
 
-        let output =
-            output_text(exec(&mut s, &["display-message", "-p", "#{session_name}:#{window_index}"]));
+        let output = output_text(exec(
+            &mut s,
+            &["display-message", "-p", "#{session_name}:#{window_index}"],
+        ));
         assert!(output.contains("work:0"), "output: {output}");
     }
 }
