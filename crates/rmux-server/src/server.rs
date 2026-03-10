@@ -95,6 +95,8 @@ pub struct Server {
     pub options: rmux_core::options::Options,
     /// Global paste buffer storage.
     paste_buffers: crate::paste::PasteBufferStore,
+    /// Server hooks.
+    hooks: crate::hooks::HookStore,
 }
 
 impl Server {
@@ -119,6 +121,7 @@ impl Server {
             command_client: 0,
             options: rmux_core::options::default_server_options(),
             paste_buffers: crate::paste::PasteBufferStore::default(),
+            hooks: crate::hooks::HookStore::new(),
         }
     }
 
@@ -503,6 +506,17 @@ impl Server {
         tokio::spawn(async move {
             tx.send((client_id, ClientEvent::Message(msg))).await.ok();
         });
+    }
+
+    /// Fire a named hook, executing all registered commands.
+    fn fire_hook(&mut self, hook_name: &str) {
+        let commands = match self.hooks.get(hook_name) {
+            Some(cmds) => cmds.to_vec(),
+            None => return,
+        };
+        for argv in commands {
+            let _ = crate::command::execute_command(&argv, self);
+        }
     }
 
     /// Handle a mouse event from a client.
@@ -1440,6 +1454,7 @@ impl CommandServer for Server {
         // Spawn the shell process
         self.spawn_pane_process(pane_id, sx, pane_height, cwd)?;
 
+        self.fire_hook("after-new-session");
         Ok(session_id)
     }
 
@@ -1525,6 +1540,7 @@ impl CommandServer for Server {
 
         self.spawn_pane_process(pane_id, sx, pane_height, cwd)?;
 
+        self.fire_hook("after-new-window");
         Ok((window_idx, pane_id))
     }
 
@@ -1571,6 +1587,7 @@ impl CommandServer for Server {
 
         session.select_window(window_idx);
         self.mark_clients_redraw(session_id);
+        self.fire_hook("after-select-window");
         Ok(())
     }
 
@@ -3028,6 +3045,20 @@ impl CommandServer for Server {
         if let Some(client) = self.clients.get_mut(&client_id) {
             client.mark_redraw();
         }
+    }
+
+    // --- Hooks ---
+
+    fn set_hook(&mut self, hook_name: &str, argv: Vec<String>) {
+        self.hooks.set(hook_name, argv);
+    }
+
+    fn remove_hook(&mut self, hook_name: &str) -> bool {
+        self.hooks.remove(hook_name)
+    }
+
+    fn show_hooks(&self) -> Vec<String> {
+        self.hooks.list()
     }
 }
 

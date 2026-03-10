@@ -1,5 +1,5 @@
 //! Server-level commands: kill-server, send-keys, bind-key, unbind-key, source-file, run-shell,
-//! command-prompt.
+//! command-prompt, set-hook, show-hooks.
 
 use crate::command::{CommandResult, CommandServer, get_option, has_flag, positional_args};
 use crate::server::ServerError;
@@ -229,4 +229,49 @@ pub fn cmd_clear_history(
     let _ = args;
     server.clear_history()?;
     Ok(CommandResult::Ok)
+}
+
+/// set-hook [-u] hook-name [command]
+///
+/// Set or unset (-u) a hook. When set, the command is executed when the hook fires.
+pub fn cmd_set_hook(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let unset = has_flag(args, "-u");
+    let positional = positional_args(args, &[]);
+
+    if positional.is_empty() {
+        return Err(ServerError::Command("set-hook: missing hook name".into()));
+    }
+
+    let hook_name = positional[0];
+
+    if unset {
+        if !server.remove_hook(hook_name) {
+            return Err(ServerError::Command(format!("hook not found: {hook_name}")));
+        }
+    } else {
+        if positional.len() < 2 {
+            return Err(ServerError::Command("set-hook: missing command".into()));
+        }
+        let argv: Vec<String> = positional[1..].iter().map(|s| (*s).to_string()).collect();
+        server.set_hook(hook_name, argv);
+    }
+
+    Ok(CommandResult::Ok)
+}
+
+/// show-hooks
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_show_hooks(
+    _args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let hooks = server.show_hooks();
+    if hooks.is_empty() {
+        Ok(CommandResult::Ok)
+    } else {
+        Ok(CommandResult::Output(hooks.join("\n") + "\n"))
+    }
 }

@@ -576,6 +576,19 @@ pub static COMMANDS: &[CommandEntry] = &[
         handler: paste::cmd_load_buffer,
         usage: "[-b buffer-name] path",
     },
+    // Hook commands
+    CommandEntry {
+        name: "set-hook",
+        min_args: 1,
+        handler: server_cmds::cmd_set_hook,
+        usage: "[-u] hook-name [command]",
+    },
+    CommandEntry {
+        name: "show-hooks",
+        min_args: 0,
+        handler: server_cmds::cmd_show_hooks,
+        usage: "",
+    },
     // Environment commands
     CommandEntry {
         name: "set-environment",

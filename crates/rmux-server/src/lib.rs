@@ -23,6 +23,7 @@ pub mod command;
 pub mod config;
 pub mod copymode;
 pub mod format;
+pub mod hooks;
 pub mod keybind;
 pub mod navigate;
 pub mod notify;

@@ -2298,4 +2298,53 @@ mod iter7_commands {
         let out = output_text(exec(&mut server, &["showenv", "X"]));
         assert_eq!(out.trim(), "X=1");
     }
+
+    #[test]
+    fn set_and_show_hooks() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        exec(
+            &mut server,
+            &["set-hook", "after-new-session", "display-message", "hello"],
+        )
+        .unwrap();
+
+        let out = output_text(exec(&mut server, &["show-hooks"]));
+        assert!(out.contains("after-new-session[0]: display-message hello"));
+    }
+
+    #[test]
+    fn set_hook_unset() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        exec(
+            &mut server,
+            &["set-hook", "test-hook", "display-message", "hi"],
+        )
+        .unwrap();
+        exec(&mut server, &["set-hook", "-u", "test-hook"]).unwrap();
+
+        let result = exec(&mut server, &["show-hooks"]);
+        assert!(matches!(result, Ok(CommandResult::Ok)));
+    }
+
+    #[test]
+    fn set_hook_missing_command() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        let result = exec(&mut server, &["set-hook", "test-hook"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unset_nonexistent_hook() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        let result = exec(&mut server, &["set-hook", "-u", "nope"]);
+        assert!(result.is_err());
+    }
 }

@@ -325,6 +325,14 @@ pub trait CommandServer {
     /// Force a full redraw for the current client.
     fn refresh_client(&mut self);
 
+    // --- Hooks ---
+    /// Add a command to a named hook.
+    fn set_hook(&mut self, hook_name: &str, argv: Vec<String>);
+    /// Remove a named hook.
+    fn remove_hook(&mut self, hook_name: &str) -> bool;
+    /// List all registered hooks as formatted strings.
+    fn show_hooks(&self) -> Vec<String>;
+
     // --- Redraw ---
     fn mark_clients_redraw(&mut self, session_id: u32);
 }

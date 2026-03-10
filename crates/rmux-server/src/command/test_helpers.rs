@@ -38,6 +38,8 @@ pub struct MockCommandServer {
     pub paste_buffers: PasteBufferStore,
     /// Whether copy mode was entered.
     pub copy_mode_entered: bool,
+    /// Hook store for testing.
+    pub hooks: crate::hooks::HookStore,
 }
 
 impl MockCommandServer {
@@ -56,6 +58,7 @@ impl MockCommandServer {
             redraw_sessions: Vec::new(),
             paste_buffers: PasteBufferStore::default(),
             copy_mode_entered: false,
+            hooks: crate::hooks::HookStore::new(),
         }
     }
 
@@ -1356,6 +1359,20 @@ impl CommandServer for MockCommandServer {
         if let Some(session_id) = self.client_session_id {
             self.redraw_sessions.push(session_id);
         }
+    }
+
+    // --- Hooks ---
+
+    fn set_hook(&mut self, hook_name: &str, argv: Vec<String>) {
+        self.hooks.set(hook_name, argv);
+    }
+
+    fn remove_hook(&mut self, hook_name: &str) -> bool {
+        self.hooks.remove(hook_name)
+    }
+
+    fn show_hooks(&self) -> Vec<String> {
+        self.hooks.list()
     }
 
     fn mark_clients_redraw(&mut self, session_id: u32) {
