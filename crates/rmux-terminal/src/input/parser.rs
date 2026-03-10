@@ -723,6 +723,16 @@ impl InputParser {
                     _ => CursorStyle::Default,
                 };
             }
+            // DA — Primary Device Attributes (CSI c or CSI 0 c)
+            (b'c', None) if self.params.get_u32(0, 0) == 0 => {
+                // Respond as VT220 with ANSI color (matches tmux)
+                screen.replies.extend_from_slice(b"\x1b[?62;22c");
+            }
+            // DA — Secondary Device Attributes (CSI > c or CSI > 0 c)
+            (b'c', Some(b'>')) => {
+                // Respond with version info (matches tmux: VT220, version 0, 0)
+                screen.replies.extend_from_slice(b"\x1b[>0;0;0c");
+            }
             // DSR — Device Status Report
             (b'n', None) => {
                 match self.params.get_u32(0, 0) {
@@ -1440,6 +1450,30 @@ mod tests {
         let mut parser = InputParser::new();
         parser.parse(b"\x1b[1mA", &mut screen);
         assert_eq!(parser.state(), State::Ground);
+    }
+
+    #[test]
+    fn da_primary_device_attributes() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[c", &mut screen);
+        assert_eq!(screen.replies, b"\x1b[?62;22c");
+    }
+
+    #[test]
+    fn da_primary_with_zero_param() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[0c", &mut screen);
+        assert_eq!(screen.replies, b"\x1b[?62;22c");
+    }
+
+    #[test]
+    fn da_secondary_device_attributes() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[>c", &mut screen);
+        assert_eq!(screen.replies, b"\x1b[>0;0;0c");
     }
 
     #[test]
