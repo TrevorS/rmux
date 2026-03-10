@@ -1370,9 +1370,9 @@ impl Server {
                     let prompt = c.prompt.as_ref().map(|p| {
                         use crate::client::PromptType;
                         match p.prompt_type {
-                            PromptType::Command => p.buffer.clone(),
-                            PromptType::SearchForward => format!("(search down){}", p.buffer),
-                            PromptType::SearchBackward => format!("(search up){}", p.buffer),
+                            PromptType::Command => format!(":{}", p.buffer),
+                            PromptType::SearchForward => format!("/{}", p.buffer),
+                            PromptType::SearchBackward => format!("?{}", p.buffer),
                         }
                     });
                     c.session_id.map(|sid| (c.id, sid, c.sx, c.sy, prompt))

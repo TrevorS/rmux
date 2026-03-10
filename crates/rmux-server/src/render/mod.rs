@@ -407,23 +407,22 @@ fn build_status_context(
 }
 
 /// Render the command prompt line (replaces the status line when in prompt mode).
-fn render_prompt_line(writer: &mut TermWriter, buffer: &str, width: u32, y: u32) {
+///
+/// `prompt_str` is the full prompt string including prefix (`:`, `/`, or `?`).
+fn render_prompt_line(writer: &mut TermWriter, prompt_str: &str, width: u32, y: u32) {
     writer.cursor_position(0, y);
-    let style =
-        Style { fg: Color::Default, bg: Color::Default, us: Color::Default, attrs: Attrs::empty() };
-    writer.set_style(&style);
+    writer.set_style(&Style::DEFAULT);
 
-    let prompt = format!(":{buffer}");
-    writer.write_raw(prompt.as_bytes());
+    writer.write_raw(prompt_str.as_bytes());
 
     // Fill rest with spaces
-    let remaining = (width as usize).saturating_sub(prompt.len());
+    let remaining = (width as usize).saturating_sub(prompt_str.len());
     for _ in 0..remaining {
         writer.write_raw(b" ");
     }
 
     // Position cursor right after the typed text
-    let cursor_x = prompt.len().min(width as usize);
+    let cursor_x = prompt_str.len().min(width as usize);
     writer.cursor_position(cursor_x as u32, y);
 }
 
