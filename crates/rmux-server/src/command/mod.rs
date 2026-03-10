@@ -285,6 +285,8 @@ pub trait CommandServer {
     fn list_clients(&self) -> Vec<String>;
     fn list_all_commands(&self) -> Vec<String>;
     fn list_key_bindings(&self) -> Vec<String>;
+    /// Build a format context with current session/window/pane variables.
+    fn build_format_context(&self) -> crate::format::FormatContext;
 
     // --- Layout ---
     /// Get the name of the current layout for a window.

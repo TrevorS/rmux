@@ -1091,6 +1091,17 @@ mod display_message_tests {
         let output = output_text(exec(&mut s, &["display", "-p", "foo"]));
         assert!(output.contains("foo"));
     }
+
+    #[test]
+    fn display_message_format_expansion() {
+        let mut s = MockCommandServer::new();
+        let (sid, _widx, _pid) = s.create_test_session("work");
+        s.client_session_id = Some(sid);
+
+        let output =
+            output_text(exec(&mut s, &["display-message", "-p", "#{session_name}:#{window_index}"]));
+        assert!(output.contains("work:0"), "output: {output}");
+    }
 }
 
 // ============================================================

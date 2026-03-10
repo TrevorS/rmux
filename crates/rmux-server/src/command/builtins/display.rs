@@ -3,18 +3,38 @@
 use crate::command::{CommandResult, CommandServer, has_flag};
 use crate::server::ServerError;
 
-/// display-message [-p] [message]
+/// display-message [-p] [-F format] [message]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_message(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let print = has_flag(args, "-p");
-    let message: String =
-        args.iter().filter(|a| !a.starts_with('-')).cloned().collect::<Vec<_>>().join(" ");
+
+    // Collect non-flag arguments as the message
+    let mut skip_next = false;
+    let mut message_parts = Vec::new();
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "-F" {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        message_parts.push(arg.as_str());
+    }
+    let message = message_parts.join(" ");
 
     if print || !message.is_empty() {
-        Ok(CommandResult::Output(message + "\n"))
+        // Expand format variables
+        let ctx = server.build_format_context();
+        let expanded = crate::format::format_expand(&message, &ctx);
+        Ok(CommandResult::Output(expanded + "\n"))
     } else {
         Ok(CommandResult::Ok)
     }
