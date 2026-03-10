@@ -1263,6 +1263,101 @@ impl CommandServer for MockCommandServer {
         Ok(())
     }
 
+    // --- Client switching ---
+
+    fn switch_client(&mut self, session_id: u32) -> Result<(), ServerError> {
+        if self.sessions.find_by_id(session_id).is_none() {
+            return Err(ServerError::Command("session not found".into()));
+        }
+        self.client_session_id = Some(session_id);
+        Ok(())
+    }
+
+    // --- Environment ---
+
+    fn set_environment(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        session.environ.insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        session.environ.remove(key);
+        Ok(())
+    }
+
+    fn show_environment(&self, session_id: u32) -> Vec<String> {
+        if let Some(session) = self.sessions.find_by_id(session_id) {
+            let mut env: Vec<String> =
+                session.environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            env.sort();
+            env
+        } else {
+            Vec::new()
+        }
+    }
+
+    // --- Buffer file I/O ---
+
+    fn save_buffer(&self, name: Option<&str>, path: &str) -> Result<(), ServerError> {
+        let buf = if let Some(name) = name {
+            self.paste_buffers.get_by_name(name)
+        } else {
+            self.paste_buffers.get_top()
+        };
+        let buf = buf.ok_or(ServerError::Command("no buffers".into()))?;
+        std::fs::write(path, &buf.data)
+            .map_err(|e| ServerError::Command(format!("save-buffer: {e}")))?;
+        Ok(())
+    }
+
+    fn load_buffer(&mut self, name: Option<&str>, path: &str) -> Result<(), ServerError> {
+        let data = std::fs::read(path)
+            .map_err(|e| ServerError::Command(format!("load-buffer: {e}")))?;
+        if let Some(name) = name {
+            self.paste_buffers.set(name, data);
+        } else {
+            self.paste_buffers.add(data);
+        }
+        Ok(())
+    }
+
+    // --- Window search ---
+
+    fn find_windows(&self, session_id: u32, pattern: &str) -> Vec<String> {
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return Vec::new();
+        };
+        let mut results = Vec::new();
+        for (&idx, window) in &session.windows {
+            if window.name.contains(pattern) {
+                results.push(format!("{idx}: {}", window.name));
+            }
+        }
+        results.sort();
+        results
+    }
+
+    // --- Client redraw ---
+
+    fn refresh_client(&mut self) {
+        if let Some(session_id) = self.client_session_id {
+            self.redraw_sessions.push(session_id);
+        }
+    }
+
     fn mark_clients_redraw(&mut self, session_id: u32) {
         self.redraw_sessions.push(session_id);
     }

@@ -187,6 +187,27 @@ pub fn cmd_select_layout(
     Ok(CommandResult::Ok)
 }
 
+/// find-window [-t target-session] match-string
+pub fn cmd_find_window(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    use crate::command::positional_args;
+
+    let session_id = resolve_session(args, server)?;
+    let positional = positional_args(args, &["-t"]);
+    let pattern = positional
+        .first()
+        .ok_or_else(|| ServerError::Command("find-window: missing match string".into()))?;
+
+    let results = server.find_windows(session_id, pattern);
+    if results.is_empty() {
+        Err(ServerError::Command(format!("no windows matching: {pattern}")))
+    } else {
+        Ok(CommandResult::Output(results.join("\n") + "\n"))
+    }
+}
+
 /// Layout names in cycle order.
 const LAYOUT_CYCLE: &[&str] = &[
     "even-horizontal",

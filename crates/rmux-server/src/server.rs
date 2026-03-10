@@ -2813,6 +2813,115 @@ impl CommandServer for Server {
         self.paste_buffers.set(name, data.as_bytes().to_vec());
         Ok(())
     }
+
+    // --- Client switching ---
+
+    fn switch_client(&mut self, session_id: u32) -> Result<(), ServerError> {
+        if self.sessions.find_by_id(session_id).is_none() {
+            return Err(ServerError::Command("session not found".into()));
+        }
+        let client_id = self.command_client;
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            // Detach from old session
+            if let Some(old_id) = client.session_id {
+                if let Some(old_session) = self.sessions.find_by_id_mut(old_id) {
+                    old_session.attached = old_session.attached.saturating_sub(1);
+                }
+            }
+            client.session_id = Some(session_id);
+            client.mark_redraw();
+            if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                session.attached += 1;
+            }
+        }
+        Ok(())
+    }
+
+    // --- Environment ---
+
+    fn set_environment(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        session.environ.insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        session.environ.remove(key);
+        Ok(())
+    }
+
+    fn show_environment(&self, session_id: u32) -> Vec<String> {
+        if let Some(session) = self.sessions.find_by_id(session_id) {
+            let mut env: Vec<String> =
+                session.environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            env.sort();
+            env
+        } else {
+            Vec::new()
+        }
+    }
+
+    // --- Buffer file I/O ---
+
+    fn save_buffer(&self, name: Option<&str>, path: &str) -> Result<(), ServerError> {
+        let buf = if let Some(name) = name {
+            self.paste_buffers.get_by_name(name)
+        } else {
+            self.paste_buffers.get_top()
+        };
+        let buf = buf.ok_or(ServerError::Command("no buffers".into()))?;
+        std::fs::write(path, &buf.data)
+            .map_err(|e| ServerError::Command(format!("save-buffer: {e}")))?;
+        Ok(())
+    }
+
+    fn load_buffer(&mut self, name: Option<&str>, path: &str) -> Result<(), ServerError> {
+        let data =
+            std::fs::read(path).map_err(|e| ServerError::Command(format!("load-buffer: {e}")))?;
+        if let Some(name) = name {
+            self.paste_buffers.set(name, data);
+        } else {
+            self.paste_buffers.add(data);
+        }
+        Ok(())
+    }
+
+    // --- Window search ---
+
+    fn find_windows(&self, session_id: u32, pattern: &str) -> Vec<String> {
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return Vec::new();
+        };
+        let mut results = Vec::new();
+        for (&idx, window) in &session.windows {
+            if window.name.contains(pattern) {
+                results.push(format!("{idx}: {}", window.name));
+            }
+        }
+        results.sort();
+        results
+    }
+
+    // --- Client redraw ---
+
+    fn refresh_client(&mut self) {
+        let client_id = self.command_client;
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.mark_redraw();
+        }
+    }
 }
 
 /// Format an option value as a display string.

@@ -2147,3 +2147,155 @@ mod key_input_tests {
         }
     }
 }
+
+// ── Iteration 7: Missing commands batch 2 ──
+
+mod iter7_commands {
+    use super::*;
+
+    #[test]
+    fn switch_client_changes_session() {
+        let mut server = MockCommandServer::new();
+        let (sid1, _, _) = server.create_test_session("sess1");
+        let (sid2, _, _) = server.create_test_session("sess2");
+        server.client_session_id = Some(sid1);
+
+        let result = exec(&mut server, &["switch-client", "-t", "sess2"]);
+        assert!(matches!(result, Ok(CommandResult::Ok)));
+        assert_eq!(server.client_session_id, Some(sid2));
+    }
+
+    #[test]
+    fn switch_client_missing_session() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("sess1");
+
+        let result = exec(&mut server, &["switch-client", "-t", "nonexistent"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_and_show_environment() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        exec(&mut server, &["set-environment", "FOO", "bar"]).unwrap();
+        exec(&mut server, &["set-environment", "BAZ", "qux"]).unwrap();
+
+        let out = output_text(exec(&mut server, &["show-environment"]));
+        assert!(out.contains("BAZ=qux"));
+        assert!(out.contains("FOO=bar"));
+    }
+
+    #[test]
+    fn unset_environment() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        exec(&mut server, &["set-environment", "KEEP", "yes"]).unwrap();
+        exec(&mut server, &["set-environment", "REMOVE_ME", "val"]).unwrap();
+        exec(&mut server, &["set-environment", "-u", "REMOVE_ME"]).unwrap();
+
+        let out = output_text(exec(&mut server, &["show-environment"]));
+        assert!(!out.contains("REMOVE_ME"));
+        assert!(out.contains("KEEP=yes"));
+    }
+
+    #[test]
+    fn show_environment_single_var() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        exec(&mut server, &["set-environment", "MYVAR", "hello"]).unwrap();
+
+        let out = output_text(exec(&mut server, &["show-environment", "MYVAR"]));
+        assert_eq!(out.trim(), "MYVAR=hello");
+    }
+
+    #[test]
+    fn show_environment_missing_var() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        let out = output_text(exec(&mut server, &["show-environment", "NOPE"]));
+        assert_eq!(out.trim(), "-NOPE");
+    }
+
+    #[test]
+    fn find_window_matches() {
+        let mut server = MockCommandServer::new();
+        let (sid, _, _) = server.create_test_session("main");
+        server.add_window_to_session(sid, "vim");
+        server.add_window_to_session(sid, "logs");
+
+        let out = output_text(exec(&mut server, &["find-window", "vim"]));
+        assert!(out.contains("vim"));
+        assert!(!out.contains("logs"));
+    }
+
+    #[test]
+    fn find_window_no_match() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        let result = exec(&mut server, &["find-window", "nonexistent"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_and_load_buffer() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        // Set a buffer
+        exec(&mut server, &["set-buffer", "-b", "test", "hello world"]).unwrap();
+
+        // Save to temp file
+        let path = "/tmp/rmux-test-save-buffer.txt";
+        exec(&mut server, &["save-buffer", "-b", "test", path]).unwrap();
+
+        // Delete the buffer
+        exec(&mut server, &["delete-buffer", "-b", "test"]).unwrap();
+
+        // Load it back
+        exec(&mut server, &["load-buffer", "-b", "reloaded", path]).unwrap();
+
+        // Verify
+        let out = output_text(exec(&mut server, &["show-buffer", "-b", "reloaded"]));
+        assert_eq!(out, "hello world");
+
+        // Cleanup
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn refresh_client_marks_redraw() {
+        let mut server = MockCommandServer::new();
+        let (sid, _, _) = server.create_test_session("main");
+        server.redraw_sessions.clear();
+
+        exec(&mut server, &["refresh-client"]).unwrap();
+        assert_eq!(server.redraw_sessions, vec![sid]);
+    }
+
+    #[test]
+    fn switch_client_prefix_match() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+        server.create_test_session("other");
+
+        // "switchc" is registered as an alias
+        let result = exec(&mut server, &["switchc", "-t", "other"]);
+        assert!(matches!(result, Ok(CommandResult::Ok)));
+    }
+
+    #[test]
+    fn setenv_alias() {
+        let mut server = MockCommandServer::new();
+        server.create_test_session("main");
+
+        exec(&mut server, &["setenv", "X", "1"]).unwrap();
+        let out = output_text(exec(&mut server, &["showenv", "X"]));
+        assert_eq!(out.trim(), "X=1");
+    }
+}

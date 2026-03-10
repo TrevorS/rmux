@@ -298,6 +298,33 @@ pub trait CommandServer {
     /// Clear scrollback history for the active pane.
     fn clear_history(&mut self) -> Result<(), ServerError>;
 
+    // --- Client switching ---
+    /// Switch the current client to a different session.
+    fn switch_client(&mut self, session_id: u32) -> Result<(), ServerError>;
+
+    // --- Environment ---
+    /// Set a session environment variable.
+    fn set_environment(&mut self, session_id: u32, key: &str, value: &str)
+        -> Result<(), ServerError>;
+    /// Unset (remove) a session environment variable.
+    fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError>;
+    /// Show session environment variables. Returns "KEY=VALUE" lines.
+    fn show_environment(&self, session_id: u32) -> Vec<String>;
+
+    // --- Buffer file I/O ---
+    /// Save the named (or top) buffer to a file.
+    fn save_buffer(&self, name: Option<&str>, path: &str) -> Result<(), ServerError>;
+    /// Load a file into the paste buffer store.
+    fn load_buffer(&mut self, name: Option<&str>, path: &str) -> Result<(), ServerError>;
+
+    // --- Window search ---
+    /// Find windows matching a pattern. Returns formatted result strings.
+    fn find_windows(&self, session_id: u32, pattern: &str) -> Vec<String>;
+
+    // --- Client redraw ---
+    /// Force a full redraw for the current client.
+    fn refresh_client(&mut self);
+
     // --- Redraw ---
     fn mark_clients_redraw(&mut self, session_id: u32);
 }

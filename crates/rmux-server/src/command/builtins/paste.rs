@@ -71,3 +71,31 @@ pub fn cmd_delete_buffer(
     server.delete_buffer(name)?;
     Ok(CommandResult::Ok)
 }
+
+/// save-buffer [-b buffer-name] path
+pub fn cmd_save_buffer(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let name = get_option(args, "-b");
+    let positionals = positional_args(args, &["-b"]);
+    let path = positionals
+        .first()
+        .ok_or_else(|| ServerError::Command("usage: save-buffer [-b name] path".into()))?;
+    server.save_buffer(name, path)?;
+    Ok(CommandResult::Ok)
+}
+
+/// load-buffer [-b buffer-name] path
+pub fn cmd_load_buffer(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let name = get_option(args, "-b");
+    let positionals = positional_args(args, &["-b"]);
+    let path = positionals
+        .first()
+        .ok_or_else(|| ServerError::Command("usage: load-buffer [-b name] path".into()))?;
+    server.load_buffer(name, path)?;
+    Ok(CommandResult::Ok)
+}

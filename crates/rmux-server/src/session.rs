@@ -26,6 +26,8 @@ pub struct Session {
     pub options: Options,
     /// Number of attached clients.
     pub attached: u32,
+    /// Session environment variables (set-environment / show-environment).
+    pub environ: HashMap<String, String>,
 }
 
 impl Session {
@@ -41,6 +43,7 @@ impl Session {
             last_window: None,
             options: default_session_options(),
             attached: 0,
+            environ: HashMap::new(),
         }
     }
 

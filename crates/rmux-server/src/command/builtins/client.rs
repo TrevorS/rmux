@@ -1,6 +1,6 @@
-//! Client commands: attach-session, detach-client.
+//! Client commands: attach-session, detach-client, switch-client, refresh-client.
 
-use crate::command::{CommandResult, CommandServer};
+use crate::command::{CommandResult, CommandServer, get_option};
 use crate::server::ServerError;
 
 /// attach-session [-t target-session]
@@ -47,4 +47,31 @@ pub fn cmd_detach_client(
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
     Ok(CommandResult::Detach)
+}
+
+/// switch-client [-t target-session]
+pub fn cmd_switch_client(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let target = get_option(args, "-t")
+        .ok_or_else(|| ServerError::Command("switch-client: missing -t target".into()))?;
+
+    let session_id = server
+        .find_session_id(target)
+        .ok_or_else(|| ServerError::Command(format!("session not found: {target}")))?;
+
+    server.switch_client(session_id)?;
+    Ok(CommandResult::Ok)
+}
+
+/// refresh-client [-t target-client]
+#[allow(clippy::unnecessary_wraps)]
+pub fn cmd_refresh_client(
+    args: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    let _ = args;
+    server.refresh_client();
+    Ok(CommandResult::Ok)
 }

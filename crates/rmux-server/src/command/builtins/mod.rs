@@ -2,6 +2,7 @@
 
 mod client;
 mod display;
+mod environment;
 mod options;
 mod pane;
 mod paste;
@@ -65,6 +66,30 @@ pub static COMMANDS: &[CommandEntry] = &[
         usage: "",
     },
     CommandEntry { name: "detach", min_args: 0, handler: client::cmd_detach_client, usage: "" },
+    CommandEntry {
+        name: "switch-client",
+        min_args: 0,
+        handler: client::cmd_switch_client,
+        usage: "[-t target-session]",
+    },
+    CommandEntry {
+        name: "switchc",
+        min_args: 0,
+        handler: client::cmd_switch_client,
+        usage: "[-t target-session]",
+    },
+    CommandEntry {
+        name: "refresh-client",
+        min_args: 0,
+        handler: client::cmd_refresh_client,
+        usage: "[-t target-client]",
+    },
+    CommandEntry {
+        name: "refresh",
+        min_args: 0,
+        handler: client::cmd_refresh_client,
+        usage: "[-t target-client]",
+    },
     // Window commands
     CommandEntry {
         name: "new-window",
@@ -105,6 +130,18 @@ pub static COMMANDS: &[CommandEntry] = &[
         min_args: 0,
         handler: window::cmd_list_windows,
         usage: "[-t target-session]",
+    },
+    CommandEntry {
+        name: "find-window",
+        min_args: 1,
+        handler: window::cmd_find_window,
+        usage: "[-t target-session] match-string",
+    },
+    CommandEntry {
+        name: "findw",
+        min_args: 1,
+        handler: window::cmd_find_window,
+        usage: "[-t target-session] match-string",
     },
     // Pane commands
     CommandEntry {
@@ -514,5 +551,54 @@ pub static COMMANDS: &[CommandEntry] = &[
         min_args: 0,
         handler: paste::cmd_delete_buffer,
         usage: "-b buffer-name",
+    },
+    CommandEntry {
+        name: "save-buffer",
+        min_args: 1,
+        handler: paste::cmd_save_buffer,
+        usage: "[-b buffer-name] path",
+    },
+    CommandEntry {
+        name: "saveb",
+        min_args: 1,
+        handler: paste::cmd_save_buffer,
+        usage: "[-b buffer-name] path",
+    },
+    CommandEntry {
+        name: "load-buffer",
+        min_args: 1,
+        handler: paste::cmd_load_buffer,
+        usage: "[-b buffer-name] path",
+    },
+    CommandEntry {
+        name: "loadb",
+        min_args: 1,
+        handler: paste::cmd_load_buffer,
+        usage: "[-b buffer-name] path",
+    },
+    // Environment commands
+    CommandEntry {
+        name: "set-environment",
+        min_args: 1,
+        handler: environment::cmd_set_environment,
+        usage: "[-g] [-u] [-t target-session] name [value]",
+    },
+    CommandEntry {
+        name: "setenv",
+        min_args: 1,
+        handler: environment::cmd_set_environment,
+        usage: "[-g] [-u] [-t target-session] name [value]",
+    },
+    CommandEntry {
+        name: "show-environment",
+        min_args: 0,
+        handler: environment::cmd_show_environment,
+        usage: "[-g] [-t target-session] [name]",
+    },
+    CommandEntry {
+        name: "showenv",
+        min_args: 0,
+        handler: environment::cmd_show_environment,
+        usage: "[-g] [-t target-session] [name]",
     },
 ];
