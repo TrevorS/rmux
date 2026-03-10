@@ -7,6 +7,22 @@ use crate::grid::Grid;
 use bitflags::bitflags;
 use cursor::{Cursor, SavedCursor};
 use selection::Selection;
+use std::collections::VecDeque;
+
+/// Side-channel notifications produced by escape sequences that need server-level handling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Notification {
+    /// OSC 52: Set clipboard content (base64-encoded).
+    SetClipboard(String),
+    /// OSC 4: Set palette color (index, r, g, b).
+    SetPaletteColor(u8, u8, u8, u8),
+    /// OSC 10: Query/set foreground color.
+    SetForegroundColor(String),
+    /// OSC 11: Query/set background color.
+    SetBackgroundColor(String),
+    /// OSC 112: Reset cursor color.
+    ResetCursorColor,
+}
 
 bitflags! {
     /// Screen mode flags (matching tmux's MODE_* constants).
@@ -103,6 +119,8 @@ pub struct Screen {
     pub alternate: Option<AlternateScreen>,
     /// Current selection (copy mode).
     pub selection: Option<Selection>,
+    /// Side-channel notifications for the server.
+    pub notifications: VecDeque<Notification>,
 }
 
 impl Screen {
@@ -128,6 +146,7 @@ impl Screen {
             tabs,
             alternate: None,
             selection: None,
+            notifications: VecDeque::new(),
         }
     }
 
@@ -196,6 +215,11 @@ impl Screen {
         let height = self.height();
         let limit = self.grid.history_limit();
         *self = Self::new(width, height, limit);
+    }
+
+    /// Drain all pending notifications.
+    pub fn drain_notifications(&mut self) -> Vec<Notification> {
+        self.notifications.drain(..).collect()
     }
 
     /// Get the next tab stop after the given column.

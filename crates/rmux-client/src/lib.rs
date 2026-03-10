@@ -30,6 +30,8 @@ pub struct ClientOptions {
     pub config_file: Option<String>,
     pub shell_command: Option<String>,
     pub no_start_server: bool,
+    /// Control mode (-C flag, tmux -CC).
+    pub control_mode: bool,
     /// Index into the original args where the command starts.
     pub command_start: usize,
 }
@@ -54,7 +56,8 @@ pub fn parse_args(args: &[String]) -> Result<ClientOptions, String> {
         let mut j = 0;
         while j < chars.len() {
             match chars[j] {
-                '2' | 'C' | 'D' | 'l' | 'u' | 'v' => {}
+                'C' => opts.control_mode = true,
+                '2' | 'D' | 'l' | 'u' | 'v' => {}
                 'N' => opts.no_start_server = true,
                 'V' => return Err("version".to_string()),
                 'f' => {
@@ -204,6 +207,18 @@ mod tests {
     fn socket_path_option() {
         let opts = parse_args(&args(&["rmux", "-S", "/tmp/my.sock"])).unwrap();
         assert_eq!(opts.socket_path.as_deref(), Some("/tmp/my.sock"));
+    }
+
+    #[test]
+    fn control_mode_flag() {
+        let opts = parse_args(&args(&["rmux", "-C", "new"])).unwrap();
+        assert!(opts.control_mode);
+    }
+
+    #[test]
+    fn control_mode_stacked() {
+        let opts = parse_args(&args(&["rmux", "-2C", "new"])).unwrap();
+        assert!(opts.control_mode);
     }
 
     #[test]

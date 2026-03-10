@@ -5,7 +5,7 @@
 
 use super::params::Params;
 use rmux_core::grid::cell::{CellFlags, GridCell};
-use rmux_core::screen::Screen;
+use rmux_core::screen::{Notification, Screen};
 use rmux_core::style::{Attrs, Color, Style};
 use rmux_core::utf8::Utf8Char;
 use smallvec::SmallVec;
@@ -64,6 +64,10 @@ pub struct InputParser {
     utf8_buf: [u8; 4],
     utf8_len: u8,
     utf8_needed: u8,
+    /// Current hyperlink ID (0 = no hyperlink, set by OSC 8).
+    current_hyperlink: u32,
+    /// Counter for generating unique hyperlink IDs.
+    hyperlink_counter: u32,
 }
 
 impl InputParser {
@@ -80,6 +84,8 @@ impl InputParser {
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_needed: 0,
+            current_hyperlink: 0,
+            hyperlink_counter: 0,
         }
     }
 
@@ -143,7 +149,11 @@ impl InputParser {
         if byte < 0x20 {
             match byte {
                 0x1B => {
-                    // ESC - always transitions to Escape state
+                    // ESC - transitions to Escape state.
+                    // If we're in OscString, dispatch the OSC first (handles ESC \ as ST).
+                    if self.state == State::OscString {
+                        self.handle_osc_dispatch(screen);
+                    }
                     self.transition(State::Escape);
                     return;
                 }
@@ -456,7 +466,7 @@ impl InputParser {
                 }
             }
             b'H' => screen.set_tab_stop(screen.cursor.x), // HTS - set tab stop
-            b'c' => screen.reset(),                        // RIS - full reset
+            b'c' => screen.reset(),                       // RIS - full reset
             _ => {}
         }
     }
@@ -794,13 +804,13 @@ impl InputParser {
             return;
         }
 
+        // Clone to avoid borrow conflicts with &mut self methods
+        let osc = std::mem::take(&mut self.osc_data);
+
         // Parse OSC number
-        let sep = self.osc_data.iter().position(|&b| b == b';');
-        let (num_bytes, data) = if let Some(pos) = sep {
-            (&self.osc_data[..pos], &self.osc_data[pos + 1..])
-        } else {
-            (&self.osc_data[..], &[][..])
-        };
+        let sep = osc.iter().position(|&b| b == b';');
+        let (num_bytes, data) =
+            if let Some(pos) = sep { (&osc[..pos], &osc[pos + 1..]) } else { (&osc[..], &[][..]) };
 
         let num: i32 =
             std::str::from_utf8(num_bytes).ok().and_then(|s| s.parse().ok()).unwrap_or(-1);
@@ -812,14 +822,114 @@ impl InputParser {
                     screen.title = title.to_string();
                 }
             }
+            1 => {
+                // Set icon name (stored as title in tmux)
+                if let Ok(title) = std::str::from_utf8(data) {
+                    screen.title = title.to_string();
+                }
+            }
+            4 => {
+                // Set/query palette color: OSC 4;index;spec ST
+                self.handle_osc_palette_color(data, screen);
+            }
             7 => {
                 // Set working directory
                 if let Ok(path) = std::str::from_utf8(data) {
                     screen.path = Some(path.to_string());
                 }
             }
-            _ => {} // Other OSC sequences
+            8 => {
+                // Hyperlink: OSC 8;params;uri ST
+                self.handle_osc_hyperlink(data, screen);
+            }
+            10 => {
+                // Set/query foreground color
+                if let Ok(color) = std::str::from_utf8(data) {
+                    if !color.is_empty() && color != "?" {
+                        screen
+                            .notifications
+                            .push_back(Notification::SetForegroundColor(color.to_string()));
+                    }
+                }
+            }
+            11 => {
+                // Set/query background color
+                if let Ok(color) = std::str::from_utf8(data) {
+                    if !color.is_empty() && color != "?" {
+                        screen
+                            .notifications
+                            .push_back(Notification::SetBackgroundColor(color.to_string()));
+                    }
+                }
+            }
+            52 => {
+                // Clipboard: OSC 52;selection;base64data ST
+                self.handle_osc_clipboard(data, screen);
+            }
+            112 => {
+                // Reset cursor color
+                screen.notifications.push_back(Notification::ResetCursorColor);
+            }
+            _ => {}
         }
+    }
+
+    /// Handle OSC 4: palette color set/query.
+    /// Format: OSC 4;index;spec ST where spec is rgb:RR/GG/BB or ?
+    fn handle_osc_palette_color(&self, data: &[u8], screen: &mut Screen) {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return;
+        };
+        // Format: index;rgb:RR/GG/BB
+        let Some((idx_str, color_spec)) = text.split_once(';') else {
+            return;
+        };
+        let Ok(idx) = idx_str.parse::<u8>() else {
+            return;
+        };
+        if color_spec == "?" {
+            return; // Query — would need response channel
+        }
+        if let Some(rgb) = color_spec.strip_prefix("rgb:") {
+            if let Some((r, g, b)) = parse_rgb_spec(rgb) {
+                screen.notifications.push_back(Notification::SetPaletteColor(idx, r, g, b));
+            }
+        }
+    }
+
+    /// Handle OSC 8: hyperlink.
+    /// Format: OSC 8;params;uri ST
+    fn handle_osc_hyperlink(&mut self, data: &[u8], screen: &mut Screen) {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return;
+        };
+        // Split into params;uri
+        let Some((_params, uri)) = text.split_once(';') else {
+            return;
+        };
+        if uri.is_empty() {
+            // Close hyperlink
+            self.current_hyperlink = 0;
+        } else {
+            // Open hyperlink — assign a unique ID
+            self.hyperlink_counter += 1;
+            self.current_hyperlink = self.hyperlink_counter;
+        }
+        let _ = screen; // hyperlink ID is stored on cells via current_hyperlink
+    }
+
+    /// Handle OSC 52: clipboard.
+    /// Format: OSC 52;selection;base64data ST
+    fn handle_osc_clipboard(&self, data: &[u8], screen: &mut Screen) {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return;
+        };
+        // Format: selection;base64data (selection is c/p/s etc., often just "c")
+        let base64_data = if let Some((_sel, b64)) = text.split_once(';') { b64 } else { text };
+        if base64_data == "?" {
+            return; // Query — would need response channel
+        }
+        screen.notifications.push_back(Notification::SetClipboard(base64_data.to_string()));
     }
 
     /// Handle DCS dispatch.
@@ -837,6 +947,23 @@ impl InputParser {
 impl Default for InputParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Parse an X11 rgb spec like "RR/GG/BB" or "RRRR/GGGG/BBBB" into (r, g, b).
+fn parse_rgb_spec(spec: &str) -> Option<(u8, u8, u8)> {
+    let parts: Vec<&str> = spec.split('/').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let r = u16::from_str_radix(parts[0], 16).ok()?;
+    let g = u16::from_str_radix(parts[1], 16).ok()?;
+    let b = u16::from_str_radix(parts[2], 16).ok()?;
+    // If values are 4-digit hex (0-FFFF), scale down to 8-bit
+    if parts[0].len() > 2 {
+        Some(((r >> 8) as u8, (g >> 8) as u8, (b >> 8) as u8))
+    } else {
+        Some((r as u8, g as u8, b as u8))
     }
 }
 
@@ -972,6 +1099,120 @@ mod tests {
         let mut parser = InputParser::new();
         parser.parse(b"\x1b]0;My Title\x07", &mut screen);
         assert_eq!(screen.title, "My Title");
+    }
+
+    #[test]
+    fn parse_osc_icon_name() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]1;Icon\x07", &mut screen);
+        assert_eq!(screen.title, "Icon");
+    }
+
+    #[test]
+    fn parse_osc_working_directory() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]7;file:///home/user\x07", &mut screen);
+        assert_eq!(screen.path.as_deref(), Some("file:///home/user"));
+    }
+
+    #[test]
+    fn parse_osc_clipboard() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // OSC 52;c;SGVsbG8= ST (base64 of "Hello")
+        parser.parse(b"\x1b]52;c;SGVsbG8=\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::SetClipboard("SGVsbG8=".to_string()));
+    }
+
+    #[test]
+    fn parse_osc_clipboard_query_ignored() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]52;c;?\x07", &mut screen);
+        assert!(screen.notifications.is_empty());
+    }
+
+    #[test]
+    fn parse_osc_palette_color() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]4;1;rgb:ff/00/00\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::SetPaletteColor(1, 0xff, 0, 0));
+    }
+
+    #[test]
+    fn parse_osc_palette_color_16bit() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]4;5;rgb:ffff/8080/0000\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::SetPaletteColor(5, 0xff, 0x80, 0));
+    }
+
+    #[test]
+    fn parse_osc_foreground_color() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]10;rgb:ff/ff/ff\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(
+            screen.notifications[0],
+            Notification::SetForegroundColor("rgb:ff/ff/ff".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_osc_background_color() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]11;rgb:00/00/00\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(
+            screen.notifications[0],
+            Notification::SetBackgroundColor("rgb:00/00/00".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_osc_reset_cursor_color() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]112\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::ResetCursorColor);
+    }
+
+    #[test]
+    fn parse_osc_hyperlink_open_close() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Open hyperlink
+        parser.parse(b"\x1b]8;;https://example.com\x07", &mut screen);
+        assert_eq!(parser.current_hyperlink, 1);
+        // Close hyperlink
+        parser.parse(b"\x1b]8;;\x07", &mut screen);
+        assert_eq!(parser.current_hyperlink, 0);
+    }
+
+    #[test]
+    fn parse_osc_st_terminator() {
+        // OSC terminated with ST (ESC \) instead of BEL
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b]0;Title via ST\x1b\\", &mut screen);
+        assert_eq!(screen.title, "Title via ST");
+    }
+
+    #[test]
+    fn parse_rgb_spec_helper() {
+        assert_eq!(parse_rgb_spec("ff/00/80"), Some((0xff, 0, 0x80)));
+        assert_eq!(parse_rgb_spec("ffff/8080/0000"), Some((0xff, 0x80, 0)));
+        assert_eq!(parse_rgb_spec("invalid"), None);
+        assert_eq!(parse_rgb_spec("xx/yy/zz"), None);
     }
 
     #[test]

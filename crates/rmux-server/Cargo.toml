@@ -17,6 +17,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+base64 = "0.22.1"
 
 [dev-dependencies]
 criterion = { workspace = true }

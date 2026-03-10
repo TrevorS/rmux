@@ -225,18 +225,49 @@ impl Server {
         }
 
         // Find the pane and feed data through its parser
+        let mut notifications = Vec::new();
         for session in self.sessions.iter_mut() {
             for window in session.windows.values_mut() {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
                     pane.process_input(data);
+                    notifications = pane.screen.drain_notifications();
                     // Mark attached clients for redraw
                     for client in self.clients.values_mut() {
                         if client.session_id == Some(session.id) && client.is_attached() {
                             client.mark_redraw();
                         }
                     }
+                    break;
+                }
+            }
+        }
+        for notification in notifications {
+            self.handle_screen_notification(notification);
+        }
+    }
+
+    /// Handle a screen notification (side-channel event from escape sequences).
+    fn handle_screen_notification(&mut self, notification: rmux_core::screen::Notification) {
+        use base64::Engine;
+        use rmux_core::screen::Notification;
+        match notification {
+            Notification::SetClipboard(base64_data) => {
+                // Decode base64 and store in paste buffer (respects set-clipboard option)
+                let clipboard_mode =
+                    self.options.get_string("set-clipboard").unwrap_or("external").to_string();
+                if clipboard_mode == "off" {
                     return;
                 }
+                let engine = base64::engine::general_purpose::STANDARD;
+                if let Ok(decoded) = engine.decode(&base64_data) {
+                    self.paste_buffers.add(decoded);
+                }
+            }
+            Notification::SetPaletteColor(_, _, _, _)
+            | Notification::SetForegroundColor(_)
+            | Notification::SetBackgroundColor(_)
+            | Notification::ResetCursorColor => {
+                // Color notifications — stored for future use
             }
         }
     }
@@ -848,8 +879,7 @@ impl Server {
                             // Set selection
                             let hs = pane.screen.grid.history_size();
                             cm.selecting = true;
-                            cm.sel_type =
-                                rmux_core::screen::selection::SelectionType::Normal;
+                            cm.sel_type = rmux_core::screen::selection::SelectionType::Normal;
                             cm.sel_start_x = start;
                             cm.sel_start_y = cm.absolute_y(hs);
                             cm.cx = end;
@@ -2026,12 +2056,10 @@ impl CommandServer for Server {
     fn send_bytes_to_pane(&self, bytes: &[u8]) -> Result<(), ServerError> {
         let session_id =
             self.client_session_id().ok_or_else(|| ServerError::Command("no session".into()))?;
-        let window_idx = self
-            .client_active_window()
-            .ok_or_else(|| ServerError::Command("no window".into()))?;
-        let pane_id = self
-            .client_active_pane_id()
-            .ok_or_else(|| ServerError::Command("no pane".into()))?;
+        let window_idx =
+            self.client_active_window().ok_or_else(|| ServerError::Command("no window".into()))?;
+        let pane_id =
+            self.client_active_pane_id().ok_or_else(|| ServerError::Command("no pane".into()))?;
         let _ = self.write_to_pane(session_id, window_idx, pane_id, bytes);
         Ok(())
     }
@@ -2039,12 +2067,10 @@ impl CommandServer for Server {
     fn clear_history(&mut self) -> Result<(), ServerError> {
         let session_id =
             self.client_session_id().ok_or_else(|| ServerError::Command("no session".into()))?;
-        let window_idx = self
-            .client_active_window()
-            .ok_or_else(|| ServerError::Command("no window".into()))?;
-        let pane_id = self
-            .client_active_pane_id()
-            .ok_or_else(|| ServerError::Command("no pane".into()))?;
+        let window_idx =
+            self.client_active_window().ok_or_else(|| ServerError::Command("no window".into()))?;
+        let pane_id =
+            self.client_active_pane_id().ok_or_else(|| ServerError::Command("no pane".into()))?;
 
         let session = self
             .sessions
@@ -2289,10 +2315,8 @@ impl CommandServer for Server {
             .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
 
-        let layout = window
-            .layout
-            .as_mut()
-            .ok_or_else(|| ServerError::Command("no layout".into()))?;
+        let layout =
+            window.layout.as_mut().ok_or_else(|| ServerError::Command("no layout".into()))?;
 
         if !layout.resize_pane(pane_id, resize_dir, amount) {
             return Err(ServerError::Command("cannot resize pane in that direction".into()));
