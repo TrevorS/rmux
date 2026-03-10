@@ -458,6 +458,179 @@ pub fn layout_even_vertical(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
     root
 }
 
+/// Create a main-horizontal layout: one large pane on top, others split below.
+#[must_use]
+pub fn layout_main_horizontal(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
+    if pane_ids.len() <= 1 {
+        return LayoutCell::new_pane(0, 0, sx, sy, pane_ids.first().copied().unwrap_or(0));
+    }
+
+    // Main pane gets roughly 2/3 of the height
+    let main_height = (sy * 2 / 3).max(PANE_MINIMUM_HEIGHT);
+    let bottom_height = sy.saturating_sub(main_height + 1); // -1 for separator
+
+    let mut root = LayoutCell::new_split(LayoutType::TopBottom, 0, 0, sx, sy);
+    root.children.push(LayoutCell::new_pane(0, 0, sx, main_height, pane_ids[0]));
+
+    if pane_ids.len() == 2 {
+        root.children
+            .push(LayoutCell::new_pane(0, main_height + 1, sx, bottom_height, pane_ids[1]));
+    } else {
+        // Multiple panes split horizontally on the bottom
+        let bottom_ids = &pane_ids[1..];
+        let mut bottom =
+            layout_even_horizontal(sx, bottom_height, bottom_ids);
+        bottom.y_off = main_height + 1;
+        set_y_offset_recursive(&mut bottom, main_height + 1);
+        root.children.push(bottom);
+    }
+
+    root
+}
+
+/// Create a main-vertical layout: one large pane on the left, others split right.
+#[must_use]
+pub fn layout_main_vertical(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
+    if pane_ids.len() <= 1 {
+        return LayoutCell::new_pane(0, 0, sx, sy, pane_ids.first().copied().unwrap_or(0));
+    }
+
+    // Main pane gets roughly 2/3 of the width
+    let main_width = (sx * 2 / 3).max(PANE_MINIMUM_WIDTH);
+    let right_width = sx.saturating_sub(main_width + 1);
+
+    let mut root = LayoutCell::new_split(LayoutType::LeftRight, 0, 0, sx, sy);
+    root.children.push(LayoutCell::new_pane(0, 0, main_width, sy, pane_ids[0]));
+
+    if pane_ids.len() == 2 {
+        root.children
+            .push(LayoutCell::new_pane(main_width + 1, 0, right_width, sy, pane_ids[1]));
+    } else {
+        let right_ids = &pane_ids[1..];
+        let mut right = layout_even_vertical(right_width, sy, right_ids);
+        right.x_off = main_width + 1;
+        set_x_offset_recursive(&mut right, main_width + 1);
+        root.children.push(right);
+    }
+
+    root
+}
+
+/// Create a tiled layout: fill a grid as evenly as possible.
+#[must_use]
+pub fn layout_tiled(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
+    if pane_ids.len() <= 1 {
+        return LayoutCell::new_pane(0, 0, sx, sy, pane_ids.first().copied().unwrap_or(0));
+    }
+
+    let num_panes = pane_ids.len() as u32;
+    // Determine grid dimensions: grid_cols x grid_rows
+    let grid_cols = (num_panes as f64).sqrt().ceil() as u32;
+    let grid_rows = num_panes.div_ceil(grid_cols);
+
+    let row_seps = grid_rows.saturating_sub(1);
+    let avail_h = sy.saturating_sub(row_seps);
+    let base_h = avail_h / grid_rows;
+    let extra_h = (avail_h % grid_rows) as usize;
+
+    let mut root = LayoutCell::new_split(LayoutType::TopBottom, 0, 0, sx, sy);
+    let mut cur_y = 0u32;
+    let mut idx = 0usize;
+
+    for row in 0..grid_rows {
+        let row_height = base_h + if (row as usize) < extra_h { 1 } else { 0 };
+        let panes_in_row = if row < grid_rows - 1 {
+            grid_cols.min(num_panes - idx as u32)
+        } else {
+            num_panes - idx as u32
+        };
+
+        if panes_in_row == 1 {
+            root.children
+                .push(LayoutCell::new_pane(0, cur_y, sx, row_height, pane_ids[idx]));
+            idx += 1;
+        } else {
+            let col_seps = panes_in_row.saturating_sub(1);
+            let avail_w = sx.saturating_sub(col_seps);
+            let base_w = avail_w / panes_in_row;
+            let extra_w = (avail_w % panes_in_row) as usize;
+
+            let mut row_cell =
+                LayoutCell::new_split(LayoutType::LeftRight, 0, cur_y, sx, row_height);
+            let mut cur_x = 0u32;
+            for col in 0..panes_in_row {
+                let col_width = base_w + if (col as usize) < extra_w { 1 } else { 0 };
+                row_cell.children.push(LayoutCell::new_pane(
+                    cur_x, cur_y, col_width, row_height, pane_ids[idx],
+                ));
+                cur_x += col_width + 1;
+                idx += 1;
+            }
+            root.children.push(row_cell);
+        }
+        cur_y += row_height + 1;
+    }
+
+    // If there's only one row, unwrap the unnecessary TopBottom wrapper
+    if root.children.len() == 1 {
+        return root.children.remove(0);
+    }
+
+    root
+}
+
+/// Set x_off recursively for all pane children.
+fn set_x_offset_recursive(cell: &mut LayoutCell, base_x: u32) {
+    if cell.is_pane() {
+        cell.x_off = base_x;
+        return;
+    }
+    match cell.cell_type {
+        LayoutType::LeftRight => {
+            let mut x = base_x;
+            for child in &mut cell.children {
+                child.x_off = x;
+                set_x_offset_recursive(child, x);
+                x += child.sx + 1;
+            }
+        }
+        LayoutType::TopBottom => {
+            for child in &mut cell.children {
+                child.x_off = base_x;
+                set_x_offset_recursive(child, base_x);
+            }
+        }
+        LayoutType::Pane => {}
+    }
+    cell.x_off = base_x;
+}
+
+/// Set y_off recursively for all pane children.
+fn set_y_offset_recursive(cell: &mut LayoutCell, base_y: u32) {
+    if cell.is_pane() {
+        cell.y_off = base_y;
+        return;
+    }
+    match cell.cell_type {
+        LayoutType::TopBottom => {
+            let mut y = base_y;
+            for child in &mut cell.children {
+                child.y_off = y;
+                set_y_offset_recursive(child, y);
+                y += child.sy + 1;
+            }
+        }
+        LayoutType::LeftRight => {
+            for child in &mut cell.children {
+                child.y_off = base_y;
+                set_y_offset_recursive(child, base_y);
+            }
+        }
+        LayoutType::Pane => {}
+    }
+    cell.y_off = base_y;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
