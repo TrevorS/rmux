@@ -27,6 +27,8 @@ pub struct StatusConfig {
     pub pane_active_border_style: Style,
     /// Whether to show the status line at the top instead of bottom.
     pub status_position_top: bool,
+    /// Whether the status line is enabled.
+    pub status_enabled: bool,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -42,10 +44,11 @@ pub fn render_window(
     status_config: Option<&StatusConfig>,
 ) -> Vec<u8> {
     let mut writer = TermWriter::new(sx as usize * sy as usize * 4);
-    let status_top = status_config.is_some_and(|c| c.status_position_top);
+    let show_status = status_config.is_none_or(|c| c.status_enabled);
+    let status_top = show_status && status_config.is_some_and(|c| c.status_position_top);
     let status_row = if status_top { 0 } else { sy.saturating_sub(1) };
     let pane_y_offset = u32::from(status_top);
-    let pane_area_height = sy.saturating_sub(1);
+    let pane_area_height = if show_status { sy.saturating_sub(1) } else { sy };
 
     writer.hide_cursor();
     writer.begin_sync();
@@ -64,19 +67,21 @@ pub fn render_window(
         render_panes_with_borders(&mut writer, window, sx, pane_area_height, status_config);
     }
 
-    // Status line (or command prompt)
-    if let Some(prompt_buf) = prompt {
-        render_prompt_line(&mut writer, prompt_buf, sx, status_row);
-    } else {
-        render_status_line(
-            &mut writer,
-            session_name,
-            window,
-            window_list,
-            sx,
-            status_row,
-            status_config,
-        );
+    // Status line (or command prompt) — only if status is enabled
+    if show_status {
+        if let Some(prompt_buf) = prompt {
+            render_prompt_line(&mut writer, prompt_buf, sx, status_row);
+        } else {
+            render_status_line(
+                &mut writer,
+                session_name,
+                window,
+                window_list,
+                sx,
+                status_row,
+                status_config,
+            );
+        }
     }
 
     // Position cursor at active pane (copy mode cursor if in copy mode)
@@ -602,6 +607,7 @@ mod tests {
             pane_border_style: Style::DEFAULT,
             pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
             status_position_top: false,
+            status_enabled: true,
         };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
@@ -647,6 +653,7 @@ mod tests {
             pane_border_style: Style::DEFAULT,
             pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
             status_position_top: false,
+            status_enabled: true,
         };
         let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
         // Active window uses current format

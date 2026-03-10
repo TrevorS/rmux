@@ -1451,6 +1451,7 @@ impl Server {
                 .get_string("status-position")
                 .unwrap_or("bottom")
                 == "top",
+            status_enabled: session.options.get_flag("status").unwrap_or(true),
         };
 
         render::render_window(
