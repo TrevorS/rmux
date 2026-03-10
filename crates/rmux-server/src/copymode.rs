@@ -6,6 +6,28 @@
 use rmux_core::screen::Screen;
 use rmux_core::screen::selection::{Selection, SelectionType};
 
+/// Direction and character for jump-to-char (f/F/t/T).
+#[derive(Debug, Clone, Copy)]
+pub struct JumpState {
+    /// The character to jump to.
+    pub ch: char,
+    /// The jump type.
+    pub jump_type: JumpType,
+}
+
+/// Type of jump-to-char operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JumpType {
+    /// `f` — forward to character (land on it).
+    Forward,
+    /// `F` — backward to character (land on it).
+    Backward,
+    /// `t` — forward to character (land before it).
+    ForwardTill,
+    /// `T` — backward to character (land after it).
+    BackwardTill,
+}
+
 /// Copy mode state for a single pane.
 #[derive(Debug, Clone)]
 pub struct CopyModeState {
@@ -30,6 +52,8 @@ pub struct CopyModeState {
     pub search_forward: bool,
     /// Vi mode or emacs mode key table name.
     pub key_table: String,
+    /// Last jump-to-char character and direction for repeat (`;` / `,`).
+    pub last_jump: Option<JumpState>,
 }
 
 impl CopyModeState {
@@ -52,6 +76,7 @@ impl CopyModeState {
             } else {
                 "copy-mode-emacs".to_string()
             },
+            last_jump: None,
         }
     }
 
@@ -258,6 +283,264 @@ impl CopyModeState {
         }
     }
 
+    // --- Jump to character (f/F/t/T) ---
+
+    /// Jump forward to the next occurrence of `ch` on the current line.
+    pub fn jump_forward(&mut self, screen: &Screen, ch: char) {
+        self.last_jump = Some(JumpState { ch, jump_type: JumpType::Forward });
+        let abs_y = self.absolute_y(screen.grid.history_size());
+        if let Some(line) = screen.grid.get_line_absolute(abs_y) {
+            for x in (self.cx + 1)..line.cell_count() {
+                if cell_matches_char(line, x, ch) {
+                    self.cx = x;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Jump backward to the previous occurrence of `ch` on the current line.
+    pub fn jump_backward(&mut self, screen: &Screen, ch: char) {
+        self.last_jump = Some(JumpState { ch, jump_type: JumpType::Backward });
+        let abs_y = self.absolute_y(screen.grid.history_size());
+        if let Some(line) = screen.grid.get_line_absolute(abs_y) {
+            for x in (0..self.cx).rev() {
+                if cell_matches_char(line, x, ch) {
+                    self.cx = x;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Jump forward to just before the next occurrence of `ch`.
+    pub fn jump_forward_till(&mut self, screen: &Screen, ch: char) {
+        self.last_jump = Some(JumpState { ch, jump_type: JumpType::ForwardTill });
+        let abs_y = self.absolute_y(screen.grid.history_size());
+        if let Some(line) = screen.grid.get_line_absolute(abs_y) {
+            for x in (self.cx + 1)..line.cell_count() {
+                if cell_matches_char(line, x, ch) {
+                    self.cx = x.saturating_sub(1).max(self.cx + 1);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Jump backward to just after the previous occurrence of `ch`.
+    pub fn jump_backward_till(&mut self, screen: &Screen, ch: char) {
+        self.last_jump = Some(JumpState { ch, jump_type: JumpType::BackwardTill });
+        let abs_y = self.absolute_y(screen.grid.history_size());
+        if let Some(line) = screen.grid.get_line_absolute(abs_y) {
+            for x in (0..self.cx).rev() {
+                if cell_matches_char(line, x, ch) {
+                    self.cx = (x + 1).min(self.cx.saturating_sub(1));
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Repeat the last jump-to-char in the same direction (`;`).
+    pub fn jump_again(&mut self, screen: &Screen) {
+        if let Some(state) = self.last_jump {
+            // Temporarily clear last_jump to avoid overwrite
+            match state.jump_type {
+                JumpType::Forward => self.jump_forward(screen, state.ch),
+                JumpType::Backward => self.jump_backward(screen, state.ch),
+                JumpType::ForwardTill => self.jump_forward_till(screen, state.ch),
+                JumpType::BackwardTill => self.jump_backward_till(screen, state.ch),
+            }
+        }
+    }
+
+    /// Repeat the last jump-to-char in the reverse direction (`,`).
+    pub fn jump_reverse(&mut self, screen: &Screen) {
+        if let Some(state) = self.last_jump {
+            match state.jump_type {
+                JumpType::Forward => self.jump_backward(screen, state.ch),
+                JumpType::Backward => self.jump_forward(screen, state.ch),
+                JumpType::ForwardTill => self.jump_backward_till(screen, state.ch),
+                JumpType::BackwardTill => self.jump_forward_till(screen, state.ch),
+            }
+            // Restore original jump state (reverse shouldn't change the saved direction)
+            self.last_jump = Some(state);
+        }
+    }
+
+    // --- Position commands ---
+
+    /// Move cursor to the middle line of the visible area.
+    pub fn middle_line(&mut self, screen: &Screen) {
+        self.cy = screen.height() / 2;
+    }
+
+    /// Move cursor to the top line of the visible area.
+    pub fn top_line(&mut self) {
+        self.cy = 0;
+    }
+
+    /// Move cursor to the bottom line of the visible area.
+    pub fn bottom_line(&mut self, screen: &Screen) {
+        self.cy = screen.height().saturating_sub(1);
+    }
+
+    // --- Paragraph navigation ---
+
+    /// Move cursor to the start of the next paragraph (next blank line after content).
+    pub fn next_paragraph(&mut self, screen: &Screen) {
+        let history_size = screen.grid.history_size();
+        let total_lines = history_size + screen.height();
+        let mut abs_y = self.absolute_y(history_size);
+
+        // Skip current non-blank lines
+        while abs_y + 1 < total_lines {
+            abs_y += 1;
+            if is_line_blank(screen, abs_y) {
+                break;
+            }
+        }
+        // Skip blank lines
+        while abs_y + 1 < total_lines {
+            abs_y += 1;
+            if !is_line_blank(screen, abs_y) {
+                break;
+            }
+        }
+
+        self.move_to_absolute_y(abs_y, screen);
+        self.cx = 0;
+    }
+
+    /// Move cursor to the start of the previous paragraph.
+    pub fn previous_paragraph(&mut self, screen: &Screen) {
+        let history_size = screen.grid.history_size();
+        let mut abs_y = self.absolute_y(history_size);
+
+        // Skip current non-blank lines going up
+        while abs_y > 0 {
+            abs_y -= 1;
+            if is_line_blank(screen, abs_y) {
+                break;
+            }
+        }
+        // Skip blank lines going up
+        while abs_y > 0 {
+            abs_y -= 1;
+            if !is_line_blank(screen, abs_y) {
+                break;
+            }
+        }
+
+        self.move_to_absolute_y(abs_y, screen);
+        self.cx = 0;
+    }
+
+    // --- Search ---
+
+    /// Search forward from the current position for `needle`.
+    /// Wraps around to the top if not found below.
+    pub fn search_forward_for(&mut self, screen: &Screen, needle: &str) {
+        self.search_str = Some(needle.to_string());
+        self.search_forward = true;
+        self.do_search_forward(screen, needle);
+    }
+
+    /// Search backward from the current position for `needle`.
+    /// Wraps around to the bottom if not found above.
+    pub fn search_backward_for(&mut self, screen: &Screen, needle: &str) {
+        self.search_str = Some(needle.to_string());
+        self.search_forward = false;
+        self.do_search_backward(screen, needle);
+    }
+
+    /// Repeat the last search in the same direction.
+    pub fn search_again(&mut self, screen: &Screen) {
+        if let Some(needle) = self.search_str.clone() {
+            if self.search_forward {
+                self.do_search_forward(screen, &needle);
+            } else {
+                self.do_search_backward(screen, &needle);
+            }
+        }
+    }
+
+    /// Repeat the last search in the reverse direction.
+    pub fn search_reverse(&mut self, screen: &Screen) {
+        if let Some(needle) = self.search_str.clone() {
+            if self.search_forward {
+                self.do_search_backward(screen, &needle);
+            } else {
+                self.do_search_forward(screen, &needle);
+            }
+        }
+    }
+
+    fn do_search_forward(&mut self, screen: &Screen, needle: &str) {
+        let history_size = screen.grid.history_size();
+        let total_lines = history_size + screen.height();
+        let start_abs_y = self.absolute_y(history_size);
+
+        // Search from current position forward, then wrap
+        for offset in 1..=total_lines {
+            let abs_y = (start_abs_y + offset) % total_lines;
+            if let Some(x) = find_in_line(screen, abs_y, needle) {
+                self.cx = x;
+                self.move_to_absolute_y(abs_y, screen);
+                return;
+            }
+        }
+        // Also check current line after cursor
+        if let Some(x) = find_in_line_after(screen, start_abs_y, self.cx + 1, needle) {
+            self.cx = x;
+        }
+    }
+
+    fn do_search_backward(&mut self, screen: &Screen, needle: &str) {
+        let history_size = screen.grid.history_size();
+        let total_lines = history_size + screen.height();
+        let start_abs_y = self.absolute_y(history_size);
+
+        for offset in 1..=total_lines {
+            let abs_y = (start_abs_y + total_lines - offset) % total_lines;
+            if let Some(x) = find_in_line(screen, abs_y, needle) {
+                self.cx = x;
+                self.move_to_absolute_y(abs_y, screen);
+                return;
+            }
+        }
+    }
+
+    // --- Helpers ---
+
+    /// Move the view so that absolute y `abs_y` is visible, adjusting oy and cy.
+    fn move_to_absolute_y(&mut self, abs_y: u32, screen: &Screen) {
+        let history_size = screen.grid.history_size();
+        let height = screen.height();
+
+        if abs_y < history_size {
+            // In history region
+            self.oy = history_size - abs_y;
+            self.cy = 0;
+        } else {
+            let visible_row = abs_y - history_size;
+            if visible_row < height {
+                self.oy = 0;
+                self.cy = visible_row;
+            } else {
+                self.oy = 0;
+                self.cy = height.saturating_sub(1);
+            }
+        }
+        // Adjust: if scrolled, place cursor at appropriate row
+        // abs_y = history_size - oy + cy  =>  cy = abs_y - history_size + oy
+        // We want cy to be in [0, height-1]
+        let target_cy = abs_y.saturating_sub(history_size.saturating_sub(self.oy));
+        if target_cy < height {
+            self.cy = target_cy;
+        }
+    }
+
     // --- Selection ---
 
     /// Start a character-wise selection at the current cursor position.
@@ -391,6 +674,67 @@ pub fn copy_selection(screen: &Screen, cm: &CopyModeState) -> Option<Vec<u8>> {
     Some(result)
 }
 
+/// Check if a cell at position `x` on `line` matches character `ch`.
+fn cell_matches_char(line: &rmux_core::grid::line::GridLine, x: u32, ch: char) -> bool {
+    let cell = line.get_cell(x);
+    let bytes = cell.data.as_bytes();
+    if bytes.is_empty() {
+        return ch == ' ';
+    }
+    // Compare as UTF-8
+    let mut buf = [0u8; 4];
+    let target = ch.encode_utf8(&mut buf);
+    bytes == target.as_bytes()
+}
+
+/// Check if a line is blank (all spaces or empty cells).
+fn is_line_blank(screen: &Screen, abs_y: u32) -> bool {
+    let Some(line) = screen.grid.get_line_absolute(abs_y) else {
+        return true;
+    };
+    for x in 0..line.cell_count() {
+        let cell = line.get_cell(x);
+        let bytes = cell.data.as_bytes();
+        if !bytes.is_empty() && bytes != [b' '] {
+            return false;
+        }
+    }
+    true
+}
+
+/// Extract the text content of a line as a String.
+fn line_text(screen: &Screen, abs_y: u32) -> String {
+    let Some(line) = screen.grid.get_line_absolute(abs_y) else {
+        return String::new();
+    };
+    let mut text = String::with_capacity(line.cell_count() as usize);
+    for x in 0..line.cell_count() {
+        let cell = line.get_cell(x);
+        if let Some(s) = cell.data.as_str() {
+            text.push_str(s);
+        } else {
+            text.push(' ');
+        }
+    }
+    text
+}
+
+/// Find the first occurrence of `needle` in a line, returning the x position.
+fn find_in_line(screen: &Screen, abs_y: u32, needle: &str) -> Option<u32> {
+    let text = line_text(screen, abs_y);
+    text.find(needle).map(|pos| pos as u32)
+}
+
+/// Find `needle` in a line starting from column `start_x`.
+fn find_in_line_after(screen: &Screen, abs_y: u32, start_x: u32, needle: &str) -> Option<u32> {
+    let text = line_text(screen, abs_y);
+    let start = start_x as usize;
+    if start >= text.len() {
+        return None;
+    }
+    text[start..].find(needle).map(|pos| (pos + start) as u32)
+}
+
 /// Dispatch a copy-mode action by name.
 ///
 /// Called when a key is pressed in copy mode and matched to a copy-mode binding.
@@ -399,99 +743,93 @@ pub fn dispatch_copy_mode_action(
     cm: &mut CopyModeState,
     action: &str,
 ) -> CopyModeAction {
-    match action {
-        // Navigation
-        "cursor-up" => {
-            cm.cursor_up(screen, 1);
-            CopyModeAction::Handled
-        }
-        "cursor-down" => {
-            cm.cursor_down(screen, 1);
-            CopyModeAction::Handled
-        }
-        "cursor-left" => {
-            cm.cursor_left();
-            CopyModeAction::Handled
-        }
-        "cursor-right" => {
-            cm.cursor_right(screen);
-            CopyModeAction::Handled
-        }
-        "page-up" => {
-            cm.page_up(screen);
-            CopyModeAction::Handled
-        }
-        "page-down" => {
-            cm.page_down(screen);
-            CopyModeAction::Handled
-        }
-        "halfpage-up" => {
-            cm.halfpage_up(screen);
-            CopyModeAction::Handled
-        }
-        "halfpage-down" => {
-            cm.halfpage_down(screen);
-            CopyModeAction::Handled
-        }
-        "history-top" => {
-            cm.history_top(screen);
-            CopyModeAction::Handled
-        }
-        "history-bottom" => {
-            cm.history_bottom(screen);
-            CopyModeAction::Handled
-        }
-        "start-of-line" => {
-            cm.start_of_line();
-            CopyModeAction::Handled
-        }
-        "end-of-line" => {
-            cm.end_of_line(screen);
-            CopyModeAction::Handled
-        }
-        "back-to-indentation" => {
-            cm.back_to_indentation(screen);
-            CopyModeAction::Handled
-        }
-        "next-word" => {
-            cm.next_word(screen);
-            CopyModeAction::Handled
-        }
-        "previous-word" => {
-            cm.previous_word(screen);
-            CopyModeAction::Handled
-        }
-        "next-word-end" => {
-            cm.next_word_end(screen);
-            CopyModeAction::Handled
-        }
+    dispatch_navigation(screen, cm, action)
+        .or_else(|| dispatch_selection(screen, cm, action))
+        .or_else(|| dispatch_search_and_jump(screen, cm, action))
+        .or_else(|| dispatch_copy_and_exit(screen, cm, action))
+        .unwrap_or(CopyModeAction::Unhandled)
+}
 
-        // Selection
+fn dispatch_navigation(
+    screen: &Screen,
+    cm: &mut CopyModeState,
+    action: &str,
+) -> Option<CopyModeAction> {
+    match action {
+        "cursor-up" => cm.cursor_up(screen, 1),
+        "cursor-down" => cm.cursor_down(screen, 1),
+        "cursor-left" => cm.cursor_left(),
+        "cursor-right" => cm.cursor_right(screen),
+        "page-up" => cm.page_up(screen),
+        "page-down" => cm.page_down(screen),
+        "halfpage-up" => cm.halfpage_up(screen),
+        "halfpage-down" => cm.halfpage_down(screen),
+        "history-top" => cm.history_top(screen),
+        "history-bottom" => cm.history_bottom(screen),
+        "start-of-line" => cm.start_of_line(),
+        "end-of-line" => cm.end_of_line(screen),
+        "back-to-indentation" => cm.back_to_indentation(screen),
+        "next-word" => cm.next_word(screen),
+        "previous-word" => cm.previous_word(screen),
+        "next-word-end" => cm.next_word_end(screen),
+        "next-paragraph" => cm.next_paragraph(screen),
+        "previous-paragraph" => cm.previous_paragraph(screen),
+        "middle-line" => cm.middle_line(screen),
+        "top-line" => cm.top_line(),
+        "bottom-line" => cm.bottom_line(screen),
+        _ => return None,
+    }
+    Some(CopyModeAction::Handled)
+}
+
+fn dispatch_selection(
+    screen: &Screen,
+    cm: &mut CopyModeState,
+    action: &str,
+) -> Option<CopyModeAction> {
+    match action {
         "begin-selection" => {
             let hs = screen.grid.history_size();
             cm.begin_selection(hs);
-            CopyModeAction::Handled
         }
         "select-line" => {
             let hs = screen.grid.history_size();
             cm.select_line(hs);
-            CopyModeAction::Handled
         }
-        "rectangle-toggle" => {
-            cm.rectangle_toggle();
-            CopyModeAction::Handled
-        }
+        "rectangle-toggle" => cm.rectangle_toggle(),
+        "clear-selection" => cm.selecting = false,
+        _ => return None,
+    }
+    Some(CopyModeAction::Handled)
+}
 
-        // Copy and exit
-        "copy-selection-and-cancel" => {
+fn dispatch_search_and_jump(
+    screen: &Screen,
+    cm: &mut CopyModeState,
+    action: &str,
+) -> Option<CopyModeAction> {
+    match action {
+        "search-again" => cm.search_again(screen),
+        "search-reverse" => cm.search_reverse(screen),
+        "jump-again" => cm.jump_again(screen),
+        "jump-reverse" => cm.jump_reverse(screen),
+        _ => return None,
+    }
+    Some(CopyModeAction::Handled)
+}
+
+fn dispatch_copy_and_exit(
+    screen: &Screen,
+    cm: &mut CopyModeState,
+    action: &str,
+) -> Option<CopyModeAction> {
+    match action {
+        "copy-selection-and-cancel" | "copy-selection" | "copy-selection-no-clear" => {
             let data = copy_selection(screen, cm);
-            CopyModeAction::Exit { copy_data: data }
+            Some(CopyModeAction::Exit { copy_data: data })
         }
-
-        // Cancel (exit without copying)
-        "cancel" => CopyModeAction::Exit { copy_data: None },
-
-        _ => CopyModeAction::Unhandled,
+        "cancel" => Some(CopyModeAction::Exit { copy_data: None }),
+        _ => None,
     }
 }
 
@@ -813,6 +1151,196 @@ mod tests {
 
         cm.next_word_end(&screen);
         assert_eq!(cm.cx, 14); // End of "foo" (index 14)
+    }
+
+    #[test]
+    fn jump_forward_to_char() {
+        let screen = make_screen_with_content(80, 24, &["hello world foo"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.jump_forward(&screen, 'o');
+        assert_eq!(cm.cx, 4); // 'o' in "hello"
+
+        cm.jump_forward(&screen, 'o');
+        assert_eq!(cm.cx, 7); // 'o' in "world"
+    }
+
+    #[test]
+    fn jump_backward_to_char() {
+        let screen = make_screen_with_content(80, 24, &["hello world foo"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 14;
+
+        cm.jump_backward(&screen, 'o');
+        assert_eq!(cm.cx, 13); // 'o' in "foo"
+
+        cm.jump_backward(&screen, 'o');
+        assert_eq!(cm.cx, 7); // 'o' in "world"
+    }
+
+    #[test]
+    fn jump_forward_till() {
+        let screen = make_screen_with_content(80, 24, &["hello world"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.jump_forward_till(&screen, 'w');
+        assert_eq!(cm.cx, 5); // one before 'w' at index 6
+    }
+
+    #[test]
+    fn jump_backward_till() {
+        let screen = make_screen_with_content(80, 24, &["hello world"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 10;
+
+        cm.jump_backward_till(&screen, 'o');
+        assert_eq!(cm.cx, 8); // one after 'o' at index 7
+    }
+
+    #[test]
+    fn jump_again_and_reverse() {
+        let screen = make_screen_with_content(80, 24, &["abcabc"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.jump_forward(&screen, 'b');
+        assert_eq!(cm.cx, 1);
+
+        cm.jump_again(&screen);
+        assert_eq!(cm.cx, 4); // next 'b'
+
+        cm.jump_reverse(&screen);
+        assert_eq!(cm.cx, 1); // back to first 'b'
+    }
+
+    #[test]
+    fn middle_top_bottom_line() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        cm.top_line();
+        assert_eq!(cm.cy, 0);
+
+        cm.middle_line(&screen);
+        assert_eq!(cm.cy, 12); // 24 / 2
+
+        cm.bottom_line(&screen);
+        assert_eq!(cm.cy, 23);
+    }
+
+    #[test]
+    fn search_forward_finds_text() {
+        let screen = make_screen_with_content(80, 24, &[
+            "first line",
+            "second line",
+            "third line",
+        ]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.search_forward_for(&screen, "third");
+        assert_eq!(cm.cy, 2);
+        assert_eq!(cm.cx, 0);
+    }
+
+    #[test]
+    fn search_backward_finds_text() {
+        let screen = make_screen_with_content(80, 24, &[
+            "first line",
+            "second line",
+            "third line",
+        ]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 2;
+        cm.cx = 0;
+
+        cm.search_backward_for(&screen, "first");
+        assert_eq!(cm.cy, 0);
+        assert_eq!(cm.cx, 0);
+    }
+
+    #[test]
+    fn search_again_repeats() {
+        let screen = make_screen_with_content(80, 24, &[
+            "foo bar",
+            "foo baz",
+            "foo qux",
+        ]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.search_forward_for(&screen, "foo");
+        assert_eq!(cm.cy, 1); // finds next line's "foo"
+
+        cm.search_again(&screen);
+        assert_eq!(cm.cy, 2); // finds third line's "foo"
+    }
+
+    #[test]
+    fn paragraph_navigation() {
+        let screen = make_screen_with_content(80, 24, &[
+            "paragraph one",
+            "still paragraph one",
+            "",
+            "paragraph two",
+            "still paragraph two",
+        ]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+
+        cm.next_paragraph(&screen);
+        assert_eq!(cm.cy, 3); // start of paragraph two
+        assert_eq!(cm.cx, 0);
+
+        cm.previous_paragraph(&screen);
+        // Should go back to before the blank line
+        assert!(cm.cy <= 1);
+    }
+
+    #[test]
+    fn dispatch_clear_selection() {
+        let screen = make_screen_with_content(80, 24, &["Hello"]);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cy = 0;
+        cm.cx = 0;
+        cm.begin_selection(screen.grid.history_size());
+        assert!(cm.selecting);
+
+        match dispatch_copy_mode_action(&screen, &mut cm, "clear-selection") {
+            CopyModeAction::Handled => assert!(!cm.selecting),
+            _ => panic!("expected Handled"),
+        }
+    }
+
+    #[test]
+    fn dispatch_position_actions() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        match dispatch_copy_mode_action(&screen, &mut cm, "top-line") {
+            CopyModeAction::Handled => assert_eq!(cm.cy, 0),
+            _ => panic!("expected Handled"),
+        }
+
+        match dispatch_copy_mode_action(&screen, &mut cm, "middle-line") {
+            CopyModeAction::Handled => assert_eq!(cm.cy, 12),
+            _ => panic!("expected Handled"),
+        }
+
+        match dispatch_copy_mode_action(&screen, &mut cm, "bottom-line") {
+            CopyModeAction::Handled => assert_eq!(cm.cy, 23),
+            _ => panic!("expected Handled"),
+        }
     }
 
     #[test]
