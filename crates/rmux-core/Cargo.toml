@@ -29,3 +29,15 @@ harness = false
 [[bench]]
 name = "layout_bench"
 harness = false
+
+[[bench]]
+name = "screen_bench"
+harness = false
+
+[[bench]]
+name = "options_bench"
+harness = false
+
+[[bench]]
+name = "line_bench"
+harness = false

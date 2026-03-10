@@ -16,15 +16,17 @@ cargo test -p rmux-server -- test_name   # Run a single test
 cargo fmt --check                        # Check formatting
 cargo clippy --all-targets --all-features  # Lint (zero warnings required)
 cargo bench -p rmux-core                 # Run benchmarks for a crate
+make check                               # Format + lint + test (pre-commit)
 make e2e                                 # Run E2E tests (requires tmux)
+make coverage                            # HTML coverage report (requires cargo-llvm-cov)
 
-# Fuzzing (requires nightly) — 7 targets in fuzz/fuzz_targets/
+# Fuzzing (requires nightly) — 8 targets in fuzz/fuzz_targets/
 cd fuzz && cargo +nightly fuzz run fuzz_input_parser
 ```
 
-**Pre-commit checklist:** `cargo fmt && cargo clippy --all-targets --all-features && cargo test`
+**Pre-commit checklist:** `make check` (or `cargo fmt && cargo clippy --all-targets --all-features && cargo test`)
 
-**CI:** GitHub Actions runs fmt/clippy/test on push to `master` and on PRs (`.github/workflows/ci.yml`).
+**CI:** GitHub Actions runs fmt/clippy/test + coverage on push to `master` and on PRs (`.github/workflows/ci.yml`).
 
 ## Workspace Crates
 

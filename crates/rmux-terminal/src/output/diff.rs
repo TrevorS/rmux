@@ -52,7 +52,6 @@ pub fn diff_screens(old: &Screen, new: &Screen, writer: &mut TermWriter) {
     let width = new.width();
 
     for y in 0..height {
-        let mut changed_in_line = false;
         let mut x = 0;
         while x < width {
             let old_cell = if y < old.height() && x < old.width() {
@@ -63,9 +62,6 @@ pub fn diff_screens(old: &Screen, new: &Screen, writer: &mut TermWriter) {
             let new_cell = new.grid.get_cell(x, y);
 
             if old_cell != new_cell {
-                if !changed_in_line {
-                    changed_in_line = true;
-                }
                 writer.cursor_position(x, y);
                 if new_cell.is_padding() {
                     x += 1;

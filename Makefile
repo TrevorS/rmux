@@ -1,4 +1,4 @@
-.PHONY: help build release test bench lint fmt check install clean fuzz e2e
+.PHONY: help build release test bench lint fmt check install clean coverage fuzz e2e
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -32,6 +32,10 @@ clean: ## Remove build artifacts
 
 e2e: build ## Run E2E tests (requires tmux)
 	bash scripts/e2e-test.sh
+
+coverage: ## Generate code coverage report (requires cargo-llvm-cov)
+	cargo llvm-cov --all-features --workspace --html
+	@echo "Coverage report: target/llvm-cov/html/index.html"
 
 fuzz: ## Run all fuzz targets briefly (requires nightly)
 	@for target in $$(cd fuzz && cargo +nightly fuzz list 2>/dev/null); do \

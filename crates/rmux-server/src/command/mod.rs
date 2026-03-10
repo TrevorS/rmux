@@ -83,6 +83,7 @@ pub trait CommandServer {
     fn has_session(&self, name: &str) -> bool;
     fn list_sessions(&self) -> Vec<String>;
     fn find_session_id(&self, name: &str) -> Option<u32>;
+    fn session_name_for_id(&self, id: u32) -> Option<String>;
     fn rename_session(&mut self, name: &str, new_name: &str) -> Result<(), ServerError>;
 
     // --- Window operations ---

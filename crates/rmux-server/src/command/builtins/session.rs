@@ -81,15 +81,13 @@ pub fn cmd_rename_session(
     let session_name = if let Some(t) = target {
         t.to_string()
     } else {
-        // Use the attached session
+        // Use the attached session — resolve by ID to get the actual name
         let sid = server
             .client_session_id()
             .ok_or_else(|| ServerError::Command("no current session".into()))?;
-        let sessions = server.list_sessions();
-        sessions
-            .first()
-            .and_then(|s| s.split(':').next().map(str::to_string))
-            .unwrap_or_else(|| sid.to_string())
+        server
+            .session_name_for_id(sid)
+            .ok_or_else(|| ServerError::Command(format!("session not found: {sid}")))?
     };
 
     server.rename_session(&session_name, new_name)?;

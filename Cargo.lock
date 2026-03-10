@@ -723,6 +723,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "nix",
+ "proptest",
  "rmux-core",
  "rmux-protocol",
  "thiserror",

@@ -17,7 +17,7 @@
 //!   -V            Report version
 //!   -v            Request verbose logging
 
-use rmux_client::{connect, dispatch};
+use rmux_client::{connect, dispatch, parse_args};
 use rmux_protocol::codec::{MessageReader, MessageWriter};
 use std::env;
 use std::path::PathBuf;
@@ -26,102 +26,28 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Manual getopt to match tmux's exact behavior
-    let mut i = 1;
-    let mut socket_name = "default".to_string();
-    let mut socket_path: Option<String> = None;
-    let mut _config_file: Option<String> = None;
-    let mut _shell_command: Option<String> = None;
-    let mut _flags: u32 = 0;
-
-    while i < args.len() {
-        let arg = &args[i];
-        if !arg.starts_with('-') || arg == "--" {
-            if arg == "--" {
-                i += 1;
-            }
-            break; // Start of command
+    let opts = match parse_args(&args) {
+        Ok(opts) => opts,
+        Err(e) if e == "version" => {
+            println!("rmux {}", env!("CARGO_PKG_VERSION"));
+            process::exit(0);
         }
-
-        let chars: Vec<char> = arg[1..].chars().collect();
-        let mut j = 0;
-        while j < chars.len() {
-            match chars[j] {
-                '2' => _flags |= 0x1,
-                'C' => _flags |= 0x2,
-                'D' => _flags |= 0x4,
-                'l' => _flags |= 0x8,
-                'N' => _flags |= 0x10,
-                'u' => _flags |= 0x20,
-                'v' => _flags |= 0x40,
-                'V' => {
-                    println!("rmux {}", env!("CARGO_PKG_VERSION"));
-                    process::exit(0);
-                }
-                'f' => {
-                    if j + 1 < chars.len() {
-                        _config_file = Some(chars[j + 1..].iter().collect());
-                    } else {
-                        i += 1;
-                        if i < args.len() {
-                            _config_file = Some(args[i].clone());
-                        }
-                    }
-                    j = chars.len();
-                }
-                'L' => {
-                    if j + 1 < chars.len() {
-                        socket_name = chars[j + 1..].iter().collect();
-                    } else {
-                        i += 1;
-                        if i < args.len() {
-                            socket_name = args[i].clone();
-                        }
-                    }
-                    j = chars.len();
-                }
-                'S' => {
-                    if j + 1 < chars.len() {
-                        socket_path = Some(chars[j + 1..].iter().collect());
-                    } else {
-                        i += 1;
-                        if i < args.len() {
-                            socket_path = Some(args[i].clone());
-                        }
-                    }
-                    j = chars.len();
-                }
-                'c' => {
-                    if j + 1 < chars.len() {
-                        _shell_command = Some(chars[j + 1..].iter().collect());
-                    } else {
-                        i += 1;
-                        if i < args.len() {
-                            _shell_command = Some(args[i].clone());
-                        }
-                    }
-                    j = chars.len();
-                }
-                _ => {
-                    eprintln!("rmux: unknown option -- {}", chars[j]);
-                    process::exit(1);
-                }
-            }
-            j += 1;
+        Err(e) => {
+            eprintln!("rmux: {e}");
+            process::exit(1);
         }
-        i += 1;
-    }
+    };
 
     // Remaining args are the command
-    let command_args: Vec<&str> = args[i..].iter().map(String::as_str).collect();
+    let command_args: Vec<&str> = args[opts.command_start..].iter().map(String::as_str).collect();
 
     // Resolve socket path
-    let path = if let Some(ref p) = socket_path {
+    let path = if let Some(ref p) = opts.socket_path {
         PathBuf::from(p)
     } else {
         let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let uid = nix::unistd::getuid();
-        PathBuf::from(format!("{tmpdir}/rmux-{uid}/{socket_name}"))
+        PathBuf::from(format!("{tmpdir}/rmux-{uid}/{}", opts.socket_name))
     };
 
     // Default command: if no command given, try "new-session"
@@ -133,15 +59,20 @@ fn main() {
         .build()
         .expect("failed to create tokio runtime");
 
-    let exit_code = rt.block_on(async { run_client(&path, &command_args).await });
+    let exit_code =
+        rt.block_on(async { run_client(&path, &command_args, opts.no_start_server).await });
 
     process::exit(exit_code);
 }
 
-async fn run_client(socket_path: &std::path::Path, command_args: &[&str]) -> i32 {
+async fn run_client(
+    socket_path: &std::path::Path,
+    command_args: &[&str],
+    no_start_server: bool,
+) -> i32 {
     // Check if we need to start the server
-    let needs_server =
-        matches!(command_args.first().copied(), Some("new-session") | Some("new") | None);
+    let needs_server = !no_start_server
+        && matches!(command_args.first().copied(), Some("new-session") | Some("new") | None);
 
     // Try to connect
     let stream = match connect::connect(socket_path).await {
@@ -226,8 +157,12 @@ fn start_server(socket_path: &std::path::Path) -> Result<(), std::io::Error> {
         std::fs::create_dir_all(parent)?;
     }
 
+    let socket_str = socket_path
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("socket path contains invalid UTF-8"))?;
+
     std::process::Command::new(server_bin)
-        .arg(socket_path.to_str().unwrap_or(""))
+        .arg(socket_str)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

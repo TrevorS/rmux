@@ -35,11 +35,17 @@ pub struct Pane {
 }
 
 impl Pane {
-    /// Create a new pane with the given dimensions.
+    /// Create a new pane with the given dimensions and an auto-generated ID.
     #[must_use]
     pub fn new(sx: u32, sy: u32, history_limit: u32) -> Self {
+        Self::with_id(NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed), sx, sy, history_limit)
+    }
+
+    /// Create a new pane with a specific ID.
+    #[must_use]
+    pub fn with_id(id: u32, sx: u32, sy: u32, history_limit: u32) -> Self {
         Self {
-            id: NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed),
+            id,
             screen: Screen::new(sx, sy, history_limit),
             parser: InputParser::new(),
             pty_fd: -1,

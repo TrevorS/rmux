@@ -88,11 +88,17 @@ impl GridLine {
         let (mut compact, ext) = cell.pack();
 
         if let Some(ext_cell) = ext {
-            // Need extended storage
+            // Need extended storage. The index must fit in u8 (max 255 extended
+            // cells per line). If exceeded, fall back to a space placeholder.
             let ext_idx = self.extended.len();
-            self.extended.push(ext_cell);
-            compact.data = ext_idx as u8;
-            self.cells[x] = compact;
+            if ext_idx > u8::MAX as usize {
+                // Too many extended cells — store a space as a fallback.
+                self.cells[x] = CompactCell::CLEARED;
+            } else {
+                self.extended.push(ext_cell);
+                compact.data = ext_idx as u8;
+                self.cells[x] = compact;
+            }
         } else {
             // Remove EXTENDED flag in case this cell was previously extended
             self.cells[x] = compact;
@@ -171,7 +177,9 @@ impl GridLine {
             if cell.is_extended() {
                 let old_idx = cell.extended_index();
                 if old_idx < old_to_new.len() {
-                    cell.data = old_to_new[old_idx] as u8;
+                    let new_idx = old_to_new[old_idx];
+                    debug_assert!(u8::try_from(new_idx).is_ok());
+                    cell.data = new_idx as u8;
                 }
             }
         }

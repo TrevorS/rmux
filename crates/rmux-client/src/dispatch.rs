@@ -26,8 +26,10 @@ pub async fn run_attached(
     let mut stdout = tokio::io::stdout();
     let mut input_buf = vec![0u8; 4096];
 
-    // Set up SIGWINCH handler
+    // Set up signal handlers
     let mut sigwinch = signal(SignalKind::window_change()).map_err(CodecError::Io)?;
+    let mut sigterm = signal(SignalKind::terminate()).map_err(CodecError::Io)?;
+    let mut sigcont = signal(SignalKind::from_raw(nix::libc::SIGCONT)).map_err(CodecError::Io)?;
 
     // Send initial size
     let (sx, sy) = terminal::get_terminal_size();
@@ -76,6 +78,22 @@ pub async fn run_attached(
 
             // Handle SIGWINCH (terminal resize)
             _ = sigwinch.recv() => {
+                let (sx, sy) = terminal::get_terminal_size();
+                writer.write_message(&Message::Resize {
+                    sx,
+                    sy,
+                    xpixel: 0,
+                    ypixel: 0,
+                }).await?;
+            }
+
+            // Handle SIGTERM — detach cleanly
+            _ = sigterm.recv() => {
+                break;
+            }
+
+            // Handle SIGCONT — redraw by re-sending size
+            _ = sigcont.recv() => {
                 let (sx, sy) = terminal::get_terminal_size();
                 writer.write_message(&Message::Resize {
                     sx,

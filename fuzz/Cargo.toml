@@ -13,6 +13,7 @@ rmux-core = { path = "../crates/rmux-core" }
 rmux-terminal = { path = "../crates/rmux-terminal" }
 rmux-protocol = { path = "../crates/rmux-protocol" }
 rmux-server = { path = "../crates/rmux-server" }
+rmux-client = { path = "../crates/rmux-client" }
 bytes = "1"
 
 [[bin]]
@@ -48,4 +49,9 @@ doc = false
 [[bin]]
 name = "fuzz_options_parse"
 path = "fuzz_targets/fuzz_options_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_client_args"
+path = "fuzz_targets/fuzz_client_args.rs"
 doc = false

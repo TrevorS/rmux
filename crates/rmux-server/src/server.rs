@@ -935,6 +935,34 @@ impl Server {
                     self.mark_prompt_redraw(client_id);
                     offset += 1;
                 }
+                // UTF-8 multi-byte sequences — accept printable Unicode in prompt
+                0xC2..=0xF4 => {
+                    let utf8_len = match remaining[0] {
+                        0xC2..=0xDF => 2,
+                        0xE0..=0xEF => 3,
+                        0xF0..=0xF4 => 4,
+                        _ => 1,
+                    };
+                    if remaining.len() >= utf8_len {
+                        if let Ok(s) = std::str::from_utf8(&remaining[..utf8_len]) {
+                            if let Some(ch) = s.chars().next() {
+                                if !ch.is_control() {
+                                    if let Some(client) = self.clients.get_mut(&client_id) {
+                                        if let Some(prompt) = &mut client.prompt {
+                                            prompt.buffer.push(ch);
+                                        }
+                                    }
+                                    self.mark_prompt_redraw(client_id);
+                                }
+                            }
+                            offset += utf8_len;
+                        } else {
+                            offset += 1;
+                        }
+                    } else {
+                        break; // Incomplete UTF-8 sequence, wait for more data
+                    }
+                }
                 // ESC sequence (not bare ESC) — skip it, not meaningful in prompt
                 0x1B => {
                     // Consume the escape sequence so we don't get stuck
@@ -1347,6 +1375,10 @@ impl CommandServer for Server {
         self.sessions.find_by_name(name).map(|s| s.id)
     }
 
+    fn session_name_for_id(&self, id: u32) -> Option<String> {
+        self.sessions.find_by_id(id).map(|s| s.name.clone())
+    }
+
     fn rename_session(&mut self, name: &str, new_name: &str) -> Result<(), ServerError> {
         let session = self
             .sessions
@@ -1603,21 +1635,15 @@ impl CommandServer for Server {
                 pane.yoff = old_yoff;
             }
 
-            // Set up the new pane with correct dimensions
-            let mut new_pane = Pane::new(new_sx, new_sy, 2000);
-            // Override the ID to match what we registered in the layout
-            // The Pane::new already generated a new ID, but we need the one from above
-            // Actually new_pane already has new_pane_id since we captured it before
+            // Set up the new pane with the same ID the layout already has
+            let mut new_pane = Pane::with_id(new_pane_id, new_sx, new_sy, 2000);
             new_pane.xoff = new_xoff;
             new_pane.yoff = new_yoff;
-            let actual_id = new_pane.id;
-            // We need to fix the layout to use the actual pane ID
-            fix_pane_id_in_layout(window.layout.as_mut().unwrap(), new_pane_id, actual_id);
 
-            window.panes.insert(actual_id, new_pane);
-            window.active_pane = actual_id;
+            window.panes.insert(new_pane_id, new_pane);
+            window.active_pane = new_pane_id;
 
-            (actual_id, new_sx, new_sy, window.sy)
+            (new_pane_id, new_sx, new_sy, window.sy)
         };
 
         // Resize old pane's PTY
@@ -2046,16 +2072,14 @@ impl CommandServer for Server {
 
     fn resize_pane(
         &mut self,
-        session_id: u32,
+        _session_id: u32,
         _window_idx: u32,
         _pane_id: u32,
         _direction: Option<Direction>,
         _amount: u32,
     ) -> Result<(), ServerError> {
-        // Basic implementation: just mark clients for redraw.
-        // A full implementation would adjust the layout tree.
-        self.mark_clients_redraw(session_id);
-        Ok(())
+        // TODO: Implement layout tree adjustment for pane resizing.
+        Err(ServerError::Command("resize-pane is not yet implemented".into()))
     }
 
     // --- Swap/Move ---
@@ -2727,14 +2751,4 @@ fn split_pane_in_layout(
     }
 
     false
-}
-
-/// Fix a pane ID in the layout tree (when the actual Pane::new ID differs from the placeholder).
-fn fix_pane_id_in_layout(layout: &mut LayoutCell, old_id: u32, new_id: u32) {
-    if layout.pane_id == Some(old_id) {
-        layout.pane_id = Some(new_id);
-    }
-    for child in &mut layout.children {
-        fix_pane_id_in_layout(child, old_id, new_id);
-    }
 }

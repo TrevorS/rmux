@@ -1,8 +1,9 @@
 //! imsg-compatible message encoding and decoding.
 //!
 //! tmux uses OpenBSD's imsg protocol over Unix domain sockets. Each message has a
-//! fixed-size header followed by variable-length data. File descriptors can be passed
-//! via SCM_RIGHTS ancillary data.
+//! fixed-size header followed by variable-length data.
+//!
+//! TODO: File descriptor passing via SCM_RIGHTS ancillary data is not yet implemented.
 
 use crate::message::{Message, MessageType, MsgCommand};
 use bytes::{BufMut, BytesMut};
@@ -23,6 +24,8 @@ pub enum CodecError {
     TooLarge { size: usize },
     #[error("unknown message type: {0}")]
     UnknownType(u32),
+    #[error("deprecated message type: {0:?}")]
+    DeprecatedType(MessageType),
     #[error("invalid message data for type {msg_type:?}")]
     InvalidData { msg_type: MessageType },
     #[error("I/O error: {0}")]
@@ -76,8 +79,9 @@ pub fn decode_message(buf: &mut BytesMut) -> Result<Option<Message>, CodecError>
     let msg_len = u16::from_le_bytes([buf[4], buf[5]]) as usize;
 
     if msg_len < IMSG_HEADER_SIZE {
-        return Err(CodecError::InvalidData {
-            msg_type: MessageType::from_raw(msg_type_raw).unwrap_or(MessageType::Version),
+        return Err(match MessageType::from_raw(msg_type_raw) {
+            Some(msg_type) => CodecError::InvalidData { msg_type },
+            None => CodecError::UnknownType(msg_type_raw),
         });
     }
 
@@ -251,12 +255,18 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
                 return Err(err());
             }
             let argc = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            if argc < 0 {
+                return Err(err());
+            }
             let argv_data = &data[4..];
             let argv: Vec<String> = argv_data
                 .split(|&b| b == 0)
                 .filter(|s| !s.is_empty())
                 .map(|s| String::from_utf8_lossy(s).into_owned())
                 .collect();
+            if argv.len() != argc as usize {
+                return Err(err());
+            }
             Ok(Message::Command(MsgCommand { argc, argv }))
         }
         MessageType::Ready => Ok(Message::Ready),
@@ -290,13 +300,11 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
             let flags = i64::from_le_bytes(data[..8].try_into().map_err(|_| err())?);
             Ok(Message::Flags(flags))
         }
-        // Unused/old message types
+        // Deprecated message types — reject as protocol errors
         MessageType::IdentifyOldCwd
         | MessageType::OldStderr
         | MessageType::OldStdin
-        | MessageType::OldStdout => {
-            Ok(Message::Version { version: 0 }) // Placeholder
-        }
+        | MessageType::OldStdout => Err(CodecError::DeprecatedType(msg_type)),
         MessageType::ReadOpen => {
             if data.len() < 8 {
                 return Err(err());
@@ -863,6 +871,65 @@ mod tests {
         assert!(result.is_none());
     }
 
+    #[test]
+    fn decode_command_negative_argc_fails() {
+        let mut buf = BytesMut::new();
+        // Manually build a Command message with negative argc
+        let mut data = BytesMut::new();
+        data.put_i32_le(-1); // negative argc
+        data.put_slice(b"arg\x00");
+
+        buf.put_u32_le(MessageType::Command as u32);
+        let total_len = IMSG_HEADER_SIZE + data.len();
+        buf.put_u16_le(total_len as u16);
+        buf.put_u16_le(0);
+        buf.put_u32_le(0);
+        buf.put_u32_le(0);
+        buf.put_slice(&data);
+
+        let result = decode_message(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_command_argc_mismatch_fails() {
+        let mut buf = BytesMut::new();
+        // argc says 5 but only 2 actual args
+        let mut data = BytesMut::new();
+        data.put_i32_le(5);
+        data.put_slice(b"one\x00two\x00");
+
+        buf.put_u32_le(MessageType::Command as u32);
+        let total_len = IMSG_HEADER_SIZE + data.len();
+        buf.put_u16_le(total_len as u16);
+        buf.put_u16_le(0);
+        buf.put_u32_le(0);
+        buf.put_u32_le(0);
+        buf.put_slice(&data);
+
+        let result = decode_message(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deprecated_message_type_returns_error() {
+        for msg_type in [
+            MessageType::IdentifyOldCwd,
+            MessageType::OldStderr,
+            MessageType::OldStdin,
+            MessageType::OldStdout,
+        ] {
+            let mut buf = BytesMut::new();
+            buf.put_u32_le(msg_type as u32);
+            buf.put_u16_le(IMSG_HEADER_SIZE as u16);
+            buf.put_u16_le(0);
+            buf.put_u32_le(0);
+            buf.put_u32_le(0);
+            let result = decode_message(&mut buf);
+            assert!(result.is_err(), "expected error for deprecated type {msg_type:?}");
+        }
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
@@ -939,6 +1006,73 @@ mod tests {
                     Message::Flags(f) => prop_assert_eq!(f, flags),
                     other => prop_assert!(false, "expected Flags, got {:?}", other),
                 }
+            }
+
+            #[test]
+            fn output_data_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let msg = Message::OutputData(data.clone());
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::OutputData(d) => prop_assert_eq!(d, data),
+                    other => prop_assert!(false, "expected OutputData, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn input_data_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let msg = Message::InputData(data.clone());
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::InputData(d) => prop_assert_eq!(d, data),
+                    other => prop_assert!(false, "expected InputData, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn shell_roundtrip(shell in "[/a-zA-Z0-9._-]{1,200}") {
+                let msg = Message::Shell(shell.clone());
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::Shell(s) => prop_assert_eq!(s, shell),
+                    other => prop_assert!(false, "expected Shell, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn identify_cwd_roundtrip(cwd in "[/a-zA-Z0-9._-]{1,200}") {
+                let msg = Message::IdentifyCwd(cwd.clone());
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::IdentifyCwd(c) => prop_assert_eq!(c, cwd),
+                    other => prop_assert!(false, "expected IdentifyCwd, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn client_pid_roundtrip(pid in any::<i32>()) {
+                let msg = Message::IdentifyClientPid(pid);
+                let mut buf = BytesMut::new();
+                encode_message(&msg, &mut buf).unwrap();
+                let decoded = decode_message(&mut buf).unwrap().unwrap();
+                match decoded {
+                    Message::IdentifyClientPid(p) => prop_assert_eq!(p, pid),
+                    other => prop_assert!(false, "expected IdentifyClientPid, got {:?}", other),
+                }
+            }
+
+            #[test]
+            fn decode_arbitrary_bytes_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+                let mut buf = BytesMut::from(data.as_slice());
+                // Should never panic, only return Ok or Err
+                let _ = decode_message(&mut buf);
             }
         }
     }

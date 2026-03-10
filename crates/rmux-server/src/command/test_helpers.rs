@@ -255,6 +255,10 @@ impl CommandServer for MockCommandServer {
         self.sessions.find_by_name(name).map(|s| s.id)
     }
 
+    fn session_name_for_id(&self, id: u32) -> Option<String> {
+        self.sessions.find_by_id(id).map(|s| s.name.clone())
+    }
+
     fn rename_session(&mut self, name: &str, new_name: &str) -> Result<(), ServerError> {
         let session = self
             .sessions
