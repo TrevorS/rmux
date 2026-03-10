@@ -209,13 +209,8 @@ pub fn cmd_find_window(
 }
 
 /// Layout names in cycle order.
-const LAYOUT_CYCLE: &[&str] = &[
-    "even-horizontal",
-    "even-vertical",
-    "main-horizontal",
-    "main-vertical",
-    "tiled",
-];
+const LAYOUT_CYCLE: &[&str] =
+    &["even-horizontal", "even-vertical", "main-horizontal", "main-vertical", "tiled"];
 
 /// next-layout [-t target-window]
 pub fn cmd_next_layout(

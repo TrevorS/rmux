@@ -179,22 +179,23 @@ pub fn cmd_if_shell(
 ) -> Result<CommandResult, ServerError> {
     let positional = positional_args(args, &[]);
     if positional.len() < 2 {
-        return Err(ServerError::Command(
-            "if-shell: requires shell-command and command".into(),
-        ));
+        return Err(ServerError::Command("if-shell: requires shell-command and command".into()));
     }
 
     let shell_cmd = positional[0];
     let true_cmd = positional[1];
     let false_cmd = positional.get(2).copied();
 
-    let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(shell_cmd)
-        .output();
+    let output = std::process::Command::new("sh").arg("-c").arg(shell_cmd).output();
 
     let success = output.is_ok_and(|o| o.status.success());
-    let cmd_str = if success { true_cmd } else if let Some(fc) = false_cmd { fc } else { return Ok(CommandResult::Ok) };
+    let cmd_str = if success {
+        true_cmd
+    } else if let Some(fc) = false_cmd {
+        fc
+    } else {
+        return Ok(CommandResult::Ok);
+    };
 
     // Parse and execute the resulting command
     let cmd_args: Vec<String> = cmd_str.split_whitespace().map(String::from).collect();

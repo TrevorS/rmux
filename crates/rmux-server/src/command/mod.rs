@@ -304,8 +304,12 @@ pub trait CommandServer {
 
     // --- Environment ---
     /// Set a session environment variable.
-    fn set_environment(&mut self, session_id: u32, key: &str, value: &str)
-        -> Result<(), ServerError>;
+    fn set_environment(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError>;
     /// Unset (remove) a session environment variable.
     fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError>;
     /// Show session environment variables. Returns "KEY=VALUE" lines.

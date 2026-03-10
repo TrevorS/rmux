@@ -41,10 +41,7 @@ impl HookStore {
 
     /// Add a command to a hook. The command will be appended to the existing list.
     pub fn add(&mut self, hook_name: &str, argv: Vec<String>) {
-        self.hooks
-            .entry(hook_name.to_string())
-            .or_default()
-            .push(argv);
+        self.hooks.entry(hook_name.to_string()).or_default().push(argv);
     }
 
     /// Set a hook, replacing all existing commands for that hook name.
@@ -88,10 +85,7 @@ mod tests {
     #[test]
     fn add_and_get_hook() {
         let mut store = HookStore::new();
-        store.add(
-            "after-new-session",
-            vec!["display-message".into(), "hello".into()],
-        );
+        store.add("after-new-session", vec!["display-message".into(), "hello".into()]);
         let hooks = store.get("after-new-session").unwrap();
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0], vec!["display-message", "hello"]);

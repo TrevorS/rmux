@@ -1237,11 +1237,7 @@ mod tests {
 
     #[test]
     fn search_forward_finds_text() {
-        let screen = make_screen_with_content(80, 24, &[
-            "first line",
-            "second line",
-            "third line",
-        ]);
+        let screen = make_screen_with_content(80, 24, &["first line", "second line", "third line"]);
         let mut cm = CopyModeState::enter(&screen, "vi");
         cm.cy = 0;
         cm.cx = 0;
@@ -1253,11 +1249,7 @@ mod tests {
 
     #[test]
     fn search_backward_finds_text() {
-        let screen = make_screen_with_content(80, 24, &[
-            "first line",
-            "second line",
-            "third line",
-        ]);
+        let screen = make_screen_with_content(80, 24, &["first line", "second line", "third line"]);
         let mut cm = CopyModeState::enter(&screen, "vi");
         cm.cy = 2;
         cm.cx = 0;
@@ -1269,11 +1261,7 @@ mod tests {
 
     #[test]
     fn search_again_repeats() {
-        let screen = make_screen_with_content(80, 24, &[
-            "foo bar",
-            "foo baz",
-            "foo qux",
-        ]);
+        let screen = make_screen_with_content(80, 24, &["foo bar", "foo baz", "foo qux"]);
         let mut cm = CopyModeState::enter(&screen, "vi");
         cm.cy = 0;
         cm.cx = 0;
@@ -1287,13 +1275,11 @@ mod tests {
 
     #[test]
     fn paragraph_navigation() {
-        let screen = make_screen_with_content(80, 24, &[
-            "paragraph one",
-            "still paragraph one",
-            "",
-            "paragraph two",
-            "still paragraph two",
-        ]);
+        let screen = make_screen_with_content(
+            80,
+            24,
+            &["paragraph one", "still paragraph one", "", "paragraph two", "still paragraph two"],
+        );
         let mut cm = CopyModeState::enter(&screen, "vi");
         cm.cy = 0;
         cm.cx = 0;

@@ -57,17 +57,12 @@ pub fn cmd_show_environment(
     }
 }
 
-fn resolve_env_session(
-    args: &[String],
-    server: &dyn CommandServer,
-) -> Result<u32, ServerError> {
+fn resolve_env_session(args: &[String], server: &dyn CommandServer) -> Result<u32, ServerError> {
     if let Some(target) = get_option(args, "-t") {
         server
             .find_session_id(target)
             .ok_or_else(|| ServerError::Command(format!("session not found: {target}")))
     } else {
-        server
-            .client_session_id()
-            .ok_or_else(|| ServerError::Command("no current session".into()))
+        server.client_session_id().ok_or_else(|| ServerError::Command("no current session".into()))
     }
 }

@@ -1243,12 +1243,10 @@ impl CommandServer for MockCommandServer {
     fn clear_history(&mut self) -> Result<(), ServerError> {
         let session_id =
             self.client_session_id().ok_or_else(|| ServerError::Command("no session".into()))?;
-        let window_idx = self
-            .client_active_window()
-            .ok_or_else(|| ServerError::Command("no window".into()))?;
-        let pane_id = self
-            .client_active_pane_id()
-            .ok_or_else(|| ServerError::Command("no pane".into()))?;
+        let window_idx =
+            self.client_active_window().ok_or_else(|| ServerError::Command("no window".into()))?;
+        let pane_id =
+            self.client_active_pane_id().ok_or_else(|| ServerError::Command("no pane".into()))?;
 
         let session = self
             .sessions
@@ -1327,8 +1325,8 @@ impl CommandServer for MockCommandServer {
     }
 
     fn load_buffer(&mut self, name: Option<&str>, path: &str) -> Result<(), ServerError> {
-        let data = std::fs::read(path)
-            .map_err(|e| ServerError::Command(format!("load-buffer: {e}")))?;
+        let data =
+            std::fs::read(path).map_err(|e| ServerError::Command(format!("load-buffer: {e}")))?;
         if let Some(name) = name {
             self.paste_buffers.set(name, data);
         } else {

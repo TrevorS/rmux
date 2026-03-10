@@ -180,12 +180,7 @@ impl LayoutCell {
     ///
     /// Returns `true` if the resize succeeded. The caller must update pane
     /// screen sizes after this call.
-    pub fn resize_pane(
-        &mut self,
-        pane_id: u32,
-        direction: ResizeDirection,
-        amount: u32,
-    ) -> bool {
+    pub fn resize_pane(&mut self, pane_id: u32, direction: ResizeDirection, amount: u32) -> bool {
         // Find the path to the pane
         let mut path = Vec::new();
         if !self.find_path(pane_id, &mut path) {
@@ -250,21 +245,12 @@ impl LayoutCell {
                 }
             };
 
-            let is_horizontal =
-                matches!(self.cell_type, LayoutType::LeftRight);
+            let is_horizontal = matches!(self.cell_type, LayoutType::LeftRight);
 
             let (shrink_size, _grow_size, min_size) = if is_horizontal {
-                (
-                    self.children[shrink_idx].sx,
-                    self.children[grow_idx].sx,
-                    PANE_MINIMUM_WIDTH,
-                )
+                (self.children[shrink_idx].sx, self.children[grow_idx].sx, PANE_MINIMUM_WIDTH)
             } else {
-                (
-                    self.children[shrink_idx].sy,
-                    self.children[grow_idx].sy,
-                    PANE_MINIMUM_HEIGHT,
-                )
+                (self.children[shrink_idx].sy, self.children[grow_idx].sy, PANE_MINIMUM_HEIGHT)
             };
 
             let actual_amount = amount.min(shrink_size.saturating_sub(min_size));
@@ -329,7 +315,9 @@ impl LayoutCell {
                         remaining
                     } else {
                         let proportion = (child.sx as u64 * new_avail as u64) / old_avail as u64;
-                        (proportion as u32).max(PANE_MINIMUM_WIDTH).min(remaining - (n - 1 - i as u32))
+                        (proportion as u32)
+                            .max(PANE_MINIMUM_WIDTH)
+                            .min(remaining - (n - 1 - i as u32))
                     };
                     child.x_off = x;
                     child.resize_layout(new_w, new_sy);
@@ -350,7 +338,9 @@ impl LayoutCell {
                         remaining
                     } else {
                         let proportion = (child.sy as u64 * new_avail as u64) / old_avail as u64;
-                        (proportion as u32).max(PANE_MINIMUM_HEIGHT).min(remaining - (n - 1 - i as u32))
+                        (proportion as u32)
+                            .max(PANE_MINIMUM_HEIGHT)
+                            .min(remaining - (n - 1 - i as u32))
                     };
                     child.y_off = y;
                     child.resize_layout(new_sx, new_h);
@@ -473,13 +463,17 @@ pub fn layout_main_horizontal(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell 
     root.children.push(LayoutCell::new_pane(0, 0, sx, main_height, pane_ids[0]));
 
     if pane_ids.len() == 2 {
-        root.children
-            .push(LayoutCell::new_pane(0, main_height + 1, sx, bottom_height, pane_ids[1]));
+        root.children.push(LayoutCell::new_pane(
+            0,
+            main_height + 1,
+            sx,
+            bottom_height,
+            pane_ids[1],
+        ));
     } else {
         // Multiple panes split horizontally on the bottom
         let bottom_ids = &pane_ids[1..];
-        let mut bottom =
-            layout_even_horizontal(sx, bottom_height, bottom_ids);
+        let mut bottom = layout_even_horizontal(sx, bottom_height, bottom_ids);
         bottom.y_off = main_height + 1;
         set_y_offset_recursive(&mut bottom, main_height + 1);
         root.children.push(bottom);
@@ -503,8 +497,7 @@ pub fn layout_main_vertical(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
     root.children.push(LayoutCell::new_pane(0, 0, main_width, sy, pane_ids[0]));
 
     if pane_ids.len() == 2 {
-        root.children
-            .push(LayoutCell::new_pane(main_width + 1, 0, right_width, sy, pane_ids[1]));
+        root.children.push(LayoutCell::new_pane(main_width + 1, 0, right_width, sy, pane_ids[1]));
     } else {
         let right_ids = &pane_ids[1..];
         let mut right = layout_even_vertical(right_width, sy, right_ids);
@@ -546,8 +539,7 @@ pub fn layout_tiled(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
         };
 
         if panes_in_row == 1 {
-            root.children
-                .push(LayoutCell::new_pane(0, cur_y, sx, row_height, pane_ids[idx]));
+            root.children.push(LayoutCell::new_pane(0, cur_y, sx, row_height, pane_ids[idx]));
             idx += 1;
         } else {
             let col_seps = panes_in_row.saturating_sub(1);
@@ -561,7 +553,11 @@ pub fn layout_tiled(sx: u32, sy: u32, pane_ids: &[u32]) -> LayoutCell {
             for col in 0..panes_in_row {
                 let col_width = base_w + if (col as usize) < extra_w { 1 } else { 0 };
                 row_cell.children.push(LayoutCell::new_pane(
-                    cur_x, cur_y, col_width, row_height, pane_ids[idx],
+                    cur_x,
+                    cur_y,
+                    col_width,
+                    row_height,
+                    pane_ids[idx],
                 ));
                 cur_x += col_width + 1;
                 idx += 1;

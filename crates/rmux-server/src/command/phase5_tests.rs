@@ -2304,11 +2304,7 @@ mod iter7_commands {
         let mut server = MockCommandServer::new();
         server.create_test_session("main");
 
-        exec(
-            &mut server,
-            &["set-hook", "after-new-session", "display-message", "hello"],
-        )
-        .unwrap();
+        exec(&mut server, &["set-hook", "after-new-session", "display-message", "hello"]).unwrap();
 
         let out = output_text(exec(&mut server, &["show-hooks"]));
         assert!(out.contains("after-new-session[0]: display-message hello"));
@@ -2319,11 +2315,7 @@ mod iter7_commands {
         let mut server = MockCommandServer::new();
         server.create_test_session("main");
 
-        exec(
-            &mut server,
-            &["set-hook", "test-hook", "display-message", "hi"],
-        )
-        .unwrap();
+        exec(&mut server, &["set-hook", "test-hook", "display-message", "hi"]).unwrap();
         exec(&mut server, &["set-hook", "-u", "test-hook"]).unwrap();
 
         let result = exec(&mut server, &["show-hooks"]);

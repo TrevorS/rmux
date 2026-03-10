@@ -68,12 +68,7 @@ pub struct ClickState {
 
 impl Default for ClickState {
     fn default() -> Self {
-        Self {
-            last_click: std::time::Instant::now(),
-            last_x: 0,
-            last_y: 0,
-            count: 0,
-        }
+        Self { last_click: std::time::Instant::now(), last_x: 0, last_y: 0, count: 0 }
     }
 }
 
@@ -211,9 +206,8 @@ mod tests {
         let mut cs = ClickState::default();
         assert_eq!(cs.register_click(5, 10), 1);
         // Simulate timeout by backdating last_click
-        cs.last_click = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_millis(600))
-            .unwrap();
+        cs.last_click =
+            std::time::Instant::now().checked_sub(std::time::Duration::from_millis(600)).unwrap();
         assert_eq!(cs.register_click(5, 10), 1); // Should reset due to timeout
     }
 }

@@ -216,17 +216,12 @@ fn expand_conditional(rest: &str, ctx: &FormatContext) -> String {
         return String::new();
     };
 
-    let (true_branch, false_branch) =
-        split_at_comma(remainder).unwrap_or((remainder, ""));
+    let (true_branch, false_branch) = split_at_comma(remainder).unwrap_or((remainder, ""));
 
     let cond_value = eval_expr(cond, ctx);
     let is_true = !cond_value.is_empty() && cond_value != "0";
 
-    if is_true {
-        format_expand(true_branch, ctx)
-    } else {
-        format_expand(false_branch, ctx)
-    }
+    if is_true { format_expand(true_branch, ctx) } else { format_expand(false_branch, ctx) }
 }
 
 /// Expand a comparison: `a,b` with the given comparison function.
@@ -447,10 +442,7 @@ mod tests {
         let mut ctx = FormatContext::new();
         ctx.set("active", "1");
         ctx.set("session_name", "work");
-        assert_eq!(
-            format_expand("#{?active,#{session_name},none}", &ctx),
-            "work"
-        );
+        assert_eq!(format_expand("#{?active,#{session_name},none}", &ctx), "work");
     }
 
     #[test]
@@ -481,10 +473,7 @@ mod tests {
     fn comparison_in_conditional() {
         let mut ctx = FormatContext::new();
         ctx.set("window_name", "vim");
-        assert_eq!(
-            format_expand("#{?#{==:#{window_name},vim},EDITOR,other}", &ctx),
-            "EDITOR"
-        );
+        assert_eq!(format_expand("#{?#{==:#{window_name},vim},EDITOR,other}", &ctx), "EDITOR");
     }
 
     #[test]
