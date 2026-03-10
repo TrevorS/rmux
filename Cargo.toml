@@ -29,7 +29,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 
 # Unix
-nix = { version = "0.31", features = ["term", "signal", "socket", "uio", "fs", "process", "user"] }
+nix = { version = "0.31", features = ["term", "signal", "socket", "uio", "fs", "process", "user", "hostname"] }
 
 # Terminal
 terminfo = "0.9"

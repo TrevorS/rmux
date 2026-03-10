@@ -119,6 +119,7 @@ fn bench_render_single_pane(c: &mut Criterion) {
                         black_box(sy),
                         black_box(&wl),
                         None,
+                        None,
                     ));
                 });
             },
@@ -139,6 +140,7 @@ fn bench_render_two_pane_horizontal(c: &mut Criterion) {
                 black_box(24),
                 black_box(&wl),
                 None,
+                None,
             ));
         });
     });
@@ -155,6 +157,7 @@ fn bench_render_four_pane_grid(c: &mut Criterion) {
                 black_box(80),
                 black_box(24),
                 black_box(&wl),
+                None,
                 None,
             ));
         });

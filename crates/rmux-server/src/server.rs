@@ -1322,7 +1322,25 @@ impl Server {
             .collect();
         window_list.sort_by_key(|w| w.idx);
 
-        render::render_window(window, &session.name, sx, sy, &window_list, prompt)
+        // Build status config from session options
+        let status_config = render::StatusConfig {
+            left: session
+                .options
+                .get_string("status-left")
+                .unwrap_or("[#{session_name}] ")
+                .to_string(),
+            right: session.options.get_string("status-right").unwrap_or("").to_string(),
+        };
+
+        render::render_window(
+            window,
+            &session.name,
+            sx,
+            sy,
+            &window_list,
+            prompt,
+            Some(&status_config),
+        )
     }
 
     /// Spawn a shell process for a pane.
