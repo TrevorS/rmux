@@ -16,12 +16,20 @@ pub fn cmd_set_option(
     if positional.is_empty() {
         return Err(ServerError::Command("set-option: missing option name".into()));
     }
-    let key = positional[0];
+    let raw_key = positional[0];
 
     if positional.len() < 2 {
         return Err(ServerError::Command("set-option: missing value".into()));
     }
-    let value = positional[1];
+    let raw_value = positional[1];
+
+    // Handle style aliases: status-bg, status-fg -> status-style
+    let (key, value): (&str, String) = match raw_key {
+        "status-bg" => ("status-style", format!("bg={raw_value}")),
+        "status-fg" => ("status-style", format!("fg={raw_value}")),
+        other => (other, raw_value.to_string()),
+    };
+    let value = value.as_str();
 
     if global || (!window_scope && target.is_none()) {
         // Server-level option

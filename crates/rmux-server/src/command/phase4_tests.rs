@@ -64,6 +64,26 @@ mod options_tests {
     }
 
     #[test]
+    fn set_option_status_bg_alias() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-option", "-g", "status-bg", "red"]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "status-style"]));
+        assert!(output.contains("status-style bg=red"), "output was: {output}");
+    }
+
+    #[test]
+    fn set_option_status_fg_alias() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        exec(&mut s, &["set-option", "-g", "status-fg", "white"]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "status-style"]));
+        assert!(output.contains("status-style fg=white"), "output was: {output}");
+    }
+
+    #[test]
     fn set_option_flag_value() {
         let mut s = MockCommandServer::new();
         s.create_test_session("test");
