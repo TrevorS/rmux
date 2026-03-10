@@ -68,6 +68,12 @@ pub struct InputParser {
     current_hyperlink: u32,
     /// Counter for generating unique hyperlink IDs.
     hyperlink_counter: u32,
+    /// G0 charset: false = ASCII (B), true = DEC line drawing (0).
+    g0_line_drawing: bool,
+    /// G1 charset: false = ASCII (B), true = DEC line drawing (0).
+    g1_line_drawing: bool,
+    /// Active charset: false = G0 (SI), true = G1 (SO).
+    use_g1: bool,
 }
 
 impl InputParser {
@@ -86,6 +92,9 @@ impl InputParser {
             utf8_needed: 0,
             current_hyperlink: 0,
             hyperlink_counter: 0,
+            g0_line_drawing: false,
+            g1_line_drawing: false,
+            use_g1: false,
         }
     }
 
@@ -370,26 +379,34 @@ impl InputParser {
 
     /// Handle a run of printable ASCII bytes (fast path).
     fn handle_print_ascii(&self, data: &[u8], screen: &mut Screen) {
+        let line_drawing = self.is_line_drawing_active();
         for &byte in data {
-            let cell = GridCell {
-                data: Utf8Char::from_ascii(byte),
-                style: screen.cursor.style,
-                link: 0,
-                flags: CellFlags::empty(),
+            let data = if line_drawing {
+                translate_line_drawing(byte)
+            } else {
+                Utf8Char::from_ascii(byte)
             };
+            let cell =
+                GridCell { data, style: screen.cursor.style, link: 0, flags: CellFlags::empty() };
             write_cell(screen, &cell);
         }
     }
 
     /// Handle a single printable byte.
     fn handle_print_byte(&self, byte: u8, screen: &mut Screen) {
-        let cell = GridCell {
-            data: Utf8Char::from_ascii(byte),
-            style: screen.cursor.style,
-            link: 0,
-            flags: CellFlags::empty(),
+        let data = if self.is_line_drawing_active() {
+            translate_line_drawing(byte)
+        } else {
+            Utf8Char::from_ascii(byte)
         };
+        let cell =
+            GridCell { data, style: screen.cursor.style, link: 0, flags: CellFlags::empty() };
         write_cell(screen, &cell);
+    }
+
+    /// Check if the active charset is DEC line drawing.
+    fn is_line_drawing_active(&self) -> bool {
+        if self.use_g1 { self.g1_line_drawing } else { self.g0_line_drawing }
     }
 
     /// Handle completed UTF-8 sequence.
@@ -417,7 +434,7 @@ impl InputParser {
     }
 
     /// Handle C0 control character execution.
-    fn handle_execute(&self, byte: u8, screen: &mut Screen) {
+    fn handle_execute(&mut self, byte: u8, screen: &mut Screen) {
         match byte {
             0x07 => {} // BEL - ring bell (handled by client)
             0x08 => {
@@ -438,14 +455,31 @@ impl InputParser {
                 // CR - carriage return
                 screen.cursor.x = 0;
             }
-            0x0E => {} // SO - shift out (alternate charset)
-            0x0F => {} // SI - shift in (normal charset)
-            _ => {}    // Other C0 controls ignored
+            0x0E => self.use_g1 = true, // SO - shift out (use G1 charset)
+            0x0F => self.use_g1 = false, // SI - shift in (use G0 charset)
+            _ => {}                     // Other C0 controls ignored
         }
     }
 
     /// Handle ESC sequence dispatch.
-    fn handle_esc_dispatch(&self, final_byte: u8, screen: &mut Screen) {
+    fn handle_esc_dispatch(&mut self, final_byte: u8, screen: &mut Screen) {
+        // Check for charset designation: ESC ( X or ESC ) X
+        if let Some(&intermediate) = self.intermediates.first() {
+            match intermediate {
+                0x28 => {
+                    // ESC ( X — designate G0 charset
+                    self.g0_line_drawing = final_byte == b'0';
+                    return;
+                }
+                0x29 => {
+                    // ESC ) X — designate G1 charset
+                    self.g1_line_drawing = final_byte == b'0';
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match final_byte {
             b'7' => screen.save_cursor(),    // DECSC
             b'8' => screen.restore_cursor(), // DECRC
@@ -466,7 +500,13 @@ impl InputParser {
                 }
             }
             b'H' => screen.set_tab_stop(screen.cursor.x), // HTS - set tab stop
-            b'c' => screen.reset(),                       // RIS - full reset
+            b'c' => {
+                // RIS - full reset
+                self.g0_line_drawing = false;
+                self.g1_line_drawing = false;
+                self.use_g1 = false;
+                screen.reset();
+            }
             _ => {}
         }
     }
@@ -950,6 +990,39 @@ impl Default for InputParser {
     }
 }
 
+/// DEC Special Graphics (line drawing) character set translation.
+/// Maps ASCII bytes 0x60-0x7E to Unicode box-drawing equivalents.
+fn translate_line_drawing(byte: u8) -> Utf8Char {
+    match byte {
+        b'j' => Utf8Char::from_char('┘'), // lower-right corner
+        b'k' => Utf8Char::from_char('┐'), // upper-right corner
+        b'l' => Utf8Char::from_char('┌'), // upper-left corner
+        b'm' => Utf8Char::from_char('└'), // lower-left corner
+        b'n' => Utf8Char::from_char('┼'), // crossing
+        b'q' => Utf8Char::from_char('─'), // horizontal line
+        b't' => Utf8Char::from_char('├'), // left tee
+        b'u' => Utf8Char::from_char('┤'), // right tee
+        b'v' => Utf8Char::from_char('┴'), // bottom tee
+        b'w' => Utf8Char::from_char('┬'), // top tee
+        b'x' => Utf8Char::from_char('│'), // vertical line
+        b'`' => Utf8Char::from_char('◆'), // diamond
+        b'a' => Utf8Char::from_char('▒'), // checkerboard
+        b'f' => Utf8Char::from_char('°'), // degree
+        b'g' => Utf8Char::from_char('±'), // plus/minus
+        b'o' => Utf8Char::from_char('⎺'), // scan line 1
+        b'p' => Utf8Char::from_char('⎻'), // scan line 3
+        b'r' => Utf8Char::from_char('⎼'), // scan line 7
+        b's' => Utf8Char::from_char('⎽'), // scan line 9
+        b'~' => Utf8Char::from_char('·'), // bullet
+        b'y' => Utf8Char::from_char('≤'), // less-than-or-equal
+        b'z' => Utf8Char::from_char('≥'), // greater-than-or-equal
+        b'{' => Utf8Char::from_char('π'), // pi
+        b'|' => Utf8Char::from_char('≠'), // not-equal
+        b'}' => Utf8Char::from_char('£'), // pound sign
+        _ => Utf8Char::from_ascii(byte),  // unmapped: pass through
+    }
+}
+
 /// Parse an X11 rgb spec like "RR/GG/BB" or "RRRR/GGGG/BBBB" into (r, g, b).
 fn parse_rgb_spec(spec: &str) -> Option<(u8, u8, u8)> {
     let parts: Vec<&str> = spec.split('/').collect();
@@ -1213,6 +1286,65 @@ mod tests {
         assert_eq!(parse_rgb_spec("ffff/8080/0000"), Some((0xff, 0x80, 0)));
         assert_eq!(parse_rgb_spec("invalid"), None);
         assert_eq!(parse_rgb_spec("xx/yy/zz"), None);
+    }
+
+    #[test]
+    fn dec_line_drawing_charset() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // ESC (0 activates DEC line drawing for G0
+        parser.parse(b"\x1b(0", &mut screen);
+        assert!(parser.g0_line_drawing);
+        // 'q' should become '─' (horizontal line)
+        parser.parse(b"lqqk", &mut screen);
+        let cell = screen.grid.get_cell(0, 0);
+        assert_eq!(cell.data.as_str(), Some("┌"));
+        let cell = screen.grid.get_cell(1, 0);
+        assert_eq!(cell.data.as_str(), Some("─"));
+        let cell = screen.grid.get_cell(3, 0);
+        assert_eq!(cell.data.as_str(), Some("┐"));
+    }
+
+    #[test]
+    fn dec_line_drawing_deactivate() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Activate, draw, deactivate, draw
+        parser.parse(b"\x1b(0q\x1b(Bq", &mut screen);
+        let cell0 = screen.grid.get_cell(0, 0);
+        assert_eq!(cell0.data.as_str(), Some("─")); // line drawing
+        let cell1 = screen.grid.get_cell(1, 0);
+        assert_eq!(cell1.data.as_str(), Some("q")); // normal ASCII
+    }
+
+    #[test]
+    fn so_si_charset_switching() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Set G1 to line drawing, then SO to activate it
+        parser.parse(b"\x1b)0", &mut screen);
+        assert!(parser.g1_line_drawing);
+        parser.parse(b"\x0Eq", &mut screen); // SO + 'q'
+        let cell = screen.grid.get_cell(0, 0);
+        assert_eq!(cell.data.as_str(), Some("─"));
+        // SI back to G0 (ASCII)
+        parser.parse(b"\x0Fq", &mut screen);
+        let cell = screen.grid.get_cell(1, 0);
+        assert_eq!(cell.data.as_str(), Some("q"));
+    }
+
+    #[test]
+    fn translate_line_drawing_coverage() {
+        // Verify key box-drawing characters
+        assert_eq!(translate_line_drawing(b'j').as_str(), Some("┘"));
+        assert_eq!(translate_line_drawing(b'k').as_str(), Some("┐"));
+        assert_eq!(translate_line_drawing(b'l').as_str(), Some("┌"));
+        assert_eq!(translate_line_drawing(b'm').as_str(), Some("└"));
+        assert_eq!(translate_line_drawing(b'n').as_str(), Some("┼"));
+        assert_eq!(translate_line_drawing(b'x').as_str(), Some("│"));
+        assert_eq!(translate_line_drawing(b'`').as_str(), Some("◆"));
+        // Unmapped byte passes through
+        assert_eq!(translate_line_drawing(b'A').as_str(), Some("A"));
     }
 
     #[test]
