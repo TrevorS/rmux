@@ -2072,14 +2072,53 @@ impl CommandServer for Server {
 
     fn resize_pane(
         &mut self,
-        _session_id: u32,
-        _window_idx: u32,
-        _pane_id: u32,
-        _direction: Option<Direction>,
-        _amount: u32,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+        direction: Option<Direction>,
+        amount: u32,
     ) -> Result<(), ServerError> {
-        // TODO: Implement layout tree adjustment for pane resizing.
-        Err(ServerError::Command("resize-pane is not yet implemented".into()))
+        use rmux_core::layout::ResizeDirection;
+
+        let dir = direction.ok_or_else(|| {
+            ServerError::Command("resize-pane requires a direction (-U/-D/-L/-R)".into())
+        })?;
+
+        let resize_dir = match dir {
+            Direction::Up => ResizeDirection::Up,
+            Direction::Down => ResizeDirection::Down,
+            Direction::Left => ResizeDirection::Left,
+            Direction::Right => ResizeDirection::Right,
+        };
+
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+
+        let layout = window
+            .layout
+            .as_mut()
+            .ok_or_else(|| ServerError::Command("no layout".into()))?;
+
+        if !layout.resize_pane(pane_id, resize_dir, amount) {
+            return Err(ServerError::Command("cannot resize pane in that direction".into()));
+        }
+
+        // Update pane screen sizes to match new layout dimensions
+        for id in layout.pane_ids() {
+            if let (Some(lc), Some(pane)) = (layout.find_pane(id), window.panes.get_mut(&id)) {
+                pane.screen.resize(lc.sx, lc.sy);
+                pane.xoff = lc.x_off;
+                pane.yoff = lc.y_off;
+            }
+        }
+
+        Ok(())
     }
 
     // --- Swap/Move ---

@@ -175,6 +175,241 @@ impl LayoutCell {
             child.collect_pane_ids(ids);
         }
     }
+
+    /// Resize a pane in the given direction by the given amount.
+    ///
+    /// Returns `true` if the resize succeeded. The caller must update pane
+    /// screen sizes after this call.
+    pub fn resize_pane(
+        &mut self,
+        pane_id: u32,
+        direction: ResizeDirection,
+        amount: u32,
+    ) -> bool {
+        // Find the path to the pane
+        let mut path = Vec::new();
+        if !self.find_path(pane_id, &mut path) {
+            return false;
+        }
+
+        // Walk up the path to find the nearest split that can accommodate this resize
+        self.apply_resize(&path, 0, direction, amount)
+    }
+
+    /// Find the path of child indices to reach a pane.
+    fn find_path(&self, pane_id: u32, path: &mut Vec<usize>) -> bool {
+        if self.is_pane() {
+            return self.pane_id == Some(pane_id);
+        }
+        for (i, child) in self.children.iter().enumerate() {
+            path.push(i);
+            if child.find_path(pane_id, path) {
+                return true;
+            }
+            path.pop();
+        }
+        false
+    }
+
+    /// Apply resize along the path.
+    fn apply_resize(
+        &mut self,
+        path: &[usize],
+        depth: usize,
+        direction: ResizeDirection,
+        amount: u32,
+    ) -> bool {
+        if depth >= path.len() || self.is_pane() {
+            return false;
+        }
+
+        let child_idx = path[depth];
+        let n = self.children.len();
+
+        // Check if this split level can handle the resize direction
+        let can_handle = matches!(
+            (self.cell_type, direction),
+            (LayoutType::LeftRight, ResizeDirection::Left | ResizeDirection::Right)
+                | (LayoutType::TopBottom, ResizeDirection::Up | ResizeDirection::Down)
+        );
+
+        if can_handle {
+            // Find the sibling to steal/give space from
+            let (shrink_idx, grow_idx) = match direction {
+                ResizeDirection::Left | ResizeDirection::Up => {
+                    if child_idx == 0 {
+                        return false;
+                    }
+                    (child_idx - 1, child_idx)
+                }
+                ResizeDirection::Right | ResizeDirection::Down => {
+                    if child_idx + 1 >= n {
+                        return false;
+                    }
+                    (child_idx + 1, child_idx)
+                }
+            };
+
+            let is_horizontal =
+                matches!(self.cell_type, LayoutType::LeftRight);
+
+            let (shrink_size, _grow_size, min_size) = if is_horizontal {
+                (
+                    self.children[shrink_idx].sx,
+                    self.children[grow_idx].sx,
+                    PANE_MINIMUM_WIDTH,
+                )
+            } else {
+                (
+                    self.children[shrink_idx].sy,
+                    self.children[grow_idx].sy,
+                    PANE_MINIMUM_HEIGHT,
+                )
+            };
+
+            let actual_amount = amount.min(shrink_size.saturating_sub(min_size));
+            if actual_amount == 0 {
+                return false;
+            }
+
+            if is_horizontal {
+                // Adjust widths
+                self.children[shrink_idx].sx -= actual_amount;
+                self.children[grow_idx].sx += actual_amount;
+                // Fix offsets: recalculate x_off for all children
+                let mut x = self.x_off;
+                for child in &mut self.children {
+                    child.x_off = x;
+                    resize_subtree_width(child);
+                    x += child.sx + 1; // +1 for separator
+                }
+            } else {
+                // Adjust heights
+                self.children[shrink_idx].sy -= actual_amount;
+                self.children[grow_idx].sy += actual_amount;
+                // Fix offsets
+                let mut y = self.y_off;
+                for child in &mut self.children {
+                    child.y_off = y;
+                    resize_subtree_height(child);
+                    y += child.sy + 1;
+                }
+            }
+
+            return true;
+        }
+
+        // This split level doesn't handle this direction — recurse deeper
+        self.children[child_idx].apply_resize(path, depth + 1, direction, amount)
+    }
+
+    /// Resize this layout tree to new dimensions, redistributing space.
+    pub fn resize_layout(&mut self, new_sx: u32, new_sy: u32) {
+        let old_sx = self.sx;
+        let old_sy = self.sy;
+        self.sx = new_sx;
+        self.sy = new_sy;
+
+        if self.is_pane() {
+            return;
+        }
+
+        match self.cell_type {
+            LayoutType::LeftRight => {
+                // Redistribute width proportionally
+                let n = self.children.len() as u32;
+                let separators = n.saturating_sub(1);
+                let old_avail = old_sx.saturating_sub(separators).max(n);
+                let new_avail = new_sx.saturating_sub(separators).max(n);
+
+                let mut x = self.x_off;
+                let mut remaining = new_avail;
+                for (i, child) in self.children.iter_mut().enumerate() {
+                    let new_w = if i + 1 == n as usize {
+                        remaining
+                    } else {
+                        let proportion = (child.sx as u64 * new_avail as u64) / old_avail as u64;
+                        (proportion as u32).max(PANE_MINIMUM_WIDTH).min(remaining - (n - 1 - i as u32))
+                    };
+                    child.x_off = x;
+                    child.resize_layout(new_w, new_sy);
+                    x += new_w + 1;
+                    remaining = remaining.saturating_sub(new_w);
+                }
+            }
+            LayoutType::TopBottom => {
+                let n = self.children.len() as u32;
+                let separators = n.saturating_sub(1);
+                let old_avail = old_sy.saturating_sub(separators).max(n);
+                let new_avail = new_sy.saturating_sub(separators).max(n);
+
+                let mut y = self.y_off;
+                let mut remaining = new_avail;
+                for (i, child) in self.children.iter_mut().enumerate() {
+                    let new_h = if i + 1 == n as usize {
+                        remaining
+                    } else {
+                        let proportion = (child.sy as u64 * new_avail as u64) / old_avail as u64;
+                        (proportion as u32).max(PANE_MINIMUM_HEIGHT).min(remaining - (n - 1 - i as u32))
+                    };
+                    child.y_off = y;
+                    child.resize_layout(new_sx, new_h);
+                    y += new_h + 1;
+                    remaining = remaining.saturating_sub(new_h);
+                }
+            }
+            LayoutType::Pane => unreachable!(),
+        }
+    }
+}
+
+/// Direction for resize operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// After resizing a child's width, propagate to its subtree.
+fn resize_subtree_width(cell: &mut LayoutCell) {
+    if cell.is_pane() {
+        return;
+    }
+    match cell.cell_type {
+        LayoutType::LeftRight => {
+            // Children share the width — redistribute proportionally
+            // For simplicity, just leave them (the resize_layout handles full redistributions)
+        }
+        LayoutType::TopBottom => {
+            // All children get the same width
+            for child in &mut cell.children {
+                child.x_off = cell.x_off;
+                child.sx = cell.sx;
+                resize_subtree_width(child);
+            }
+        }
+        LayoutType::Pane => {}
+    }
+}
+
+/// After resizing a child's height, propagate to its subtree.
+fn resize_subtree_height(cell: &mut LayoutCell) {
+    if cell.is_pane() {
+        return;
+    }
+    match cell.cell_type {
+        LayoutType::TopBottom => {}
+        LayoutType::LeftRight => {
+            for child in &mut cell.children {
+                child.y_off = cell.y_off;
+                child.sy = cell.sy;
+                resize_subtree_height(child);
+            }
+        }
+        LayoutType::Pane => {}
+    }
 }
 
 /// Create an even-horizontal layout for the given panes.
