@@ -1446,6 +1446,11 @@ impl Server {
                     .get_string("pane-active-border-style")
                     .unwrap_or("fg=green"),
             ),
+            status_position_top: session
+                .options
+                .get_string("status-position")
+                .unwrap_or("bottom")
+                == "top",
         };
 
         render::render_window(

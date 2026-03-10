@@ -25,6 +25,8 @@ pub struct StatusConfig {
     pub status_style: Style,
     pub pane_border_style: Style,
     pub pane_active_border_style: Style,
+    /// Whether to show the status line at the top instead of bottom.
+    pub status_position_top: bool,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -40,7 +42,10 @@ pub fn render_window(
     status_config: Option<&StatusConfig>,
 ) -> Vec<u8> {
     let mut writer = TermWriter::new(sx as usize * sy as usize * 4);
-    let status_row = sy.saturating_sub(1);
+    let status_top = status_config.is_some_and(|c| c.status_position_top);
+    let status_row = if status_top { 0 } else { sy.saturating_sub(1) };
+    let pane_y_offset = u32::from(status_top);
+    let pane_area_height = sy.saturating_sub(1);
 
     writer.hide_cursor();
     writer.begin_sync();
@@ -50,13 +55,13 @@ pub fn render_window(
     if window.pane_count() <= 1 {
         // Single pane: render directly
         if let Some(pane) = window.active_pane() {
-            render_pane_at(&mut writer, pane, 0, 0, sx, status_row);
+            render_pane_at(&mut writer, pane, 0, pane_y_offset, sx, pane_area_height);
         } else {
             writer.clear_screen();
         }
     } else {
         // Multi-pane: render each pane at its offset, then draw borders
-        render_panes_with_borders(&mut writer, window, sx, status_row, status_config);
+        render_panes_with_borders(&mut writer, window, sx, pane_area_height, status_config);
     }
 
     // Status line (or command prompt)
@@ -78,14 +83,14 @@ pub fn render_window(
     if let Some(pane) = window.active_pane() {
         if let Some(cm) = &pane.copy_mode {
             let cx = pane.xoff + cm.cx;
-            let cy = pane.yoff + cm.cy;
-            if cx < sx && cy < status_row {
+            let cy = pane.yoff + cm.cy + pane_y_offset;
+            if cx < sx && cy < sy {
                 writer.cursor_position(cx, cy);
             }
         } else {
             let cx = pane.xoff + pane.screen.cursor.x;
-            let cy = pane.yoff + pane.screen.cursor.y;
-            if cx < sx && cy < status_row {
+            let cy = pane.yoff + pane.screen.cursor.y + pane_y_offset;
+            if cx < sx && cy < sy {
                 writer.cursor_position(cx, cy);
             }
         }
@@ -597,6 +602,7 @@ mod tests {
             },
             pane_border_style: Style::DEFAULT,
             pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
+            status_position_top: false,
         };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
@@ -641,6 +647,7 @@ mod tests {
             status_style: Style::DEFAULT,
             pane_border_style: Style::DEFAULT,
             pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
+            status_position_top: false,
         };
         let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
         // Active window uses current format
