@@ -710,6 +710,19 @@ impl InputParser {
                 // DECRST - private mode reset
                 self.handle_decset(screen, false);
             }
+            (b'q', Some(b' ')) => {
+                // DECSCUSR - set cursor style
+                use rmux_core::screen::cursor::CursorStyle;
+                screen.cursor.cursor_style = match self.params.get_u32(0, 0) {
+                    0 | 1 => CursorStyle::BlinkingBlock,
+                    2 => CursorStyle::SteadyBlock,
+                    3 => CursorStyle::BlinkingUnderline,
+                    4 => CursorStyle::SteadyUnderline,
+                    5 => CursorStyle::BlinkingBar,
+                    6 => CursorStyle::SteadyBar,
+                    _ => CursorStyle::Default,
+                };
+            }
             _ => {} // Unhandled CSI sequences
         }
     }
@@ -1345,6 +1358,22 @@ mod tests {
         assert_eq!(translate_line_drawing(b'`').as_str(), Some("◆"));
         // Unmapped byte passes through
         assert_eq!(translate_line_drawing(b'A').as_str(), Some("A"));
+    }
+
+    #[test]
+    fn parse_decscusr_cursor_styles() {
+        use rmux_core::screen::cursor::CursorStyle;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // CSI 2 SP q → steady block
+        parser.parse(b"\x1b[2 q", &mut screen);
+        assert_eq!(screen.cursor.cursor_style, CursorStyle::SteadyBlock);
+        // CSI 5 SP q → blinking bar
+        parser.parse(b"\x1b[5 q", &mut screen);
+        assert_eq!(screen.cursor.cursor_style, CursorStyle::BlinkingBar);
+        // CSI 0 SP q → blinking block (default)
+        parser.parse(b"\x1b[0 q", &mut screen);
+        assert_eq!(screen.cursor.cursor_style, CursorStyle::BlinkingBlock);
     }
 
     #[test]

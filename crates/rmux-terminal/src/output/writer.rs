@@ -155,6 +155,22 @@ impl TermWriter {
         self.write_raw(b"\x1b[?25h");
     }
 
+    /// Set cursor style (DECSCUSR).
+    pub fn set_cursor_style(&mut self, style: rmux_core::screen::cursor::CursorStyle) {
+        use rmux_core::screen::cursor::CursorStyle;
+        let n = match style {
+            CursorStyle::Default => 0,
+            CursorStyle::BlinkingBlock => 1,
+            CursorStyle::SteadyBlock => 2,
+            CursorStyle::BlinkingUnderline => 3,
+            CursorStyle::SteadyUnderline => 4,
+            CursorStyle::BlinkingBar => 5,
+            CursorStyle::SteadyBar => 6,
+        };
+        let seq = format!("\x1b[{n} q");
+        self.write_raw(seq.as_bytes());
+    }
+
     /// Enable synchronized output (begin batch).
     pub fn begin_sync(&mut self) {
         self.write_raw(b"\x1b[?2026h");

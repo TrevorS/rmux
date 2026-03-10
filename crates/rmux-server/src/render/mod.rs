@@ -70,6 +70,13 @@ pub fn render_window(
         }
     }
 
+    // Set cursor style from active pane
+    if let Some(pane) = window.active_pane() {
+        if pane.copy_mode.is_none() {
+            writer.set_cursor_style(pane.screen.cursor.cursor_style);
+        }
+    }
+
     writer.show_cursor();
     writer.end_sync();
     writer.take().to_vec()
