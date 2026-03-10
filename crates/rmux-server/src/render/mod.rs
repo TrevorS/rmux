@@ -20,6 +20,8 @@ pub struct WindowInfo {
 pub struct StatusConfig {
     pub left: String,
     pub right: String,
+    pub window_status_format: String,
+    pub window_status_current_format: String,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -284,15 +286,30 @@ fn render_status_line(
         format!("[{session_name}] ")
     };
 
-    // Build window list in the center
+    // Build window list in the center using format expansion
     let mut center = String::new();
     for (i, winfo) in window_list.iter().enumerate() {
         if i > 0 {
             center.push(' ');
         }
-        write!(center, "{}:{}", winfo.idx, winfo.name).ok();
-        if winfo.is_active {
-            center.push('*');
+        if let Some(cfg) = status_config {
+            let mut wctx = FormatContext::new();
+            wctx.set("window_index", winfo.idx.to_string());
+            wctx.set("window_name", &winfo.name);
+            wctx.set("window_flags", if winfo.is_active { "*" } else { "-" });
+            wctx.set("window_active", if winfo.is_active { "1" } else { "0" });
+            wctx.set("session_name", session_name);
+            let fmt = if winfo.is_active {
+                &cfg.window_status_current_format
+            } else {
+                &cfg.window_status_format
+            };
+            center.push_str(&format_expand(fmt, &wctx));
+        } else {
+            write!(center, "{}:{}", winfo.idx, winfo.name).ok();
+            if winfo.is_active {
+                center.push('*');
+            }
         }
     }
 
@@ -549,8 +566,12 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "bash");
-        let cfg =
-            StatusConfig { left: "[#{session_name}] ".to_string(), right: "RIGHT".to_string() };
+        let cfg = StatusConfig {
+            left: "[#{session_name}] ".to_string(),
+            right: "RIGHT".to_string(),
+            window_status_format: "#I:#W#F".to_string(),
+            window_status_current_format: "#I:#W#F".to_string(),
+        };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
         assert!(output.windows(5).any(|w| w == b"[dev]"));
@@ -572,5 +593,30 @@ mod tests {
         assert_eq!(ctx.get("window_name"), Some("vim"));
         assert_eq!(ctx.get("window_index"), Some("3"));
         assert_eq!(ctx.get("pane_active"), Some("1"));
+    }
+
+    #[test]
+    fn custom_window_status_format() {
+        let mut window = Window::new("bash".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![
+            WindowInfo { idx: 0, name: "bash".to_string(), is_active: true },
+            WindowInfo { idx: 1, name: "vim".to_string(), is_active: false },
+        ];
+        let cfg = StatusConfig {
+            left: "[#S] ".to_string(),
+            right: String::new(),
+            window_status_format: "[#I]#W".to_string(),
+            window_status_current_format: "[#I]#W*".to_string(),
+        };
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
+        // Active window uses current format
+        assert!(output.windows(8).any(|w| w == b"[0]bash*"));
+        // Inactive window uses normal format (no *)
+        assert!(output.windows(6).any(|w| w == b"[1]vim"));
     }
 }

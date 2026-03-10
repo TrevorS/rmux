@@ -1537,9 +1537,9 @@ mod tests {
 
     #[test]
     fn irm_insert_mode() {
+        use rmux_core::screen::ModeFlags;
         let mut screen = make_screen();
         let mut parser = InputParser::new();
-        use rmux_core::screen::ModeFlags;
         // Enable insert mode via SM
         parser.parse(b"\x1b[4h", &mut screen);
         assert!(screen.mode.contains(ModeFlags::INSERT));

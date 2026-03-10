@@ -1418,6 +1418,16 @@ impl Server {
                 .unwrap_or("[#{session_name}] ")
                 .to_string(),
             right: session.options.get_string("status-right").unwrap_or("").to_string(),
+            window_status_format: session
+                .options
+                .get_string("window-status-format")
+                .unwrap_or("#I:#W#F")
+                .to_string(),
+            window_status_current_format: session
+                .options
+                .get_string("window-status-current-format")
+                .unwrap_or("#I:#W#F")
+                .to_string(),
         };
 
         render::render_window(

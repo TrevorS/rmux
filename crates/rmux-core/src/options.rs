@@ -240,6 +240,14 @@ pub fn default_session_options() -> Options {
     opts.set("mouse", OptionValue::Flag(false));
     opts.set("renumber-windows", OptionValue::Flag(false));
     opts.set("automatic-rename", OptionValue::Flag(true));
+    opts.set(
+        "window-status-format",
+        OptionValue::String("#I:#W#F".into()),
+    );
+    opts.set(
+        "window-status-current-format",
+        OptionValue::String("#I:#W#F".into()),
+    );
     opts
 }
 
