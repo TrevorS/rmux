@@ -236,6 +236,17 @@ impl Server {
                     if !reply_data.is_empty() && pane.pty_fd >= 0 {
                         replies = Some((pane.pty_fd, reply_data));
                     }
+                    // Automatic window rename: if active pane title changed, update window name
+                    if pane.id == window.active_pane
+                        && !pane.screen.title.is_empty()
+                        && pane.screen.title != window.name
+                    {
+                        let auto_rename =
+                            session.options.get_flag("automatic-rename").unwrap_or(true);
+                        if auto_rename {
+                            window.name.clone_from(&pane.screen.title);
+                        }
+                    }
                     // Mark attached clients for redraw
                     for client in self.clients.values_mut() {
                         if client.session_id == Some(session.id) && client.is_attached() {

@@ -239,6 +239,7 @@ pub fn default_session_options() -> Options {
     opts.set("status-right", OptionValue::String("\"#{=21:pane_title}\" %H:%M %d-%b-%y".into()));
     opts.set("mouse", OptionValue::Flag(false));
     opts.set("renumber-windows", OptionValue::Flag(false));
+    opts.set("automatic-rename", OptionValue::Flag(true));
     opts
 }
 
