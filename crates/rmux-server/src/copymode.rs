@@ -598,6 +598,8 @@ pub enum CopyModeAction {
     Handled,
     /// Exit copy mode (optionally with data to copy to paste buffer).
     Exit { copy_data: Option<Vec<u8>> },
+    /// Enter search prompt (forward or backward).
+    SearchPrompt { forward: bool },
     /// Key not recognized in copy mode.
     Unhandled,
 }
@@ -809,6 +811,8 @@ fn dispatch_search_and_jump(
     action: &str,
 ) -> Option<CopyModeAction> {
     match action {
+        "search-forward" => return Some(CopyModeAction::SearchPrompt { forward: true }),
+        "search-backward" => return Some(CopyModeAction::SearchPrompt { forward: false }),
         "search-again" => cm.search_again(screen),
         "search-reverse" => cm.search_reverse(screen),
         "jump-again" => cm.jump_again(screen),

@@ -938,8 +938,32 @@ impl Server {
         pane.is_in_copy_mode()
     }
 
+    /// Execute a search in the active pane's copy mode.
+    fn copy_mode_search(&mut self, client_id: u64, needle: &str, forward: bool) {
+        let Some(session_id) = self.clients.get(&client_id).and_then(|c| c.session_id) else {
+            return;
+        };
+        let Some(session) = self.sessions.find_by_id_mut(session_id) else {
+            return;
+        };
+        let Some(window) = session.active_window_mut() else {
+            return;
+        };
+        let Some(pane) = window.active_pane_mut() else {
+            return;
+        };
+        if let Some(cm) = &mut pane.copy_mode {
+            if forward {
+                cm.search_forward_for(&pane.screen, needle);
+            } else {
+                cm.search_backward_for(&pane.screen, needle);
+            }
+        }
+        self.mark_clients_redraw(session_id);
+    }
+
     /// Handle input when the active pane is in copy mode.
-    fn handle_copy_mode_input(&mut self, _client_id: u64, session_id: u32, data: &[u8]) {
+    fn handle_copy_mode_input(&mut self, client_id: u64, session_id: u32, data: &[u8]) {
         use rmux_terminal::keys::parse_key;
 
         // Parse the raw input into a key code
@@ -1014,10 +1038,59 @@ impl Server {
                 }
                 self.mark_clients_redraw(session_id);
             }
+            CopyModeAction::SearchPrompt { forward } => {
+                // Enter search prompt
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    use crate::client::PromptType;
+                    client.prompt = Some(PromptState {
+                        prompt_type: if forward {
+                            PromptType::SearchForward
+                        } else {
+                            PromptType::SearchBackward
+                        },
+                        ..PromptState::default()
+                    });
+                }
+                self.mark_clients_redraw(session_id);
+            }
             CopyModeAction::Unhandled => {
                 // Not recognized — ignore
             }
         }
+    }
+
+    /// Submit the current prompt (called when Enter is pressed).
+    fn submit_prompt(&mut self, client_id: u64) {
+        use crate::client::PromptType;
+        let (input, prompt_type) = {
+            let Some(client) = self.clients.get_mut(&client_id) else {
+                return;
+            };
+            let (buf, pt) = client
+                .prompt
+                .as_ref()
+                .map(|p| (p.buffer.clone(), p.prompt_type.clone()))
+                .unwrap_or_default();
+            client.prompt = None;
+            (buf, pt)
+        };
+        if !input.is_empty() {
+            match prompt_type {
+                PromptType::Command => {
+                    let argv = crate::config::tokenize_command(&input);
+                    if !argv.is_empty() {
+                        self.queue_command(client_id, argv);
+                    }
+                }
+                PromptType::SearchForward => {
+                    self.copy_mode_search(client_id, &input, true);
+                }
+                PromptType::SearchBackward => {
+                    self.copy_mode_search(client_id, &input, false);
+                }
+            }
+        }
+        self.mark_prompt_redraw(client_id);
     }
 
     /// Handle input when the client is in command prompt mode.
@@ -1031,22 +1104,7 @@ impl Server {
             match remaining[0] {
                 // Enter (\r or \n) — parse_key maps these to Ctrl-M / Ctrl-J
                 0x0D | 0x0A => {
-                    let cmd_str = {
-                        let Some(client) = self.clients.get_mut(&client_id) else {
-                            return;
-                        };
-                        let cmd =
-                            client.prompt.as_ref().map(|p| p.buffer.clone()).unwrap_or_default();
-                        client.prompt = None;
-                        cmd
-                    };
-                    if !cmd_str.is_empty() {
-                        let argv = crate::config::tokenize_command(&cmd_str);
-                        if !argv.is_empty() {
-                            self.queue_command(client_id, argv);
-                        }
-                    }
-                    self.mark_prompt_redraw(client_id);
+                    self.submit_prompt(client_id);
                     return; // Enter always ends prompt input
                 }
                 // Escape — parse_key returns None for bare ESC (wants more bytes)
@@ -1287,7 +1345,14 @@ impl Server {
             .values_mut()
             .filter_map(|c| {
                 if c.needs_redraw() {
-                    let prompt = c.prompt.as_ref().map(|p| p.buffer.clone());
+                    let prompt = c.prompt.as_ref().map(|p| {
+                        use crate::client::PromptType;
+                        match p.prompt_type {
+                            PromptType::Command => p.buffer.clone(),
+                            PromptType::SearchForward => format!("(search down){}", p.buffer),
+                            PromptType::SearchBackward => format!("(search up){}", p.buffer),
+                        }
+                    });
                     c.session_id.map(|sid| (c.id, sid, c.sx, c.sy, prompt))
                 } else {
                     None

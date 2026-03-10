@@ -23,6 +23,18 @@ bitflags! {
     }
 }
 
+/// What happens when the prompt is submitted.
+#[derive(Debug, Clone, Default)]
+pub enum PromptType {
+    /// Execute the buffer as a command.
+    #[default]
+    Command,
+    /// Search forward in copy mode.
+    SearchForward,
+    /// Search backward in copy mode.
+    SearchBackward,
+}
+
 /// State for the interactive command prompt (:).
 #[derive(Debug, Clone, Default)]
 pub struct PromptState {
@@ -30,6 +42,8 @@ pub struct PromptState {
     pub buffer: String,
     /// Cursor position in the buffer.
     pub cursor_pos: usize,
+    /// What to do when submitted.
+    pub prompt_type: PromptType,
 }
 
 /// A connected client on the server side.

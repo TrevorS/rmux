@@ -276,6 +276,12 @@ fn default_copy_mode_vi() -> HashMap<KeyCode, Vec<String>> {
     m.insert(b'V' as KeyCode, vec!["select-line".into()]);
     m.insert(keyc_build(b'v'.into(), KeyModifiers::CTRL), vec!["rectangle-toggle".into()]);
 
+    // Search
+    m.insert(b'/' as KeyCode, vec!["search-forward".into()]);
+    m.insert(b'?' as KeyCode, vec!["search-backward".into()]);
+    m.insert(b'n' as KeyCode, vec!["search-again".into()]);
+    m.insert(b'N' as KeyCode, vec!["search-reverse".into()]);
+
     // Copy/exit
     m.insert(KEYC_RETURN, vec!["copy-selection-and-cancel".into()]);
     m.insert(b'y' as KeyCode, vec!["copy-selection-and-cancel".into()]);
