@@ -1,6 +1,7 @@
 //! Format string expansion (#{...} syntax).
 //!
-//! Provides simple variable substitution for tmux-compatible format strings.
+//! Provides tmux-compatible format string expansion including variable
+//! substitution, conditionals, comparisons, width truncation, and short aliases.
 
 use std::collections::HashMap;
 
@@ -32,10 +33,15 @@ impl Default for FormatContext {
     }
 }
 
-/// Expand format strings with #{variable} syntax.
+/// Expand format strings with tmux-compatible syntax.
 ///
-/// Replaces each `#{variable_name}` with its value from the context.
-/// Unknown variables are replaced with empty strings.
+/// Supports:
+/// - `#{variable_name}` — variable substitution
+/// - `#{?cond,true_branch,false_branch}` — conditionals
+/// - `#{==:#{a},#{b}}` — equality comparison (also `!=`, `<`, `>`, `<=`, `>=`)
+/// - `#{=N:variable}` — width truncation (positive=right, negative=left)
+/// - `#S`, `#W`, `#I`, etc. — short aliases
+/// - `##` — literal `#`
 pub fn format_expand(template: &str, ctx: &FormatContext) -> String {
     let mut result = String::with_capacity(template.len());
     let bytes = template.as_bytes();
@@ -43,24 +49,223 @@ pub fn format_expand(template: &str, ctx: &FormatContext) -> String {
     let mut i = 0;
 
     while i < len {
-        if i + 1 < len && bytes[i] == b'#' && bytes[i + 1] == b'{' {
-            // Found #{, look for closing }
-            let start = i + 2;
-            if let Some(end) = template[start..].find('}') {
-                let var_name = &template[start..start + end];
-                if let Some(val) = ctx.get(var_name) {
-                    result.push_str(val);
-                }
-                i = start + end + 1;
+        if bytes[i] == b'#' {
+            if i + 1 >= len {
+                result.push('#');
+                i += 1;
                 continue;
             }
+
+            match bytes[i + 1] {
+                b'#' => {
+                    // ## -> literal #
+                    result.push('#');
+                    i += 2;
+                }
+                b'{' => {
+                    // #{...} — find matching closing brace (handling nesting)
+                    let start = i + 2;
+                    if let Some(end) = find_matching_brace(template, start) {
+                        let inner = &template[start..end];
+                        result.push_str(&expand_inner(inner, ctx));
+                        i = end + 1;
+                    } else {
+                        // No matching brace — pass through as-is
+                        result.push('#');
+                        result.push('{');
+                        i += 2;
+                    }
+                }
+                ch => {
+                    // Short aliases: #S, #W, #I, #T, #F, #D, #H, #h, #P
+                    if let Some(var) = short_alias(ch) {
+                        result.push_str(ctx.get(var).unwrap_or(""));
+                        i += 2;
+                    } else {
+                        result.push('#');
+                        i += 1;
+                    }
+                }
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
         }
-        // Regular character
-        result.push(bytes[i] as char);
-        i += 1;
     }
 
     result
+}
+
+/// Map single-character short aliases to their variable names.
+fn short_alias(ch: u8) -> Option<&'static str> {
+    match ch {
+        b'D' => Some("pane_id"),
+        b'F' => Some("window_flags"),
+        b'H' => Some("host"),
+        b'h' => Some("host_short"),
+        b'I' => Some("window_index"),
+        b'P' => Some("pane_index"),
+        b'S' => Some("session_name"),
+        b'T' => Some("pane_title"),
+        b'W' => Some("window_name"),
+        _ => None,
+    }
+}
+
+/// Find the matching closing `}` for an opening `{`, handling nested `#{...}`.
+fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut depth = 1u32;
+    let mut i = start;
+
+    while i < len {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Expand the content inside `#{...}`.
+fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
+    // Conditional: ?cond,true,false
+    if let Some(rest) = inner.strip_prefix('?') {
+        return expand_conditional(rest, ctx);
+    }
+
+    // Comparison operators: ==:a,b  !=:a,b  <:a,b  etc.
+    if let Some(rest) = inner.strip_prefix("==:") {
+        return expand_comparison(rest, ctx, |a, b| a == b);
+    }
+    if let Some(rest) = inner.strip_prefix("!=:") {
+        return expand_comparison(rest, ctx, |a, b| a != b);
+    }
+    if let Some(rest) = inner.strip_prefix("<=:") {
+        return expand_comparison(rest, ctx, |a, b| a <= b);
+    }
+    if let Some(rest) = inner.strip_prefix(">=:") {
+        return expand_comparison(rest, ctx, |a, b| a >= b);
+    }
+    if let Some(rest) = inner.strip_prefix("<:") {
+        return expand_comparison(rest, ctx, |a, b| a < b);
+    }
+    if let Some(rest) = inner.strip_prefix(">:") {
+        return expand_comparison(rest, ctx, |a, b| a > b);
+    }
+
+    // Width truncation: =N:expr (positive N = right trunc, negative = left trunc)
+    if inner.starts_with('=') || inner.starts_with("=-") {
+        if let Some(result) = expand_truncation(inner, ctx) {
+            return result;
+        }
+    }
+
+    // Plain variable lookup (may contain nested #{} that need expanding first)
+    let expanded = format_expand(inner, ctx);
+    // If the expanded result is itself a variable name, look it up
+    // But first check if the original inner was a plain variable name
+    if inner.contains('#') {
+        // Had nested expansions — return the expanded result
+        expanded
+    } else {
+        // Plain variable name
+        ctx.get(inner).unwrap_or("").to_string()
+    }
+}
+
+/// Split a format string at a top-level comma, respecting nested `#{}`.
+fn split_at_comma(s: &str) -> Option<(&str, &str)> {
+    let bytes = s.as_bytes();
+    let mut depth = 0u32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                return Some((&s[..i], &s[i + 1..]));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Evaluate an expression: if it contains `#`, expand it as a format string;
+/// otherwise treat it as a bare variable name and look it up.
+fn eval_expr(expr: &str, ctx: &FormatContext) -> String {
+    if expr.contains('#') {
+        format_expand(expr, ctx)
+    } else {
+        ctx.get(expr).unwrap_or("").to_string()
+    }
+}
+
+/// Expand a conditional: `cond,true_branch,false_branch`
+fn expand_conditional(rest: &str, ctx: &FormatContext) -> String {
+    // Split into condition, true branch, false branch
+    let Some((cond, remainder)) = split_at_comma(rest) else {
+        return String::new();
+    };
+
+    let (true_branch, false_branch) =
+        split_at_comma(remainder).unwrap_or((remainder, ""));
+
+    let cond_value = eval_expr(cond, ctx);
+    let is_true = !cond_value.is_empty() && cond_value != "0";
+
+    if is_true {
+        format_expand(true_branch, ctx)
+    } else {
+        format_expand(false_branch, ctx)
+    }
+}
+
+/// Expand a comparison: `a,b` with the given comparison function.
+fn expand_comparison(rest: &str, ctx: &FormatContext, cmp: fn(&str, &str) -> bool) -> String {
+    let Some((a_expr, b_expr)) = split_at_comma(rest) else {
+        return String::new();
+    };
+
+    let a = format_expand(a_expr, ctx);
+    let b = format_expand(b_expr, ctx);
+
+    if cmp(&a, &b) { "1".to_string() } else { "0".to_string() }
+}
+
+/// Expand width truncation: `=N:expr`
+fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
+    // Parse =N: or =-N:
+    let rest = inner.strip_prefix('=')?;
+    let colon_pos = rest.find(':')?;
+    let n_str = &rest[..colon_pos];
+    let expr = &rest[colon_pos + 1..];
+
+    let n: i32 = n_str.parse().ok()?;
+    let expanded = format_expand(expr, ctx);
+
+    let width = expanded.len();
+    let abs_n = n.unsigned_abs() as usize;
+
+    if abs_n >= width {
+        return Some(expanded);
+    }
+
+    if n >= 0 {
+        // Positive: keep first N chars
+        Some(expanded[..abs_n].to_string())
+    } else {
+        // Negative: keep last N chars
+        Some(expanded[width - abs_n..].to_string())
+    }
 }
 
 #[cfg(test)]
@@ -133,22 +338,18 @@ mod tests {
     fn consecutive_hashes() {
         let ctx = FormatContext::new();
         let result = format_expand("##", &ctx);
-        // Two '#' characters: first '#' is not followed by '{', so it's literal.
-        // Second '#' is also not followed by '{', so also literal.
-        assert_eq!(result, "##");
+        assert_eq!(result, "#");
     }
 
     #[test]
     fn very_long_template() {
         let mut ctx = FormatContext::new();
         ctx.set("x", "X");
-        // Build a template with 1000+ characters
         let mut template = String::new();
         for i in 0..200 {
             write!(template, "item{i}-#{{x}}-").unwrap();
         }
         let result = format_expand(&template, &ctx);
-        // Each "item{i}-#{x}-" expands #{x} to "X"
         assert!(result.len() > 1000);
         assert!(result.contains("item0-X-"));
         assert!(result.contains("item199-X-"));
@@ -178,6 +379,159 @@ mod tests {
         ctx.set("key", "second");
         assert_eq!(ctx.get("key"), Some("second"));
         assert_eq!(format_expand("#{key}", &ctx), "second");
+    }
+
+    // --- New tests for enhanced format engine ---
+
+    #[test]
+    fn literal_double_hash() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("a##b", &ctx), "a#b");
+        assert_eq!(format_expand("####", &ctx), "##");
+    }
+
+    #[test]
+    fn short_alias_session() {
+        let mut ctx = FormatContext::new();
+        ctx.set("session_name", "dev");
+        assert_eq!(format_expand("#S", &ctx), "dev");
+    }
+
+    #[test]
+    fn short_alias_window() {
+        let mut ctx = FormatContext::new();
+        ctx.set("window_name", "bash");
+        ctx.set("window_index", "3");
+        assert_eq!(format_expand("#I:#W", &ctx), "3:bash");
+    }
+
+    #[test]
+    fn short_alias_all() {
+        let mut ctx = FormatContext::new();
+        ctx.set("pane_id", "%5");
+        ctx.set("window_flags", "*");
+        ctx.set("host", "myhost.local");
+        ctx.set("host_short", "myhost");
+        ctx.set("pane_index", "1");
+        ctx.set("pane_title", "vim");
+        assert_eq!(format_expand("#D", &ctx), "%5");
+        assert_eq!(format_expand("#F", &ctx), "*");
+        assert_eq!(format_expand("#H", &ctx), "myhost.local");
+        assert_eq!(format_expand("#h", &ctx), "myhost");
+        assert_eq!(format_expand("#P", &ctx), "1");
+        assert_eq!(format_expand("#T", &ctx), "vim");
+    }
+
+    #[test]
+    fn conditional_true() {
+        let mut ctx = FormatContext::new();
+        ctx.set("pane_active", "1");
+        assert_eq!(format_expand("#{?pane_active,ACTIVE,inactive}", &ctx), "ACTIVE");
+    }
+
+    #[test]
+    fn conditional_false() {
+        let mut ctx = FormatContext::new();
+        ctx.set("pane_active", "0");
+        assert_eq!(format_expand("#{?pane_active,ACTIVE,inactive}", &ctx), "inactive");
+    }
+
+    #[test]
+    fn conditional_missing_var() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{?pane_active,yes,no}", &ctx), "no");
+    }
+
+    #[test]
+    fn conditional_with_nested_vars() {
+        let mut ctx = FormatContext::new();
+        ctx.set("active", "1");
+        ctx.set("session_name", "work");
+        assert_eq!(
+            format_expand("#{?active,#{session_name},none}", &ctx),
+            "work"
+        );
+    }
+
+    #[test]
+    fn conditional_no_false_branch() {
+        let mut ctx = FormatContext::new();
+        ctx.set("active", "1");
+        assert_eq!(format_expand("#{?active,YES}", &ctx), "YES");
+    }
+
+    #[test]
+    fn comparison_equal() {
+        let mut ctx = FormatContext::new();
+        ctx.set("a", "hello");
+        ctx.set("b", "hello");
+        assert_eq!(format_expand("#{==:#{a},#{b}}", &ctx), "1");
+    }
+
+    #[test]
+    fn comparison_not_equal() {
+        let mut ctx = FormatContext::new();
+        ctx.set("a", "hello");
+        ctx.set("b", "world");
+        assert_eq!(format_expand("#{==:#{a},#{b}}", &ctx), "0");
+        assert_eq!(format_expand("#{!=:#{a},#{b}}", &ctx), "1");
+    }
+
+    #[test]
+    fn comparison_in_conditional() {
+        let mut ctx = FormatContext::new();
+        ctx.set("window_name", "vim");
+        assert_eq!(
+            format_expand("#{?#{==:#{window_name},vim},EDITOR,other}", &ctx),
+            "EDITOR"
+        );
+    }
+
+    #[test]
+    fn truncation_right() {
+        let mut ctx = FormatContext::new();
+        ctx.set("pane_title", "very long title here");
+        assert_eq!(format_expand("#{=10:#{pane_title}}", &ctx), "very long ");
+    }
+
+    #[test]
+    fn truncation_left() {
+        let mut ctx = FormatContext::new();
+        ctx.set("pane_title", "very long title here");
+        assert_eq!(format_expand("#{=-10:#{pane_title}}", &ctx), "title here");
+    }
+
+    #[test]
+    fn truncation_no_op() {
+        let mut ctx = FormatContext::new();
+        ctx.set("x", "short");
+        assert_eq!(format_expand("#{=20:#{x}}", &ctx), "short");
+    }
+
+    #[test]
+    fn nested_conditional_with_comparison() {
+        let mut ctx = FormatContext::new();
+        ctx.set("window_index", "0");
+        ctx.set("active", "1");
+        let tmpl = "#{?#{==:#{window_index},0},first,#{?active,active,other}}";
+        assert_eq!(format_expand(tmpl, &ctx), "first");
+
+        ctx.set("window_index", "1");
+        assert_eq!(format_expand(tmpl, &ctx), "active");
+
+        ctx.set("active", "0");
+        assert_eq!(format_expand(tmpl, &ctx), "other");
+    }
+
+    #[test]
+    fn status_line_realistic() {
+        let mut ctx = FormatContext::new();
+        ctx.set("session_name", "dev");
+        ctx.set("window_index", "0");
+        ctx.set("window_name", "bash");
+        ctx.set("window_flags", "*");
+        let tmpl = "[#S] #I:#W#F";
+        assert_eq!(format_expand(tmpl, &ctx), "[dev] 0:bash*");
     }
 
     mod prop_tests {
