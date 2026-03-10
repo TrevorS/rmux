@@ -38,7 +38,7 @@ coverage: ## Generate code coverage report (requires cargo-llvm-cov)
 	@echo "Coverage report: target/llvm-cov/html/index.html"
 
 fuzz: ## Run all fuzz targets briefly (requires nightly)
-	@for target in $$(cd fuzz && cargo +nightly fuzz list 2>/dev/null); do \
+	@for target in $$(cargo +nightly fuzz list 2>/dev/null); do \
 		echo "Fuzzing $$target..."; \
-		cd fuzz && cargo +nightly fuzz run $$target -- -max_total_time=10 && cd ..; \
+		cargo +nightly fuzz run $$target -- -max_total_time=10; \
 	done

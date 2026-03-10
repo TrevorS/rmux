@@ -22,7 +22,7 @@ make fuzz                                # Run all fuzz targets briefly (require
 make coverage                            # HTML coverage report (requires cargo-llvm-cov)
 
 # Run a single fuzz target (requires nightly)
-cargo +nightly fuzz run fuzz_input_parser   # from project root, or cd fuzz first
+cargo +nightly fuzz run fuzz_input_parser   # from project root
 ```
 
 **Pre-commit checklist:** `make check` (or `cargo fmt && cargo clippy --all-targets --all-features && cargo test`)
@@ -83,7 +83,7 @@ rmux-client     CLI parsing (tmux-compatible flags), server auto-start, attached
 
 **Target resolution** (`-t` flag). Targets use tmux syntax: `session:window.pane`. Bare numbers are window indices (use current session), not session names. See `resolve_session`/`resolve_window_idx` in `command/builtins/window.rs`.
 
-**Adding a new command.** Add a handler fn in the appropriate `command/builtins/*.rs` file, register a `CommandEntry` in `command/builtins/mod.rs`, add any needed methods to the `CommandServer` trait in `command/mod.rs`, implement on both `Server` (in `server.rs`) and `MockCommandServer` (in `command/test_helpers.rs`), then add tests in `phase4_tests.rs` or `phase5_tests.rs`.
+**Adding a new command.** Add a handler fn in the appropriate `command/builtins/*.rs` file, register a `CommandEntry` in `command/builtins/mod.rs`, add any needed methods to the `CommandServer` trait in `command/mod.rs`, implement on both `Server` (in `server.rs`) and `MockCommandServer` (in `command/test_helpers.rs`), then add tests in `phase4_tests.rs`, `phase5_tests.rs`, or `phase6_tests.rs`.
 
 **Tests** are inline `#[cfg(test)]` modules. Command integration tests use `MockCommandServer` from `command/test_helpers.rs`. E2E tests (`make e2e`) launch rmux inside a real tmux session via `scripts/test-harness.sh` — use `harness_rmux` for non-attached commands and `harness_prefix` for keybind tests. Fuzz targets live in `fuzz/fuzz_targets/`.
 

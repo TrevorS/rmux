@@ -701,7 +701,8 @@ impl InputParser {
             (b'r', None) => {
                 // DECSTBM - set scroll region
                 let top = self.params.get_u32(0, 1).max(1) - 1;
-                let bottom = self.params.get_u32(1, screen.height()).min(screen.height()) - 1;
+                let bottom =
+                    self.params.get_u32(1, screen.height()).min(screen.height()).max(1) - 1;
                 if top < bottom {
                     screen.scroll_region.top = top;
                     screen.scroll_region.bottom = bottom;
