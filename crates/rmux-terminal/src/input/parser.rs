@@ -538,10 +538,17 @@ impl InputParser {
                 screen.cursor.x = screen.cursor.x.saturating_sub(n);
             }
             (b'H' | b'f', None) => {
-                // CUP / HVP - cursor position
+                // CUP / HVP - cursor position (respects DECOM)
+                use rmux_core::screen::ModeFlags;
                 let row = self.params.get_u32(0, 1).max(1) - 1;
                 let col = self.params.get_u32(1, 1).max(1) - 1;
-                screen.cursor.y = row.min(screen.height() - 1);
+                if screen.mode.contains(ModeFlags::ORIGIN) {
+                    let top = screen.scroll_region.top;
+                    let bottom = screen.scroll_region.bottom;
+                    screen.cursor.y = (top + row).min(bottom);
+                } else {
+                    screen.cursor.y = row.min(screen.height() - 1);
+                }
                 screen.cursor.x = col.min(screen.width() - 1);
             }
             (b'J', None) => {
@@ -702,6 +709,14 @@ impl InputParser {
                 screen.cursor.x = 0;
                 screen.cursor.y = 0;
             }
+            (b'h', None) => {
+                // SM - set mode (standard)
+                self.handle_sm(screen, true);
+            }
+            (b'l', None) => {
+                // RM - reset mode (standard)
+                self.handle_sm(screen, false);
+            }
             (b'h', Some(b'?')) => {
                 // DECSET - private mode set
                 self.handle_decset(screen, true);
@@ -850,9 +865,32 @@ impl InputParser {
             }
             let flag = match p {
                 1 => ModeFlags::CURSOR_KEYS,
+                6 => {
+                    // DECOM — origin mode
+                    if set {
+                        screen.mode |= ModeFlags::ORIGIN;
+                        // Move cursor to top-left of scroll region
+                        screen.cursor.x = 0;
+                        screen.cursor.y = screen.scroll_region.top;
+                    } else {
+                        screen.mode -= screen.mode & ModeFlags::ORIGIN;
+                        screen.cursor.x = 0;
+                        screen.cursor.y = 0;
+                    }
+                    continue;
+                }
                 7 => ModeFlags::WRAP,
                 12 | 13 => continue, // Cursor blink - not a mode flag
                 25 => ModeFlags::CURSOR_VISIBLE,
+                47 | 1047 => {
+                    // Alternate screen (without cursor save/restore)
+                    if set {
+                        screen.enter_alternate();
+                    } else {
+                        screen.exit_alternate();
+                    }
+                    continue;
+                }
                 1000 => ModeFlags::MOUSE_STANDARD,
                 1002 => ModeFlags::MOUSE_BUTTON,
                 1003 => ModeFlags::MOUSE_ANY,
@@ -861,13 +899,34 @@ impl InputParser {
                 1049 => {
                     // Alternate screen with saved cursor
                     if set {
+                        screen.save_cursor();
                         screen.enter_alternate();
                     } else {
                         screen.exit_alternate();
+                        screen.restore_cursor();
                     }
                     continue;
                 }
                 2004 => ModeFlags::BRACKETPASTE,
+                _ => continue,
+            };
+            if set {
+                screen.mode |= flag;
+            } else {
+                screen.mode -= screen.mode & flag;
+            }
+        }
+    }
+
+    /// Handle SM/RM (standard mode set/reset).
+    fn handle_sm(&self, screen: &mut Screen, set: bool) {
+        use rmux_core::screen::ModeFlags;
+        for &p in self.params.values() {
+            if p < 0 {
+                continue;
+            }
+            let flag = match p {
+                4 => ModeFlags::INSERT,
                 _ => continue,
             };
             if set {
@@ -1450,6 +1509,77 @@ mod tests {
         let mut parser = InputParser::new();
         parser.parse(b"\x1b[1mA", &mut screen);
         assert_eq!(parser.state(), State::Ground);
+    }
+
+    #[test]
+    fn decom_origin_mode_cup() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Set scroll region to lines 5-15 (1-based: 6-16)
+        parser.parse(b"\x1b[6;16r", &mut screen);
+        assert_eq!(screen.scroll_region.top, 5);
+        assert_eq!(screen.scroll_region.bottom, 15);
+        // Enable origin mode
+        parser.parse(b"\x1b[?6h", &mut screen);
+        // Cursor should be at top of scroll region
+        assert_eq!(screen.cursor.y, 5);
+        // CUP 1;1 should go to top of scroll region, not screen
+        parser.parse(b"\x1b[1;1H", &mut screen);
+        assert_eq!(screen.cursor.y, 5);
+        assert_eq!(screen.cursor.x, 0);
+        // CUP 3;1 should be relative to scroll region
+        parser.parse(b"\x1b[3;1H", &mut screen);
+        assert_eq!(screen.cursor.y, 7);
+        // Disable origin mode
+        parser.parse(b"\x1b[?6l", &mut screen);
+        assert_eq!(screen.cursor.y, 0);
+    }
+
+    #[test]
+    fn irm_insert_mode() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        use rmux_core::screen::ModeFlags;
+        // Enable insert mode via SM
+        parser.parse(b"\x1b[4h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::INSERT));
+        // Disable insert mode via RM
+        parser.parse(b"\x1b[4l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::INSERT));
+    }
+
+    #[test]
+    fn alternate_screen_mode_47() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Write something
+        parser.parse(b"Hello", &mut screen);
+        assert_eq!(screen.cursor.x, 5);
+        // Enter alternate screen via mode 47
+        parser.parse(b"\x1b[?47h", &mut screen);
+        assert!(screen.alternate.is_some());
+        // Exit alternate screen
+        parser.parse(b"\x1b[?47l", &mut screen);
+        assert!(screen.alternate.is_none());
+    }
+
+    #[test]
+    fn alternate_screen_1049_saves_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // Move cursor and enter alternate with 1049
+        screen.cursor.x = 10;
+        screen.cursor.y = 5;
+        parser.parse(b"\x1b[?1049h", &mut screen);
+        assert!(screen.alternate.is_some());
+        // Move cursor in alternate
+        screen.cursor.x = 0;
+        screen.cursor.y = 0;
+        // Exit: should restore cursor
+        parser.parse(b"\x1b[?1049l", &mut screen);
+        assert!(screen.alternate.is_none());
+        assert_eq!(screen.cursor.x, 10);
+        assert_eq!(screen.cursor.y, 5);
     }
 
     #[test]
