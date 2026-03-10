@@ -245,6 +245,37 @@ impl Grid {
         }
     }
 
+    /// Insert `n` blank cells at position (x, y), shifting cells right.
+    pub fn insert_characters(&mut self, x: u32, y: u32, n: u32) {
+        if y >= self.sy {
+            return;
+        }
+        if let Some(line) = self.history.visible_line_mut(y) {
+            line.insert_cells(x, n, self.sx);
+        }
+    }
+
+    /// Delete `n` cells at position (x, y), shifting cells left.
+    pub fn delete_characters(&mut self, x: u32, y: u32, n: u32) {
+        if y >= self.sy {
+            return;
+        }
+        if let Some(line) = self.history.visible_line_mut(y) {
+            line.delete_cells(x, n, self.sx);
+        }
+    }
+
+    /// Erase `n` cells starting at position (x, y) without shifting.
+    pub fn erase_characters(&mut self, x: u32, y: u32, n: u32) {
+        if y >= self.sy {
+            return;
+        }
+        let end = (x + n).min(self.sx);
+        if let Some(line) = self.history.visible_line_mut(y) {
+            line.clear_range(x, end, crate::style::Color::Default);
+        }
+    }
+
     /// Total number of lines (history + visible).
     #[must_use]
     pub fn total_lines(&self) -> u32 {

@@ -209,6 +209,39 @@ impl Screen {
         }
         width.saturating_sub(1)
     }
+
+    /// Get the previous tab stop before the given column.
+    #[must_use]
+    pub fn prev_tab_stop(&self, x: u32) -> u32 {
+        if x == 0 {
+            return 0;
+        }
+        for col in (0..x).rev() {
+            if self.tabs.get(col as usize).copied().unwrap_or(false) {
+                return col;
+            }
+        }
+        0
+    }
+
+    /// Set a tab stop at the given column.
+    pub fn set_tab_stop(&mut self, x: u32) {
+        if let Some(tab) = self.tabs.get_mut(x as usize) {
+            *tab = true;
+        }
+    }
+
+    /// Clear the tab stop at the given column.
+    pub fn clear_tab_stop(&mut self, x: u32) {
+        if let Some(tab) = self.tabs.get_mut(x as usize) {
+            *tab = false;
+        }
+    }
+
+    /// Clear all tab stops.
+    pub fn clear_all_tab_stops(&mut self) {
+        self.tabs.fill(false);
+    }
 }
 
 #[cfg(test)]

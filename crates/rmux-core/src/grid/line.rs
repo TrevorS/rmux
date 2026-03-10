@@ -187,6 +187,43 @@ impl GridLine {
         self.extended = new_extended;
     }
 
+    /// Insert `n` blank cells at position `x`, shifting existing cells right.
+    ///
+    /// Cells shifted beyond `width` are discarded.
+    pub fn insert_cells(&mut self, x: u32, n: u32, width: u32) {
+        self.fill_to(width);
+        let x = x as usize;
+        let n = n as usize;
+        let w = width as usize;
+        if x >= w {
+            return;
+        }
+        // Truncate to width before inserting
+        self.cells.truncate(w);
+        // Insert blank cells at position x
+        let insert_count = n.min(w - x);
+        self.cells.splice(x..x, std::iter::repeat_n(CompactCell::CLEARED, insert_count));
+        // Truncate back to width
+        self.cells.truncate(w);
+    }
+
+    /// Delete `n` cells at position `x`, shifting remaining cells left.
+    ///
+    /// Blank cells are appended at the right edge to maintain width.
+    pub fn delete_cells(&mut self, x: u32, n: u32, width: u32) {
+        self.fill_to(width);
+        let x = x as usize;
+        let n = n as usize;
+        let w = width as usize;
+        if x >= w {
+            return;
+        }
+        let delete_count = n.min(w - x);
+        self.cells.drain(x..x + delete_count);
+        // Pad back to width
+        self.cells.resize(w, CompactCell::CLEARED);
+    }
+
     /// Returns true if the line has no meaningful content.
     #[must_use]
     pub fn is_empty(&self) -> bool {

@@ -455,7 +455,8 @@ impl InputParser {
                     screen.cursor.y -= 1;
                 }
             }
-            b'c' => screen.reset(), // RIS - full reset
+            b'H' => screen.set_tab_stop(screen.cursor.x), // HTS - set tab stop
+            b'c' => screen.reset(),                        // RIS - full reset
             _ => {}
         }
     }
@@ -534,6 +535,23 @@ impl InputParser {
                     _ => {}
                 }
             }
+            (b'E', None) => {
+                // CNL - cursor next line
+                let n = self.params.get_u32(0, 1).max(1);
+                screen.cursor.x = 0;
+                screen.cursor.y = (screen.cursor.y + n).min(screen.height() - 1);
+            }
+            (b'F', None) => {
+                // CPL - cursor previous line
+                let n = self.params.get_u32(0, 1).max(1);
+                screen.cursor.x = 0;
+                screen.cursor.y = screen.cursor.y.saturating_sub(n);
+            }
+            (b'G', None) => {
+                // CHA - cursor character absolute (1-based column)
+                let col = self.params.get_u32(0, 1).max(1) - 1;
+                screen.cursor.x = col.min(screen.width() - 1);
+            }
             (b'L', None) => {
                 // IL - insert lines
                 let n = self.params.get_u32(0, 1).max(1);
@@ -546,6 +564,77 @@ impl InputParser {
                 let n = self.params.get_u32(0, 1).max(1);
                 for _ in 0..n {
                     screen.grid.scroll_region_up(screen.cursor.y, screen.scroll_region.bottom);
+                }
+            }
+            (b'P', None) => {
+                // DCH - delete characters
+                let n = self.params.get_u32(0, 1).max(1);
+                screen.grid.delete_characters(screen.cursor.x, screen.cursor.y, n);
+            }
+            (b'S', None) => {
+                // SU - scroll up
+                let n = self.params.get_u32(0, 1).max(1);
+                for _ in 0..n {
+                    screen
+                        .grid
+                        .scroll_region_up(screen.scroll_region.top, screen.scroll_region.bottom);
+                }
+            }
+            (b'T', None) => {
+                // SD - scroll down
+                let n = self.params.get_u32(0, 1).max(1);
+                for _ in 0..n {
+                    screen
+                        .grid
+                        .scroll_region_down(screen.scroll_region.top, screen.scroll_region.bottom);
+                }
+            }
+            (b'X', None) => {
+                // ECH - erase characters
+                let n = self.params.get_u32(0, 1).max(1);
+                screen.grid.erase_characters(screen.cursor.x, screen.cursor.y, n);
+            }
+            (b'Z', None) => {
+                // CBT - cursor backward tab
+                let n = self.params.get_u32(0, 1).max(1);
+                for _ in 0..n {
+                    screen.cursor.x = screen.prev_tab_stop(screen.cursor.x);
+                }
+            }
+            (b'@', None) => {
+                // ICH - insert characters
+                let n = self.params.get_u32(0, 1).max(1);
+                screen.grid.insert_characters(screen.cursor.x, screen.cursor.y, n);
+            }
+            (b'`', None) => {
+                // HPA - horizontal position absolute (1-based)
+                let col = self.params.get_u32(0, 1).max(1) - 1;
+                screen.cursor.x = col.min(screen.width() - 1);
+            }
+            (b'b', None) => {
+                // REP - repeat preceding graphic character
+                let n = self.params.get_u32(0, 1).max(1);
+                if screen.cursor.x > 0 {
+                    let prev_cell = screen.grid.get_cell(screen.cursor.x - 1, screen.cursor.y);
+                    if !prev_cell.flags.contains(CellFlags::CLEARED) {
+                        for _ in 0..n {
+                            write_cell(screen, &prev_cell);
+                        }
+                    }
+                }
+            }
+            (b'd', None) => {
+                // VPA - vertical position absolute (1-based)
+                let row = self.params.get_u32(0, 1).max(1) - 1;
+                screen.cursor.y = row.min(screen.height() - 1);
+            }
+            (b'g', None) => {
+                // TBC - tab clear
+                let mode = self.params.get_u32(0, 0);
+                match mode {
+                    0 => screen.clear_tab_stop(screen.cursor.x),
+                    3 => screen.clear_all_tab_stops(),
+                    _ => {}
                 }
             }
             (b'm', None) => {
