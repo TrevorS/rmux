@@ -1434,6 +1434,18 @@ impl Server {
                 .unwrap_or("#I:#W#F")
                 .to_string(),
             status_style,
+            pane_border_style: rmux_core::style::parse_style(
+                window
+                    .options
+                    .get_string("pane-border-style")
+                    .unwrap_or("default"),
+            ),
+            pane_active_border_style: rmux_core::style::parse_style(
+                window
+                    .options
+                    .get_string("pane-active-border-style")
+                    .unwrap_or("fg=green"),
+            ),
         };
 
         render::render_window(

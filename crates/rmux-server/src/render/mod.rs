@@ -16,13 +16,15 @@ pub struct WindowInfo {
     pub is_active: bool,
 }
 
-/// Status line configuration from options.
+/// Status line and border configuration from options.
 pub struct StatusConfig {
     pub left: String,
     pub right: String,
     pub window_status_format: String,
     pub window_status_current_format: String,
     pub status_style: Style,
+    pub pane_border_style: Style,
+    pub pane_active_border_style: Style,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -54,7 +56,7 @@ pub fn render_window(
         }
     } else {
         // Multi-pane: render each pane at its offset, then draw borders
-        render_panes_with_borders(&mut writer, window, sx, status_row);
+        render_panes_with_borders(&mut writer, window, sx, status_row, status_config);
     }
 
     // Status line (or command prompt)
@@ -173,7 +175,13 @@ fn render_pane_at(
 }
 
 /// Render all panes with borders between them.
-fn render_panes_with_borders(writer: &mut TermWriter, window: &Window, sx: u32, max_height: u32) {
+fn render_panes_with_borders(
+    writer: &mut TermWriter,
+    window: &Window,
+    sx: u32,
+    max_height: u32,
+    status_config: Option<&StatusConfig>,
+) {
     // First, render each pane at its offset
     for pane in window.panes.values() {
         render_pane_at(writer, pane, pane.xoff, pane.yoff, sx, max_height);
@@ -181,21 +189,27 @@ fn render_panes_with_borders(writer: &mut TermWriter, window: &Window, sx: u32, 
 
     // Then draw borders from the layout tree
     if let Some(layout) = &window.layout {
-        draw_borders(writer, layout, window.active_pane, max_height);
+        let (border, active_border) = if let Some(cfg) = status_config {
+            (cfg.pane_border_style, cfg.pane_active_border_style)
+        } else {
+            (Style::DEFAULT, Style { fg: Color::GREEN, ..Style::DEFAULT })
+        };
+        draw_borders(writer, layout, window.active_pane, max_height, &border, &active_border);
     }
 }
 
 /// Recursively draw borders for split layout nodes.
-fn draw_borders(writer: &mut TermWriter, cell: &LayoutCell, active_pane: u32, max_height: u32) {
+fn draw_borders(
+    writer: &mut TermWriter,
+    cell: &LayoutCell,
+    active_pane: u32,
+    max_height: u32,
+    border_style: &Style,
+    active_border_style: &Style,
+) {
     if cell.is_pane() {
         return;
     }
-
-    let border_style =
-        Style { fg: Color::Default, bg: Color::Default, us: Color::Default, attrs: Attrs::empty() };
-
-    let active_border_style =
-        Style { fg: Color::GREEN, bg: Color::Default, us: Color::Default, attrs: Attrs::empty() };
 
     match cell.cell_type {
         LayoutType::LeftRight => {
@@ -211,7 +225,7 @@ fn draw_borders(writer: &mut TermWriter, cell: &LayoutCell, active_pane: u32, ma
                 let is_active = is_pane_in_subtree(left_child, active_pane)
                     || is_pane_in_subtree(right_child, active_pane);
 
-                writer.set_style(if is_active { &active_border_style } else { &border_style });
+                writer.set_style(if is_active { active_border_style } else { border_style });
 
                 for y in 0..border_h {
                     writer.cursor_position(border_x, border_y + y);
@@ -235,7 +249,7 @@ fn draw_borders(writer: &mut TermWriter, cell: &LayoutCell, active_pane: u32, ma
                 let is_active = is_pane_in_subtree(top_child, active_pane)
                     || is_pane_in_subtree(bottom_child, active_pane);
 
-                writer.set_style(if is_active { &active_border_style } else { &border_style });
+                writer.set_style(if is_active { active_border_style } else { border_style });
 
                 writer.cursor_position(border_x, border_y);
                 for _ in 0..border_w {
@@ -248,7 +262,7 @@ fn draw_borders(writer: &mut TermWriter, cell: &LayoutCell, active_pane: u32, ma
 
     // Recurse into children
     for child in &cell.children {
-        draw_borders(writer, child, active_pane, max_height);
+        draw_borders(writer, child, active_pane, max_height, border_style, active_border_style);
     }
 }
 
@@ -581,6 +595,8 @@ mod tests {
                 us: Color::Default,
                 attrs: Attrs::empty(),
             },
+            pane_border_style: Style::DEFAULT,
+            pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
         };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
@@ -623,6 +639,8 @@ mod tests {
             window_status_format: "[#I]#W".to_string(),
             window_status_current_format: "[#I]#W*".to_string(),
             status_style: Style::DEFAULT,
+            pane_border_style: Style::DEFAULT,
+            pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
         };
         let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
         // Active window uses current format
