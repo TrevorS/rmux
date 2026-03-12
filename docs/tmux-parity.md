@@ -308,8 +308,8 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Status line strftime expansion (`%H:%M`, `%d-%b-%y`, etc.)
 - [x] Status line style changes within format strings (`#[fg=red]`)
 - [ ] Pane border status line (pane-border-status)
-- [ ] Window flags beyond `*` (e.g., `-`, `#`, `!`, `Z`, `M`)
-- [ ] Window activity/bell/silence indicators in status
+- [x] Window flags (`*`, `-`, `#`, `!`, `Z`) via `WindowFlags` bitflags
+- [ ] Window activity/bell/silence detection (triggers for `#` and `!` flags)
 
 ---
 

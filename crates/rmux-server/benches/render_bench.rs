@@ -5,7 +5,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rmux_core::layout::{LayoutCell, LayoutType, layout_even_horizontal};
 use rmux_server::pane::Pane;
-use rmux_server::render::{WindowInfo, render_window};
+use rmux_server::render::{WindowFlags, WindowInfo, render_window};
 use rmux_server::window::Window;
 use std::hint::black_box;
 
@@ -98,7 +98,7 @@ fn make_four_pane_grid_window(sx: u32, sy: u32) -> Window {
 }
 
 fn bench_window_list(name: &str) -> Vec<WindowInfo> {
-    vec![WindowInfo { idx: 0, name: name.to_string(), is_active: true }]
+    vec![WindowInfo { idx: 0, name: name.to_string(), flags: WindowFlags::ACTIVE }]
 }
 
 fn bench_render_single_pane(c: &mut Criterion) {

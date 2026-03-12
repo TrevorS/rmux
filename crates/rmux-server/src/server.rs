@@ -1518,10 +1518,15 @@ impl Server {
         let mut window_list: Vec<render::WindowInfo> = session
             .windows
             .iter()
-            .map(|(&idx, w)| render::WindowInfo {
-                idx,
-                name: w.name.clone(),
-                is_active: idx == session.active_window,
+            .map(|(&idx, w)| {
+                let mut flags = render::WindowFlags::empty();
+                if idx == session.active_window {
+                    flags |= render::WindowFlags::ACTIVE;
+                }
+                if session.last_window == Some(idx) {
+                    flags |= render::WindowFlags::LAST;
+                }
+                render::WindowInfo { idx, name: w.name.clone(), flags }
             })
             .collect();
         window_list.sort_by_key(|w| w.idx);

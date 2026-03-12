@@ -9,11 +9,57 @@ use rmux_core::layout::{LayoutCell, LayoutType};
 use rmux_core::style::{Attrs, Color, Style};
 use rmux_terminal::output::writer::TermWriter;
 
+use bitflags::bitflags;
+
+bitflags! {
+    /// Flags for a window in the status line.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct WindowFlags: u8 {
+        /// Current (active) window.
+        const ACTIVE   = 0x01;
+        /// Last active window.
+        const LAST     = 0x02;
+        /// Window is zoomed.
+        const ZOOMED   = 0x04;
+        /// Window has bell alert.
+        const BELL     = 0x08;
+        /// Window has activity alert.
+        const ACTIVITY = 0x10;
+    }
+}
+
+impl WindowFlags {
+    /// Build the tmux-compatible window flags string.
+    ///
+    /// Flags: `*` (current), `-` (last), `Z` (zoomed), `#` (bell), `!` (activity).
+    /// Multiple flags can combine (e.g. `*Z`). If no flags apply, returns empty string.
+    pub fn to_flag_string(self) -> String {
+        let mut s = String::new();
+        if self.contains(Self::ACTIVE) {
+            s.push('*');
+        }
+        if self.contains(Self::LAST) {
+            s.push('-');
+        }
+        if self.contains(Self::ZOOMED) {
+            s.push('Z');
+        }
+        if self.contains(Self::BELL) {
+            s.push('#');
+        }
+        if self.contains(Self::ACTIVITY) {
+            s.push('!');
+        }
+        s
+    }
+}
+
 /// Info about each window in the session, for rendering the status line.
+#[derive(Default)]
 pub struct WindowInfo {
     pub idx: u32,
     pub name: String,
-    pub is_active: bool,
+    pub flags: WindowFlags,
 }
 
 /// Status line and border configuration from options.
@@ -349,21 +395,22 @@ fn render_status_line(
             let mut wctx = FormatContext::new();
             wctx.set("window_index", winfo.idx.to_string());
             wctx.set("window_name", &winfo.name);
-            wctx.set("window_flags", if winfo.is_active { "*" } else { "-" });
-            wctx.set("window_active", if winfo.is_active { "1" } else { "0" });
+            wctx.set("window_flags", winfo.flags.to_flag_string());
+            let is_active = winfo.flags.contains(WindowFlags::ACTIVE);
+            wctx.set("window_active", if is_active { "1" } else { "0" });
             wctx.set("session_name", session_name);
-            let fmt = if winfo.is_active {
+            let fmt = if is_active {
                 &cfg.window_status_current_format
             } else {
                 &cfg.window_status_format
             };
-            (format_expand(fmt, &wctx), winfo.is_active)
+            (format_expand(fmt, &wctx), is_active)
         } else {
+            let is_active = winfo.flags.contains(WindowFlags::ACTIVE);
             let mut s = format!("{}:{}", winfo.idx, winfo.name);
-            if winfo.is_active {
-                s.push('*');
-            }
-            (s, winfo.is_active)
+            let flag_str = winfo.flags.to_flag_string();
+            s.push_str(&flag_str);
+            (s, is_active)
         };
         center_parts.push((text, is_active));
     }
@@ -506,7 +553,7 @@ fn build_status_context(
     ctx.set("window_name", &window.name);
 
     // Find active window index
-    if let Some(active) = window_list.iter().find(|w| w.is_active) {
+    if let Some(active) = window_list.iter().find(|w| w.flags.contains(WindowFlags::ACTIVE)) {
         ctx.set("window_index", active.idx.to_string());
     }
 
@@ -560,7 +607,7 @@ mod tests {
     use rmux_core::layout::layout_even_horizontal;
 
     fn single_window_list(idx: u32, name: &str) -> Vec<WindowInfo> {
-        vec![WindowInfo { idx, name: name.to_string(), is_active: true }]
+        vec![WindowInfo { idx, name: name.to_string(), flags: WindowFlags::ACTIVE }]
     }
 
     #[test]
@@ -693,9 +740,9 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = vec![
-            WindowInfo { idx: 0, name: "bash".to_string(), is_active: true },
-            WindowInfo { idx: 1, name: "vim".to_string(), is_active: false },
-            WindowInfo { idx: 2, name: "logs".to_string(), is_active: false },
+            WindowInfo { idx: 0, name: "bash".to_string(), flags: WindowFlags::ACTIVE },
+            WindowInfo { idx: 1, name: "vim".to_string(), flags: WindowFlags::LAST },
+            WindowInfo { idx: 2, name: "logs".to_string(), flags: WindowFlags::empty() },
         ];
         let output = render_window(&window, "sess", 80, 24, &wl, None, None);
         // Should contain all window names
@@ -704,6 +751,8 @@ mod tests {
         assert!(output.windows(6).any(|w| w == b"2:logs"));
         // Active window should have *
         assert!(output.windows(7).any(|w| w == b"0:bash*"));
+        // Last window should have -
+        assert!(output.windows(6).any(|w| w == b"1:vim-"));
     }
 
     #[test]
@@ -754,7 +803,7 @@ mod tests {
         window.active_pane = pid;
         window.panes.insert(pid, pane);
 
-        let wl = vec![WindowInfo { idx: 3, name: "vim".to_string(), is_active: true }];
+        let wl = vec![WindowInfo { idx: 3, name: "vim".to_string(), flags: WindowFlags::ACTIVE }];
         let ctx = build_status_context("work", &window, &wl);
         assert_eq!(ctx.get("session_name"), Some("work"));
         assert_eq!(ctx.get("window_name"), Some("vim"));
@@ -771,8 +820,8 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = vec![
-            WindowInfo { idx: 0, name: "bash".to_string(), is_active: true },
-            WindowInfo { idx: 1, name: "vim".to_string(), is_active: false },
+            WindowInfo { idx: 0, name: "bash".to_string(), flags: WindowFlags::ACTIVE },
+            WindowInfo { idx: 1, name: "vim".to_string(), flags: WindowFlags::empty() },
         ];
         let cfg = StatusConfig {
             left: "[#S] ".to_string(),
@@ -798,5 +847,41 @@ mod tests {
         assert!(output.windows(8).any(|w| w == b"[0]bash*"));
         // Inactive window uses normal format (no *)
         assert!(output.windows(6).any(|w| w == b"[1]vim"));
+    }
+
+    #[test]
+    fn window_flags_active() {
+        assert_eq!(WindowFlags::ACTIVE.to_flag_string(), "*");
+    }
+
+    #[test]
+    fn window_flags_last() {
+        assert_eq!(WindowFlags::LAST.to_flag_string(), "-");
+    }
+
+    #[test]
+    fn window_flags_zoomed_active() {
+        assert_eq!((WindowFlags::ACTIVE | WindowFlags::ZOOMED).to_flag_string(), "*Z");
+    }
+
+    #[test]
+    fn window_flags_bell() {
+        assert_eq!(WindowFlags::BELL.to_flag_string(), "#");
+    }
+
+    #[test]
+    fn window_flags_activity() {
+        assert_eq!(WindowFlags::ACTIVITY.to_flag_string(), "!");
+    }
+
+    #[test]
+    fn window_flags_none() {
+        assert_eq!(WindowFlags::empty().to_flag_string(), "");
+    }
+
+    #[test]
+    fn window_flags_combined() {
+        let f = WindowFlags::ACTIVE | WindowFlags::ZOOMED | WindowFlags::BELL;
+        assert_eq!(f.to_flag_string(), "*Z#");
     }
 }
