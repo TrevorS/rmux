@@ -419,8 +419,8 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] String operations: `#{s/pat/rep:var}` (substitution)
 - [x] `#{l:literal}` — literal string
 - [ ] `#{E:var}` — expand twice
-- [ ] `#{T:var}` — strftime expansion
-- [ ] Numeric comparisons: `#{<:a,b}`, `#{>:a,b}`
+- [x] `#{T:var}` — strftime expansion (bare `%H:%M` etc. in status-left/right)
+- [x] Numeric comparisons: `#{<:a,b}`, `#{>:a,b}`, `#{<=:a,b}`, `#{>=:a,b}`
 
 ### Missing Variables
 - [ ] `session_created`, `session_activity`, `session_alerts`

@@ -3,6 +3,7 @@
 //! Provides tmux-compatible format string expansion including variable
 //! substitution, conditionals, comparisons, width truncation, and short aliases.
 
+use nix::libc;
 use std::collections::HashMap;
 
 /// Context for format string expansion.
@@ -310,6 +311,238 @@ fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
     }
 }
 
+/// Expand strftime `%`-codes in a string using the current local time.
+///
+/// tmux expands bare `%H`, `%M`, `%S`, `%d`, `%b`, `%y`, `%Y`, `%a`, `%A`,
+/// `%e`, `%m`, `%p`, `%Z`, `%j`, `%k`, `%l`, `%R`, `%r`, `%D`, `%F`, `%c`,
+/// `%x`, `%X` etc. in status-left/right templates after format variable
+/// expansion. We handle the common codes using chrono-free manual formatting.
+pub fn strftime_expand(s: &str) -> String {
+    use std::time::SystemTime;
+
+    let now =
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+
+    // Timestamps before 2^63 (year ~292 billion) are safe to cast
+    #[allow(clippy::cast_possible_wrap)]
+    strftime_expand_with_timestamp(s, now as i64)
+}
+
+/// Expand strftime codes using a specific Unix timestamp (for testability).
+fn strftime_expand_with_timestamp(s: &str, timestamp: i64) -> String {
+    let (year, month, day, hour, minute, second, weekday, yday) = unix_to_local(timestamp);
+
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == b'%' && i + 1 < len {
+            let code = bytes[i + 1];
+            let replacement: Option<String> = match code {
+                b'H' => Some(format!("{hour:02}")),
+                b'M' => Some(format!("{minute:02}")),
+                b'S' => Some(format!("{second:02}")),
+                b'd' => Some(format!("{day:02}")),
+                b'e' => Some(format!("{day:>2}")),
+                b'm' => Some(format!("{month:02}")),
+                b'y' => Some(format!("{:02}", year % 100)),
+                b'Y' => Some(format!("{year}")),
+                b'b' | b'h' => Some(month_abbrev(month).to_string()),
+                b'B' => Some(month_full(month).to_string()),
+                b'a' => Some(weekday_abbrev(weekday).to_string()),
+                b'A' => Some(weekday_full(weekday).to_string()),
+                b'p' => Some(if hour < 12 { "AM" } else { "PM" }.to_string()),
+                b'P' => Some(if hour < 12 { "am" } else { "pm" }.to_string()),
+                b'k' => Some(format!("{hour:>2}")),
+                b'l' => {
+                    let h12 = if hour == 0 {
+                        12
+                    } else if hour > 12 {
+                        hour - 12
+                    } else {
+                        hour
+                    };
+                    Some(format!("{h12:>2}"))
+                }
+                b'I' => {
+                    let h12 = if hour == 0 {
+                        12
+                    } else if hour > 12 {
+                        hour - 12
+                    } else {
+                        hour
+                    };
+                    Some(format!("{h12:02}"))
+                }
+                b'R' => Some(format!("{hour:02}:{minute:02}")),
+                b'T' => Some(format!("{hour:02}:{minute:02}:{second:02}")),
+                b'r' => {
+                    let h12 = if hour == 0 {
+                        12
+                    } else if hour > 12 {
+                        hour - 12
+                    } else {
+                        hour
+                    };
+                    let ampm = if hour < 12 { "AM" } else { "PM" };
+                    Some(format!("{h12:02}:{minute:02}:{second:02} {ampm}"))
+                }
+                b'D' => Some(format!("{month:02}/{day:02}/{:02}", year % 100)),
+                b'F' => Some(format!("{year}-{month:02}-{day:02}")),
+                b'j' => Some(format!("{yday:03}")),
+                b'n' => Some("\n".to_string()),
+                b't' => Some("\t".to_string()),
+                b'%' => Some("%".to_string()),
+                _ => None,
+            };
+
+            if let Some(rep) = replacement {
+                result.push_str(&rep);
+                i += 2;
+            } else {
+                result.push('%');
+                i += 1;
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Convert a Unix timestamp to local time components.
+///
+/// Returns (year, month, day, hour, minute, second, weekday, yday).
+/// weekday: 0=Sunday, 1=Monday, ..., 6=Saturday.
+/// yday: 1-based day of year.
+fn unix_to_local(timestamp: i64) -> (i32, u32, u32, u32, u32, u32, u32, u32) {
+    // Get the local timezone offset using libc
+    let offset_secs = local_utc_offset(timestamp);
+    let local_ts = timestamp + i64::from(offset_secs);
+
+    // Convert to civil date/time
+    let secs_per_day: i64 = 86400;
+    let mut days = local_ts.div_euclid(secs_per_day);
+    let day_secs = local_ts.rem_euclid(secs_per_day) as u32;
+
+    let hour = day_secs / 3600;
+    let minute = (day_secs % 3600) / 60;
+    let second = day_secs % 60;
+
+    // days since epoch (1970-01-01 which was a Thursday)
+    // weekday: 0=Sun, 1=Mon, ... 4=Thu
+    let weekday = ((days + 4) % 7) as u32; // Thu=4, so day 0 → 4
+
+    // Convert days since epoch to (year, month, day) using the civil_from_days algorithm
+    // Algorithm from Howard Hinnant's date library
+    days += 719_468; // shift epoch from 1970-01-01 to 0000-03-01
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097) as u32; // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era [0, 399]
+    let y = (yoe as i64 + era * 400) as i32;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+
+    // Compute yday (1-based day of year)
+    let yday = {
+        let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let month_days: [u32; 12] =
+            [31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut yd = d;
+        for days in month_days.iter().take(m as usize - 1) {
+            yd += days;
+        }
+        yd
+    };
+
+    (year, m, d, hour, minute, second, weekday, yday)
+}
+
+/// Get the local UTC offset in seconds for a given timestamp.
+fn local_utc_offset(timestamp: i64) -> i32 {
+    use std::mem::MaybeUninit;
+
+    // SAFETY: localtime_r is a standard POSIX function that fills the provided
+    // tm struct with the local time representation of the given timestamp.
+    // We use MaybeUninit to avoid reading uninitialized memory.
+    unsafe {
+        let time_t = timestamp as libc::time_t;
+        let mut tm = MaybeUninit::<libc::tm>::uninit();
+        libc::localtime_r(&raw const time_t, tm.as_mut_ptr());
+        let tm = tm.assume_init();
+        tm.tm_gmtoff as i32
+    }
+}
+
+fn month_abbrev(m: u32) -> &'static str {
+    match m {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "???",
+    }
+}
+
+fn month_full(m: u32) -> &'static str {
+    match m {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "???",
+    }
+}
+
+fn weekday_abbrev(d: u32) -> &'static str {
+    match d {
+        0 => "Sun",
+        1 => "Mon",
+        2 => "Tue",
+        3 => "Wed",
+        4 => "Thu",
+        5 => "Fri",
+        6 => "Sat",
+        _ => "???",
+    }
+}
+
+fn weekday_full(d: u32) -> &'static str {
+    match d {
+        0 => "Sunday",
+        1 => "Monday",
+        2 => "Tuesday",
+        3 => "Wednesday",
+        4 => "Thursday",
+        5 => "Friday",
+        6 => "Saturday",
+        _ => "???",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +838,73 @@ mod tests {
         assert_eq!(format_expand("#[fg=green]#S#[default]", &ctx), "#[fg=green]dev#[default]");
     }
 
+    // --- strftime tests ---
+
+    #[test]
+    fn strftime_hm() {
+        // 2024-01-15 14:30:00 UTC = 1705329000
+        let result = strftime_expand_with_timestamp("test %H:%M done", 1705329000);
+        // The exact output depends on local timezone, but format should be NN:NN
+        assert!(result.starts_with("test "));
+        assert!(result.ends_with(" done"));
+        // Should contain a colon-separated time
+        let mid = &result[5..result.len() - 5];
+        assert!(mid.contains(':'), "expected HH:MM, got: {mid}");
+    }
+
+    #[test]
+    fn strftime_date_codes() {
+        // Use a known timestamp and verify structure
+        let result = strftime_expand_with_timestamp("%d-%b-%y", 1705329000);
+        // Should be like "15-Jan-24" (in UTC) or similar in local time
+        let parts: Vec<&str> = result.split('-').collect();
+        assert_eq!(parts.len(), 3, "expected dd-Mon-yy, got: {result}");
+        assert_eq!(parts[0].len(), 2, "day should be 2 chars: {result}");
+        assert_eq!(parts[1].len(), 3, "month should be 3 chars: {result}");
+        assert_eq!(parts[2].len(), 2, "year should be 2 chars: {result}");
+    }
+
+    #[test]
+    fn strftime_no_codes() {
+        assert_eq!(strftime_expand_with_timestamp("no codes here", 0), "no codes here");
+    }
+
+    #[test]
+    fn strftime_literal_percent() {
+        assert_eq!(strftime_expand_with_timestamp("100%%", 0), "100%");
+    }
+
+    #[test]
+    fn strftime_full_status_right() {
+        // Simulate the default status-right after format_expand has run
+        let input = "\"some_title\" %H:%M %d-%b-%y";
+        let result = strftime_expand_with_timestamp(input, 1705329000);
+        assert!(result.starts_with("\"some_title\" "));
+        assert!(!result.contains("%H"));
+        assert!(!result.contains("%M"));
+        assert!(!result.contains("%d"));
+        assert!(!result.contains("%b"));
+        assert!(!result.contains("%y"));
+    }
+
+    #[test]
+    fn strftime_compound_codes() {
+        let result = strftime_expand_with_timestamp("%R %F", 1705329000);
+        // %R = HH:MM, %F = YYYY-MM-DD
+        assert!(result.contains(':'), "%%R should produce HH:MM");
+        assert!(result.contains('-'), "%%F should produce YYYY-MM-DD");
+    }
+
+    #[test]
+    fn strftime_weekday_and_month_names() {
+        let result = strftime_expand_with_timestamp("%a %A %b %B", 1705329000);
+        // Should contain day/month names, no % codes left
+        assert!(!result.contains('%'));
+        // Should have 4 space-separated tokens
+        let parts: Vec<&str> = result.split_whitespace().collect();
+        assert_eq!(parts.len(), 4, "expected 4 tokens, got: {result}");
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
@@ -655,6 +955,11 @@ mod tests {
                 let result = format_expand(&template, &ctx);
                 // Should pass through as-is since there is no closing brace
                 prop_assert_eq!(result, template);
+            }
+
+            #[test]
+            fn strftime_never_panics(template in "\\PC{0,100}") {
+                let _ = strftime_expand_with_timestamp(&template, 1705329000);
             }
         }
     }

@@ -3,7 +3,7 @@
 //! Renders window contents (panes, borders, status line) into terminal
 //! output bytes that are sent to clients.
 
-use crate::format::{FormatContext, format_expand};
+use crate::format::{FormatContext, format_expand, strftime_expand};
 use crate::window::Window;
 use rmux_core::layout::{LayoutCell, LayoutType};
 use rmux_core::style::{Attrs, Color, Style};
@@ -334,9 +334,9 @@ fn render_status_line(
     // Build format context for variable expansion
     let ctx = build_status_context(session_name, window, window_list);
 
-    // Expand status-left
+    // Expand status-left (format variables + strftime)
     let left = if let Some(cfg) = status_config {
-        format_expand(&cfg.left, &ctx)
+        strftime_expand(&format_expand(&cfg.left, &ctx))
     } else {
         format!("[{session_name}] ")
     };
@@ -384,9 +384,12 @@ fn render_status_line(
     }
     let center_len = center_joined.len() + suffix.len();
 
-    // Expand status-right
-    let right =
-        if let Some(cfg) = status_config { format_expand(&cfg.right, &ctx) } else { String::new() };
+    // Expand status-right (format variables + strftime)
+    let right = if let Some(cfg) = status_config {
+        strftime_expand(&format_expand(&cfg.right, &ctx))
+    } else {
+        String::new()
+    };
 
     // Truncate left/right to configured max lengths
     let (left, right) = if let Some(cfg) = status_config {
