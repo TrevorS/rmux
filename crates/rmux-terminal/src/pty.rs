@@ -126,7 +126,6 @@ impl Pty {
         })?;
 
         let Pty { master, slave } = self;
-        let master_raw = master.as_raw_fd();
         let slave_raw = slave.as_raw_fd();
 
         // SAFETY: fork() is required for PTY process spawning. The child process
@@ -151,13 +150,11 @@ impl Pty {
                     libc::dup2(slave_raw, libc::STDOUT_FILENO);
                     libc::dup2(slave_raw, libc::STDERR_FILENO);
 
-                    // Close the original fds if they're not 0/1/2
-                    if slave_raw > 2 {
-                        libc::close(slave_raw);
-                    }
-                    if master_raw > 2 {
-                        libc::close(master_raw);
-                    }
+                    // Close all fds > 2. This is critical: without it, other
+                    // panes' master fds leak into this child, preventing EOF
+                    // when siblings exit (their slave fds stay open here).
+                    // This matches tmux's use of closefrom(STDERR_FILENO + 1).
+                    close_fds_above(libc::STDERR_FILENO);
 
                     // Change to the working directory
                     libc::chdir(cwd_cstr.as_ptr());
@@ -184,6 +181,23 @@ impl Pty {
                 Ok(SpawnedProcess { master, pid: child })
             }
         }
+    }
+}
+
+/// Close all file descriptors above `lowfd`.
+///
+/// Must only be called in a forked child before exec (async-signal-safe).
+///
+/// SAFETY: Caller must ensure this is called after fork in the child process.
+/// Uses only async-signal-safe libc functions.
+/// SAFETY: Must only be called in a forked child before exec.
+/// Uses only async-signal-safe libc functions.
+unsafe fn close_fds_above(lowfd: i32) {
+    let from = lowfd + 1;
+    let max_fd = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+    let max_fd = if max_fd > 0 { max_fd as i32 } else { 1024 };
+    for fd in from..max_fd {
+        unsafe { libc::close(fd) };
     }
 }
 

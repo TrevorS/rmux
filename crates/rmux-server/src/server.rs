@@ -345,6 +345,7 @@ impl Server {
             }
         } else {
             // Remove just this pane from the window
+            let mut pty_resizes: Vec<(u32, u32, u32)> = Vec::new();
             if let Some(session) = self.sessions.find_by_id_mut(session_id) {
                 if let Some(window) = session.windows.get_mut(&window_idx) {
                     window.panes.remove(&pane_id);
@@ -353,16 +354,41 @@ impl Server {
                             window.active_pane = next;
                         }
                     }
-                    // Rebuild layout
+                    // Rebuild layout and resize remaining panes
                     let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
                     if pane_ids.len() > 1 {
                         window.layout =
                             Some(layout_even_horizontal(window.sx, window.sy, &pane_ids));
-                    } else {
-                        window.layout = pane_ids.first().map(|&pid| {
-                            rmux_core::layout::LayoutCell::new_pane(0, 0, window.sx, window.sy, pid)
-                        });
+                        if let Some(ref layout) = window.layout {
+                            for &pid in &pane_ids {
+                                if let Some(cell) = layout.find_pane(pid) {
+                                    let (cx, cy, csx, csy) =
+                                        (cell.x_off, cell.y_off, cell.sx, cell.sy);
+                                    if let Some(pane) = window.panes.get_mut(&pid) {
+                                        pane.resize(csx, csy);
+                                        pane.xoff = cx;
+                                        pane.yoff = cy;
+                                        pty_resizes.push((pid, csx, csy));
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some(&only_id) = pane_ids.first() {
+                        window.layout =
+                            Some(LayoutCell::new_pane(0, 0, window.sx, window.sy, only_id));
+                        if let Some(pane) = window.panes.get_mut(&only_id) {
+                            pane.resize(window.sx, window.sy);
+                            pane.xoff = 0;
+                            pane.yoff = 0;
+                            pty_resizes.push((only_id, window.sx, window.sy));
+                        }
                     }
+                }
+            }
+            // Resize PTYs so shells know the new dimensions
+            for (pid, new_sx, new_sy) in pty_resizes {
+                if let Some(fd) = self.pty_fds.get(&pid) {
+                    pty::Pty::resize_fd(fd.as_raw_fd(), new_sx as u16, new_sy as u16).ok();
                 }
             }
         }

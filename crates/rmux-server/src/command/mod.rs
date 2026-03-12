@@ -385,14 +385,7 @@ pub fn execute_command(
 
 /// Parse a simple `-flag value` option from arguments.
 pub fn get_option<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == flag && i + 1 < args.len() {
-            return Some(&args[i + 1]);
-        }
-        i += 1;
-    }
-    None
+    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].as_str())
 }
 
 /// Check if a flag is present in arguments.

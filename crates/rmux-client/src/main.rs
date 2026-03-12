@@ -17,7 +17,7 @@
 //!   -V            Report version
 //!   -v            Request verbose logging
 
-use rmux_client::{connect, dispatch, parse_args};
+use rmux_client::{ClientError, ParseResult, connect, dispatch, parse_args};
 use rmux_protocol::codec::{MessageReader, MessageWriter};
 use std::env;
 use std::path::PathBuf;
@@ -27,11 +27,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let opts = match parse_args(&args) {
-        Ok(opts) => opts,
-        Err(e) if e == "version" => {
+        Ok(ParseResult::Version) => {
             println!("rmux {}", env!("CARGO_PKG_VERSION"));
             process::exit(0);
         }
+        Ok(ParseResult::Run(opts)) => opts,
         Err(e) => {
             eprintln!("rmux: {e}");
             process::exit(1);
@@ -42,8 +42,8 @@ fn main() {
     let command_args: Vec<&str> = args[opts.command_start..].iter().map(String::as_str).collect();
 
     // Resolve socket path
-    let path = if let Some(ref p) = opts.socket_path {
-        PathBuf::from(p)
+    let path = if let Some(p) = opts.socket_path {
+        p
     } else {
         let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let uid = nix::unistd::getuid();
@@ -62,14 +62,20 @@ fn main() {
     let exit_code =
         rt.block_on(async { run_client(&path, &command_args, opts.no_start_server).await });
 
-    process::exit(exit_code);
+    match exit_code {
+        Ok(code) => process::exit(code),
+        Err(e) => {
+            eprintln!("rmux: {e}");
+            process::exit(1);
+        }
+    }
 }
 
 async fn run_client(
     socket_path: &std::path::Path,
     command_args: &[&str],
     no_start_server: bool,
-) -> i32 {
+) -> Result<i32, ClientError> {
     // Check if we need to start the server
     let needs_server = !no_start_server
         && matches!(command_args.first().copied(), Some("new-session") | Some("new") | None);
@@ -79,10 +85,7 @@ async fn run_client(
         Ok(s) => s,
         Err(_) if needs_server => {
             // Start the server
-            if let Err(e) = start_server(socket_path) {
-                eprintln!("rmux: failed to start server: {e}");
-                return 1;
-            }
+            start_server(socket_path).map_err(ClientError::ServerStart)?;
 
             // Retry with backoff — server needs time to bind the socket
             let mut connected = None;
@@ -99,16 +102,11 @@ async fn run_client(
 
             match connected {
                 Some(s) => s,
-                None => {
-                    eprintln!("rmux: failed to connect to server (timed out)");
-                    return 1;
-                }
+                None => return Err(ClientError::ConnectionTimeout),
             }
         }
-        Err(e) => {
-            eprintln!("rmux: failed to connect to server: {e}");
-            eprintln!("rmux: no server running on {}", socket_path.display());
-            return 1;
+        Err(_) => {
+            return Err(ClientError::NoServerRunning(socket_path.to_owned()));
         }
     };
 
@@ -122,26 +120,16 @@ async fn run_client(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "/".to_string());
 
-    if let Err(e) = connect::send_identify(&mut writer, &term, &cwd).await {
-        eprintln!("rmux: identify failed: {e}");
-        return 1;
-    }
+    connect::send_identify(&mut writer, &term, &cwd).await.map_err(ClientError::IdentifyFailed)?;
 
     // Send command and handle response
-    match dispatch::run_command(&mut reader, &mut writer, command_args).await {
-        Ok(-1) => {
+    match dispatch::run_command(&mut reader, &mut writer, command_args).await? {
+        -1 => {
             // Server said Ready - switch to attached mode
-            if let Err(e) = dispatch::run_attached(&mut reader, &mut writer).await {
-                eprintln!("\rrmux: {e}");
-                return 1;
-            }
-            0
+            dispatch::run_attached(&mut reader, &mut writer).await?;
+            Ok(0)
         }
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("rmux: {e}");
-            1
-        }
+        code => Ok(code),
     }
 }
 

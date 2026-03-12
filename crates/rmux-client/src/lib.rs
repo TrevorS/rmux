@@ -18,6 +18,10 @@
 //! Client process for rmux. Handles CLI parsing, terminal setup, and
 //! communication with the server.
 
+use std::path::PathBuf;
+
+use rmux_protocol::codec::CodecError;
+
 pub mod connect;
 pub mod dispatch;
 pub mod terminal;
@@ -26,8 +30,8 @@ pub mod terminal;
 #[derive(Debug, Default)]
 pub struct ClientOptions {
     pub socket_name: String,
-    pub socket_path: Option<String>,
-    pub config_file: Option<String>,
+    pub socket_path: Option<PathBuf>,
+    pub config_file: Option<PathBuf>,
     pub shell_command: Option<String>,
     pub no_start_server: bool,
     /// Control mode (-C flag, tmux -CC).
@@ -36,10 +40,45 @@ pub struct ClientOptions {
     pub command_start: usize,
 }
 
+/// Result of successfully parsing CLI arguments.
+#[derive(Debug)]
+pub enum ParseResult {
+    Run(ClientOptions),
+    Version,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    #[error("option requires an argument -- {0}")]
+    MissingArgument(char),
+    #[error("unknown option -- {0}")]
+    UnknownOption(char),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClientError {
+    #[error("no server running on {0}")]
+    NoServerRunning(PathBuf),
+    #[error("failed to connect to server (timed out)")]
+    ConnectionTimeout,
+    #[error("failed to start server: {0}")]
+    ServerStart(std::io::Error),
+    #[error("identify failed: {0}")]
+    IdentifyFailed(CodecError),
+    #[error("{0}")]
+    Protocol(CodecError),
+    #[error("{0}")]
+    Io(std::io::Error),
+}
+
+impl From<CodecError> for ClientError {
+    fn from(e: CodecError) -> Self {
+        ClientError::Protocol(e)
+    }
+}
+
 /// Parse rmux CLI arguments (matches tmux getopt behavior).
-///
-/// Returns parsed options or an error string.
-pub fn parse_args(args: &[String]) -> Result<ClientOptions, String> {
+pub fn parse_args(args: &[String]) -> Result<ParseResult, ParseError> {
     let mut opts = ClientOptions { socket_name: "default".to_string(), ..ClientOptions::default() };
 
     let mut i = 1;
@@ -52,68 +91,68 @@ pub fn parse_args(args: &[String]) -> Result<ClientOptions, String> {
             break;
         }
 
-        let chars: Vec<char> = arg[1..].chars().collect();
-        let mut j = 0;
-        while j < chars.len() {
-            match chars[j] {
-                'C' => opts.control_mode = true,
-                '2' | 'D' | 'l' | 'u' | 'v' => {}
-                'N' => opts.no_start_server = true,
-                'V' => return Err("version".to_string()),
-                'f' => {
-                    if j + 1 < chars.len() {
-                        opts.config_file = Some(chars[j + 1..].iter().collect());
+        let bytes = arg.as_bytes();
+        let mut j = 1; // skip leading '-'
+        while j < bytes.len() {
+            match bytes[j] {
+                b'C' => opts.control_mode = true,
+                b'2' | b'D' | b'l' | b'u' | b'v' => {}
+                b'N' => opts.no_start_server = true,
+                b'V' => return Ok(ParseResult::Version),
+                b'f' => {
+                    if j + 1 < bytes.len() {
+                        opts.config_file = Some(PathBuf::from(&arg[j + 1..]));
                     } else {
                         i += 1;
                         if i < args.len() {
-                            opts.config_file = Some(args[i].clone());
+                            opts.config_file = Some(PathBuf::from(&args[i]));
                         } else {
-                            return Err("option requires an argument -- f".to_string());
+                            return Err(ParseError::MissingArgument('f'));
                         }
                     }
-                    j = chars.len();
+                    break;
                 }
-                'L' => {
-                    if j + 1 < chars.len() {
-                        opts.socket_name = chars[j + 1..].iter().collect();
+                b'L' => {
+                    if j + 1 < bytes.len() {
+                        opts.socket_name = arg[j + 1..].to_string();
                     } else {
                         i += 1;
                         if i < args.len() {
                             opts.socket_name.clone_from(&args[i]);
                         } else {
-                            return Err("option requires an argument -- L".to_string());
+                            return Err(ParseError::MissingArgument('L'));
                         }
                     }
-                    j = chars.len();
+                    break;
                 }
-                'S' => {
-                    if j + 1 < chars.len() {
-                        opts.socket_path = Some(chars[j + 1..].iter().collect());
+                b'S' => {
+                    if j + 1 < bytes.len() {
+                        opts.socket_path = Some(PathBuf::from(&arg[j + 1..]));
                     } else {
                         i += 1;
                         if i < args.len() {
-                            opts.socket_path = Some(args[i].clone());
+                            opts.socket_path = Some(PathBuf::from(&args[i]));
                         } else {
-                            return Err("option requires an argument -- S".to_string());
+                            return Err(ParseError::MissingArgument('S'));
                         }
                     }
-                    j = chars.len();
+                    break;
                 }
-                'c' => {
-                    if j + 1 < chars.len() {
-                        opts.shell_command = Some(chars[j + 1..].iter().collect());
+                b'c' => {
+                    if j + 1 < bytes.len() {
+                        opts.shell_command = Some(arg[j + 1..].to_string());
                     } else {
                         i += 1;
                         if i < args.len() {
                             opts.shell_command = Some(args[i].clone());
                         } else {
-                            return Err("option requires an argument -- c".to_string());
+                            return Err(ParseError::MissingArgument('c'));
                         }
                     }
-                    j = chars.len();
+                    break;
                 }
                 other => {
-                    return Err(format!("unknown option -- {other}"));
+                    return Err(ParseError::UnknownOption(char::from(other)));
                 }
             }
             j += 1;
@@ -122,7 +161,7 @@ pub fn parse_args(args: &[String]) -> Result<ClientOptions, String> {
     }
 
     opts.command_start = i;
-    Ok(opts)
+    Ok(ParseResult::Run(opts))
 }
 
 #[cfg(test)]
@@ -133,105 +172,124 @@ mod tests {
         s.iter().map(|x| (*x).to_string()).collect()
     }
 
+    /// Unwrap a `ParseResult::Run` or panic.
+    fn unwrap_run(result: Result<ParseResult, ParseError>) -> ClientOptions {
+        match result.unwrap() {
+            ParseResult::Run(opts) => opts,
+            ParseResult::Version => panic!("expected Run, got Version"),
+        }
+    }
+
     #[test]
     fn no_args_defaults() {
-        let opts = parse_args(&args(&["rmux"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux"])));
         assert_eq!(opts.socket_name, "default");
         assert_eq!(opts.command_start, 1);
     }
 
     #[test]
     fn socket_name_separate() {
-        let opts = parse_args(&args(&["rmux", "-L", "mysock", "new"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-L", "mysock", "new"])));
         assert_eq!(opts.socket_name, "mysock");
     }
 
     #[test]
     fn socket_name_attached() {
-        let opts = parse_args(&args(&["rmux", "-Lmysock", "new"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-Lmysock", "new"])));
         assert_eq!(opts.socket_name, "mysock");
     }
 
     #[test]
     fn missing_arg_for_l() {
-        let result = parse_args(&args(&["rmux", "-L"]));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("argument"));
+        let err = parse_args(&args(&["rmux", "-L"])).unwrap_err();
+        assert!(matches!(err, ParseError::MissingArgument('L')));
     }
 
     #[test]
     fn missing_arg_for_s() {
-        let result = parse_args(&args(&["rmux", "-S"]));
-        assert!(result.is_err());
+        let err = parse_args(&args(&["rmux", "-S"])).unwrap_err();
+        assert!(matches!(err, ParseError::MissingArgument('S')));
     }
 
     #[test]
     fn missing_arg_for_f() {
-        let result = parse_args(&args(&["rmux", "-f"]));
-        assert!(result.is_err());
+        let err = parse_args(&args(&["rmux", "-f"])).unwrap_err();
+        assert!(matches!(err, ParseError::MissingArgument('f')));
     }
 
     #[test]
     fn missing_arg_for_c() {
-        let result = parse_args(&args(&["rmux", "-c"]));
-        assert!(result.is_err());
+        let err = parse_args(&args(&["rmux", "-c"])).unwrap_err();
+        assert!(matches!(err, ParseError::MissingArgument('c')));
     }
 
     #[test]
     fn unknown_option() {
-        let result = parse_args(&args(&["rmux", "-Z"]));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unknown option"));
+        let err = parse_args(&args(&["rmux", "-Z"])).unwrap_err();
+        assert!(matches!(err, ParseError::UnknownOption('Z')));
     }
 
     #[test]
     fn no_start_server_flag() {
-        let opts = parse_args(&args(&["rmux", "-N", "list-sessions"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-N", "list-sessions"])));
         assert!(opts.no_start_server);
     }
 
     #[test]
     fn command_args_start_after_options() {
-        let opts = parse_args(&args(&["rmux", "-2", "-u", "new-session", "-s", "test"])).unwrap();
+        let opts =
+            unwrap_run(parse_args(&args(&["rmux", "-2", "-u", "new-session", "-s", "test"])));
         assert_eq!(opts.command_start, 3);
     }
 
     #[test]
     fn double_dash_stops_parsing() {
-        let opts = parse_args(&args(&["rmux", "--", "-L", "foo"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "--", "-L", "foo"])));
         assert_eq!(opts.command_start, 2);
         assert_eq!(opts.socket_name, "default");
     }
 
     #[test]
     fn socket_path_option() {
-        let opts = parse_args(&args(&["rmux", "-S", "/tmp/my.sock"])).unwrap();
-        assert_eq!(opts.socket_path.as_deref(), Some("/tmp/my.sock"));
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-S", "/tmp/my.sock"])));
+        assert_eq!(opts.socket_path, Some(PathBuf::from("/tmp/my.sock")));
     }
 
     #[test]
     fn control_mode_flag() {
-        let opts = parse_args(&args(&["rmux", "-C", "new"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-C", "new"])));
         assert!(opts.control_mode);
     }
 
     #[test]
     fn control_mode_stacked() {
-        let opts = parse_args(&args(&["rmux", "-2C", "new"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-2C", "new"])));
         assert!(opts.control_mode);
     }
 
     #[test]
     fn stacked_flags() {
-        let opts = parse_args(&args(&["rmux", "-2uv", "new"])).unwrap();
+        let opts = unwrap_run(parse_args(&args(&["rmux", "-2uv", "new"])));
         assert_eq!(opts.command_start, 2);
     }
 
     #[test]
     fn version_flag() {
-        let result = parse_args(&args(&["rmux", "-V"]));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "version");
+        let result = parse_args(&args(&["rmux", "-V"])).unwrap();
+        assert!(matches!(result, ParseResult::Version));
+    }
+
+    #[test]
+    fn error_display_formats() {
+        assert_eq!(
+            ParseError::MissingArgument('L').to_string(),
+            "option requires an argument -- L"
+        );
+        assert_eq!(ParseError::UnknownOption('Z').to_string(), "unknown option -- Z");
+        assert_eq!(
+            ClientError::NoServerRunning(PathBuf::from("/tmp/rmux-501/default")).to_string(),
+            "no server running on /tmp/rmux-501/default"
+        );
     }
 
     mod prop_tests {
@@ -251,7 +309,7 @@ mod tests {
                 let mut argv = argv;
                 argv.push(name.clone());
                 argv.push("new".to_string());
-                let opts = parse_args(&argv).unwrap();
+                let opts = unwrap_run(parse_args(&argv));
                 prop_assert_eq!(opts.socket_name, name);
             }
 
@@ -261,8 +319,8 @@ mod tests {
                 let mut argv = argv;
                 argv.push(path.clone());
                 argv.push("new".to_string());
-                let opts = parse_args(&argv).unwrap();
-                prop_assert_eq!(opts.socket_path.as_deref(), Some(path.as_str()));
+                let opts = unwrap_run(parse_args(&argv));
+                prop_assert_eq!(opts.socket_path, Some(PathBuf::from(&path)));
             }
 
             #[test]
@@ -271,8 +329,8 @@ mod tests {
                 let mut argv = argv;
                 argv.push(file.clone());
                 argv.push("new".to_string());
-                let opts = parse_args(&argv).unwrap();
-                prop_assert_eq!(opts.config_file.as_deref(), Some(file.as_str()));
+                let opts = unwrap_run(parse_args(&argv));
+                prop_assert_eq!(opts.config_file, Some(PathBuf::from(&file)));
             }
 
             #[test]
@@ -281,7 +339,7 @@ mod tests {
                 let mut argv = argv;
                 argv.push(cmd.clone());
                 argv.push("new".to_string());
-                let opts = parse_args(&argv).unwrap();
+                let opts = unwrap_run(parse_args(&argv));
                 prop_assert_eq!(opts.shell_command.as_deref(), Some(cmd.as_str()));
             }
 
@@ -295,7 +353,7 @@ mod tests {
                 let mut argv: Vec<String> = vec!["rmux".to_string()];
                 argv.extend(flags.iter().map(ToString::to_string));
                 argv.push("new-session".to_string());
-                let opts = parse_args(&argv).unwrap();
+                let opts = unwrap_run(parse_args(&argv));
                 // command_start should point to "new-session"
                 prop_assert_eq!(opts.command_start, argv.len() - 1);
             }
