@@ -1291,4 +1291,206 @@ mod tests {
         assert!(output.windows(10).any(|w| w == b"New Window"));
         assert!(output.windows(11).any(|w| w == b"Kill Window"));
     }
+
+    #[test]
+    fn render_tree_overlay_shows_expand_collapse_indicators() {
+        use crate::overlay::{ListItem, ListKind, ListOverlay, OverlayState};
+
+        let mut window = Window::new("0".into(), 80, 24);
+        let pane = Pane::new(80, 24, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let overlay = OverlayState::List(ListOverlay {
+            items: vec![
+                ListItem {
+                    display: "sess-0: 2 windows".into(),
+                    command: vec!["switch-client".into()],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+                ListItem {
+                    display: "0: bash*".into(),
+                    command: vec!["select-window".into()],
+                    indent: 1,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+                ListItem {
+                    display: "sess-1: 1 windows".into(),
+                    command: vec!["switch-client".into()],
+                    indent: 0,
+                    collapsed: true,
+                    hidden_children: 1,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+            ],
+            selected: 0,
+            scroll_offset: 0,
+            filter: String::new(),
+            filtering: false,
+            title: "choose-tree".into(),
+            kind: ListKind::Tree,
+        });
+
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        // Expanded indicator ▾ (U+25BE) for sess-0
+        let expanded = "\u{25BE}".as_bytes();
+        assert!(
+            output.windows(expanded.len()).any(|w| w == expanded),
+            "should contain expanded indicator ▾"
+        );
+        // Collapsed indicator ▸ (U+25B8) for sess-1
+        let collapsed = "\u{25B8}".as_bytes();
+        assert!(
+            output.windows(collapsed.len()).any(|w| w == collapsed),
+            "should contain collapsed indicator ▸"
+        );
+        // Child item should be indented (preceded by spaces)
+        assert!(output.windows(6).any(|w| w == b"  0: b"), "window item should be indented");
+    }
+
+    #[test]
+    fn render_list_overlay_with_filter() {
+        use crate::overlay::{ListItem, ListKind, ListOverlay, OverlayState};
+
+        let mut window = Window::new("0".into(), 80, 24);
+        let pane = Pane::new(80, 24, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let overlay = OverlayState::List(ListOverlay {
+            items: vec![
+                ListItem {
+                    display: "alpha".into(),
+                    command: vec![],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+                ListItem {
+                    display: "beta".into(),
+                    command: vec![],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+                ListItem {
+                    display: "gamma".into(),
+                    command: vec![],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+            ],
+            selected: 0,
+            scroll_offset: 0,
+            filter: "eta".into(),
+            filtering: false,
+            title: "test".into(),
+            kind: ListKind::Buffer,
+        });
+
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        // Header should show filter info
+        assert!(output.windows(4).any(|w| w == b"/eta"), "header should show filter string");
+        // Only "beta" matches the filter
+        assert!(output.windows(4).any(|w| w == b"beta"), "beta should be visible");
+    }
+
+    #[test]
+    fn render_list_overlay_filter_mode_active() {
+        use crate::overlay::{ListItem, ListKind, ListOverlay, OverlayState};
+
+        let mut window = Window::new("0".into(), 80, 24);
+        let pane = Pane::new(80, 24, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let overlay = OverlayState::List(ListOverlay {
+            items: vec![ListItem {
+                display: "item1".into(),
+                command: vec![],
+                indent: 0,
+                collapsed: false,
+                hidden_children: 0,
+                deletable: false,
+                delete_command: vec![],
+            }],
+            selected: 0,
+            scroll_offset: 0,
+            filter: "abc".into(),
+            filtering: true,
+            title: "test".into(),
+            kind: ListKind::Buffer,
+        });
+
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        // Header should show active filter input
+        assert!(
+            output.windows(10).any(|w| w == b"filter: ab"),
+            "header should show filter input mode"
+        );
+    }
+
+    #[test]
+    fn render_list_overlay_with_scroll_offset() {
+        use crate::overlay::{ListItem, ListKind, ListOverlay, OverlayState};
+
+        let mut window = Window::new("0".into(), 40, 6);
+        let pane = Pane::new(40, 6, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        // Create more items than fit in visible area (6 rows - 2 reserved = 4 visible)
+        let items: Vec<ListItem> = (0..10)
+            .map(|i| ListItem {
+                display: format!("item-{i:02}"),
+                command: vec![],
+                indent: 0,
+                collapsed: false,
+                hidden_children: 0,
+                deletable: false,
+                delete_command: vec![],
+            })
+            .collect();
+
+        let overlay = OverlayState::List(ListOverlay {
+            items,
+            selected: 5,
+            scroll_offset: 3,
+            filter: String::new(),
+            filtering: false,
+            title: "scroll-test".into(),
+            kind: ListKind::Buffer,
+        });
+
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 40, 7, &wl, None, None, Some(&overlay));
+        // Items before scroll_offset (item-00, item-01, item-02) should NOT be visible
+        assert!(!output.windows(7).any(|w| w == b"item-00"), "item-00 should be scrolled away");
+        // Item at scroll_offset (item-03) SHOULD be visible
+        assert!(output.windows(7).any(|w| w == b"item-03"), "item-03 should be visible");
+        // Count indicator in header
+        assert!(output.windows(5).any(|w| w == b"10/10"), "header should show total count");
+    }
 }

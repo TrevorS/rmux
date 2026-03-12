@@ -483,6 +483,167 @@ mod display_tests {
     }
 
     #[test]
+    fn choose_tree_multi_session_hierarchy() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        s.create_test_session("alpha");
+        s.create_test_session("beta");
+        // Add an extra window to alpha
+        let alpha_id = s.find_session_id("alpha").unwrap();
+        s.create_window(alpha_id, Some("editor"), "/tmp").unwrap();
+
+        let result = exec(&mut s, &["choose-tree"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                // alpha: session + 2 windows, beta: session + 1 window = 5 items
+                assert_eq!(list.items.len(), 5);
+                // First item is alpha session
+                assert!(list.items[0].display.contains("alpha"));
+                assert_eq!(list.items[0].indent, 0);
+                assert!(!list.items[0].collapsed);
+                // Next two are alpha's windows
+                assert_eq!(list.items[1].indent, 1);
+                assert_eq!(list.items[2].indent, 1);
+                // Then beta session
+                assert!(list.items[3].display.contains("beta"));
+                assert_eq!(list.items[3].indent, 0);
+                // Then beta's window
+                assert_eq!(list.items[4].indent, 1);
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choose_tree_window_commands_correct() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        s.create_test_session("mysess");
+        let result = exec(&mut s, &["choose-tree"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                // Session item selects via switch-client
+                assert_eq!(list.items[0].command[0], "switch-client");
+                assert_eq!(list.items[0].delete_command[0], "kill-session");
+                // Window item selects via select-window with session:idx target
+                assert_eq!(list.items[1].command[0], "select-window");
+                assert!(list.items[1].command[2].contains("mysess:"));
+                assert_eq!(list.items[1].delete_command[0], "kill-window");
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choose_tree_pipeline_select_returns_command() {
+        use crate::overlay::{OverlayAction, OverlayState, process_list_input};
+        let mut s = MockCommandServer::new();
+        s.create_test_session("target");
+        let result = exec(&mut s, &["choose-tree"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(mut list)) => {
+                // Navigate down to the window item
+                let (_, _) = process_list_input(&mut list, b"j");
+                assert_eq!(list.selected, 1);
+                assert_eq!(list.items[1].indent, 1);
+                // Select it
+                let (action, _) = process_list_input(&mut list, b"\r");
+                match action {
+                    OverlayAction::Select { command } => {
+                        assert_eq!(command[0], "select-window");
+                    }
+                    other => panic!("expected Select, got {other:?}"),
+                }
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choose_tree_pipeline_collapse_expand() {
+        use crate::overlay::{OverlayAction, OverlayState, process_list_input};
+        let mut s = MockCommandServer::new();
+        s.create_test_session("sess");
+        let result = exec(&mut s, &["choose-tree"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(mut list)) => {
+                let initial_len = list.items.len();
+                assert!(initial_len >= 2); // session + window(s)
+
+                // Left arrow — collapse
+                let (action, _) = process_list_input(&mut list, b"\x1b[D");
+                assert!(matches!(action, OverlayAction::Handled));
+                assert!(list.items[0].collapsed);
+                assert!(list.items.len() < initial_len);
+
+                // Right arrow — expand (returns RebuildTree)
+                let (action, _) = process_list_input(&mut list, b"\x1b[C");
+                assert!(matches!(action, OverlayAction::RebuildTree));
+                assert!(!list.items[0].collapsed);
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choose_buffer_pipeline_delete() {
+        use crate::overlay::{OverlayAction, OverlayState, process_list_input};
+        let mut s = MockCommandServer::new();
+        s.paste_buffers.add(b"buffer content".to_vec());
+        let result = exec(&mut s, &["choose-buffer"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(mut list)) => {
+                assert!(list.items[0].deletable);
+                let (action, _) = process_list_input(&mut list, b"d");
+                match action {
+                    OverlayAction::Delete { command } => {
+                        assert_eq!(command[0], "delete-buffer");
+                    }
+                    other => panic!("expected Delete, got {other:?}"),
+                }
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_menu_pipeline_key_shortcut() {
+        use crate::overlay::{OverlayAction, OverlayState, process_menu_input};
+        let mut s = MockCommandServer::new();
+        let result =
+            exec(&mut s, &["display-menu", "-T", "Test", "New", "c", "new-window"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::Menu(mut menu)) => {
+                // Press 'c' shortcut key
+                let (action, _) = process_menu_input(&mut menu, b"c");
+                match action {
+                    OverlayAction::Select { command } => {
+                        assert_eq!(command, vec!["new-window"]);
+                    }
+                    other => panic!("expected Select, got {other:?}"),
+                }
+            }
+            other => panic!("expected Overlay(Menu), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choose_tree_active_window_marker() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        s.create_test_session("sess");
+        let result = exec(&mut s, &["choose-tree"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                // The active window should have a * marker
+                let window_item = &list.items[1];
+                assert!(window_item.display.contains('*'), "active window should have * marker");
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn display_popup_stub_ok() {
         let mut s = MockCommandServer::new();
         let result = exec(&mut s, &["display-popup"]);

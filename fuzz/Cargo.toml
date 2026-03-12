@@ -60,3 +60,8 @@ doc = false
 name = "fuzz_strftime"
 path = "fuzz_targets/fuzz_strftime.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_overlay_input"
+path = "fuzz_targets/fuzz_overlay_input.rs"
+doc = false

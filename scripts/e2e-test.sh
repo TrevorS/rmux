@@ -449,6 +449,86 @@ test_swap_window() {
     harness_assert '1:first' "After swap, window 1 should have name 'first'"
 }
 
+# --- Overlay tests ------------------------------------------------------------
+
+test_choose_tree_open_close() {
+    harness_start
+    # C-b s opens choose-tree (session chooser)
+    harness_prefix s
+    harness_wait_for 'choose-tree' 5
+    harness_assert 'choose-tree' "choose-tree overlay should appear"
+
+    # Press q to cancel
+    harness_send q
+    sleep 0.5
+
+    # Status bar should return
+    harness_wait_for '\[0\]' 5
+    harness_assert '\[0\]' "Status bar should return after closing choose-tree"
+}
+
+test_choose_tree_shows_sessions() {
+    harness_start
+    # Create a second session so the tree has content
+    harness_rmux new-session -d -s "second"
+    sleep 0.3
+
+    # Open choose-tree
+    harness_prefix s
+    harness_wait_for 'choose-tree' 5
+
+    # Both sessions should be visible
+    harness_assert '0:' "Default session should be visible in tree"
+    harness_assert 'second' "Second session should be visible in tree"
+
+    # Cancel
+    harness_send Escape
+    harness_wait_for '\[0\]' 5
+}
+
+test_choose_tree_navigate_and_select() {
+    harness_start
+    # Create a second session
+    harness_rmux new-session -d -s "target"
+    sleep 0.3
+
+    # Open choose-tree
+    harness_prefix s
+    harness_wait_for 'choose-tree' 5
+
+    # Navigate down and press Enter to switch
+    harness_send j
+    sleep 0.2
+    harness_send j
+    sleep 0.2
+    harness_send j
+    sleep 0.2
+    harness_send Enter
+    sleep 0.5
+
+    # We should now be in the "target" session (visible in status bar)
+    harness_wait_for 'target' 5
+    harness_assert 'target' "Should have switched to target session"
+}
+
+test_display_menu_key_shortcut() {
+    harness_start
+    # Open a custom menu via command prompt
+    harness_prefix ':'
+    sleep 0.3
+    harness_send "display-menu -T Test New c new-window Kill k kill-window" Enter
+    harness_wait_for 'Test' 5
+    harness_assert 'New' "Menu should show 'New' item"
+
+    # Press 'c' to trigger New Window
+    harness_send c
+    sleep 0.5
+
+    # Should have created a new window
+    harness_wait_for '1:.*\*' 5
+    harness_assert '1:.*\*' "New window should be created via menu key shortcut"
+}
+
 # --- Main ---------------------------------------------------------------------
 
 echo "=== rmux E2E Test Suite ==="
@@ -496,6 +576,12 @@ run_test test_source_file
 run_test test_set_option
 run_test test_paste_buffer
 run_test test_swap_window
+
+# Overlay tests
+run_test test_choose_tree_open_close
+run_test test_choose_tree_shows_sessions
+run_test test_choose_tree_navigate_and_select
+run_test test_display_menu_key_shortcut
 
 echo "=== Results: ${TESTS_PASSED}/${TESTS_RUN} passed, ${TESTS_FAILED} failed ==="
 

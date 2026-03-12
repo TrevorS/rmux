@@ -892,4 +892,131 @@ mod tests {
         assert!(matches!(action, OverlayAction::Handled));
         assert!(!state.items[0].collapsed);
     }
+
+    #[test]
+    fn filter_no_matches_returns_empty() {
+        let mut state = test_list_overlay();
+        state.filter = "zzz_no_match".into();
+        let items = filtered_items(&state);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn tree_collapse_second_session() {
+        let mut state = test_tree_overlay();
+        // Navigate to sess-1 (index 3)
+        state.selected = 3;
+        let (action, _) = process_list_input(&mut state, b"\x1b[D");
+        assert!(matches!(action, OverlayAction::Handled));
+        assert!(state.items[3].collapsed);
+        assert_eq!(state.items[3].hidden_children, 1);
+        // sess-0 should be untouched
+        assert!(!state.items[0].collapsed);
+        assert_eq!(state.items.len(), 4); // 5 - 1 child removed
+    }
+
+    #[test]
+    fn tree_collapse_both_sessions() {
+        let mut state = test_tree_overlay();
+        assert_eq!(state.items.len(), 5);
+
+        // Collapse sess-0 first
+        state.selected = 0;
+        let (_, _) = process_list_input(&mut state, b"\x1b[D");
+        assert_eq!(state.items.len(), 3); // removed 2 children
+
+        // Now collapse sess-1 (now at index 1)
+        state.selected = 1;
+        let (_, _) = process_list_input(&mut state, b"\x1b[D");
+        assert_eq!(state.items.len(), 2); // removed 1 child
+        assert!(state.items[0].collapsed);
+        assert!(state.items[1].collapsed);
+    }
+
+    // ============================================================
+    // Property-based tests
+    // ============================================================
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn list_input_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+                let mut state = test_tree_overlay();
+                let mut offset = 0;
+                while offset < data.len() {
+                    let (_, consumed) = process_list_input(&mut state, &data[offset..]);
+                    offset += consumed.max(1);
+                }
+            }
+
+            #[test]
+            fn menu_input_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+                let mut state = test_menu_overlay();
+                let mut offset = 0;
+                while offset < data.len() {
+                    let (_, consumed) = process_menu_input(&mut state, &data[offset..]);
+                    offset += consumed.max(1);
+                }
+            }
+
+            #[test]
+            fn selected_always_in_bounds(ops in proptest::collection::vec(any::<u8>(), 1..100)) {
+                let mut state = test_tree_overlay();
+                for byte in &ops {
+                    let (_, _) = process_list_input(&mut state, std::slice::from_ref(byte));
+                }
+                if !state.items.is_empty() {
+                    assert!(state.selected < state.items.len(),
+                        "selected {} out of bounds (len {})", state.selected, state.items.len());
+                }
+            }
+
+            #[test]
+            fn filter_accumulation_matches_printable(
+                chars in proptest::collection::vec(0x20u8..=0x7Eu8, 0..50)
+            ) {
+                let mut state = test_list_overlay();
+                // Enter filter mode
+                let (_, _) = process_list_input(&mut state, b"/");
+                assert!(state.filtering);
+                // Feed characters
+                for ch in &chars {
+                    let (_, _) = process_list_input(&mut state, std::slice::from_ref(ch));
+                }
+                assert_eq!(state.filter.len(), chars.len());
+                // Each char should be in the filter
+                for (i, ch) in chars.iter().enumerate() {
+                    assert_eq!(state.filter.as_bytes()[i], *ch);
+                }
+            }
+
+            #[test]
+            fn clamp_invariants(selected in 0usize..1000, height in 1usize..100) {
+                let mut state = test_tree_overlay();
+                state.selected = selected;
+                state.clamp(height);
+                if !state.items.is_empty() {
+                    assert!(state.selected < state.items.len());
+                    assert!(state.selected >= state.scroll_offset);
+                    if height > 0 {
+                        assert!(state.selected < state.scroll_offset + height);
+                    }
+                }
+            }
+
+            #[test]
+            fn consumed_always_positive_for_nonempty_input(byte in any::<u8>()) {
+                let mut list = test_tree_overlay();
+                let (_, consumed) = process_list_input(&mut list, &[byte]);
+                assert!(consumed >= 1, "consumed {consumed} for byte {byte:#x}");
+
+                let mut menu = test_menu_overlay();
+                let (_, consumed) = process_menu_input(&mut menu, &[byte]);
+                assert!(consumed >= 1, "consumed {consumed} for byte {byte:#x}");
+            }
+        }
+    }
 }
