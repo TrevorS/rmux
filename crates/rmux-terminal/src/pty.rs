@@ -213,6 +213,47 @@ pub fn set_nonblocking(fd: i32) -> Result<(), PtyError> {
     Ok(())
 }
 
+/// Get the foreground process name for a PTY file descriptor.
+///
+/// Uses `tcgetpgrp()` to find the foreground process group, then looks up
+/// the process name. Returns `None` if any step fails.
+#[must_use]
+pub fn foreground_process_name(fd: i32) -> Option<String> {
+    // SAFETY: tcgetpgrp is a POSIX function that returns the foreground
+    // process group ID for the terminal associated with fd.
+    let pgrp = unsafe { libc::tcgetpgrp(fd) };
+    if pgrp <= 0 {
+        return None;
+    }
+    process_name(pgrp)
+}
+
+/// Get the name of a process by PID using platform-specific APIs.
+#[cfg(target_os = "macos")]
+fn process_name(pid: libc::pid_t) -> Option<String> {
+    // SAFETY: proc_name is a macOS libproc function that writes the process
+    // name into a caller-provided buffer. We pass a valid buffer and check
+    // the return value (0 = failure, >0 = bytes written).
+    unsafe {
+        unsafe extern "C" {
+            fn proc_name(pid: libc::c_int, buffer: *mut libc::c_char, buffersize: u32) -> i32;
+        }
+        let mut buf = [0u8; 256];
+        let ret = proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32);
+        if ret <= 0 {
+            return None;
+        }
+        let name = &buf[..ret as usize];
+        String::from_utf8(name.to_vec()).ok()
+    }
+}
+
+/// Get the name of a process by PID using /proc on Linux.
+#[cfg(target_os = "linux")]
+fn process_name(pid: libc::pid_t) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string())
+}
+
 /// Get the default shell from $SHELL or fall back to /bin/sh.
 #[must_use]
 pub fn default_shell() -> String {
@@ -223,6 +264,7 @@ pub fn default_shell() -> String {
 mod tests {
     use super::*;
     use nix::sys::wait::{WaitPidFlag, waitpid};
+    use std::os::fd::AsRawFd;
 
     #[test]
     fn create_pty() {
@@ -278,6 +320,62 @@ mod tests {
     fn default_shell_not_empty() {
         let shell = default_shell();
         assert!(!shell.is_empty());
+    }
+
+    #[test]
+    fn foreground_process_name_invalid_fd() {
+        // Negative fd should return None
+        assert!(foreground_process_name(-1).is_none());
+        // Unlikely-to-be-valid fd should return None
+        assert!(foreground_process_name(9999).is_none());
+    }
+
+    #[test]
+    fn foreground_process_name_non_pty() {
+        // A regular file fd (not a PTY) should return None
+        use std::fs::File;
+        let f = File::open("/dev/null").unwrap();
+        let fd = f.as_raw_fd();
+        assert!(foreground_process_name(fd).is_none());
+    }
+
+    #[test]
+    fn foreground_process_name_spawned_shell() {
+        // Spawn a shell and verify we can get its process name
+        let pty = Pty::open(80, 24).unwrap();
+        let spawned = pty.spawn_shell("/bin/sh", "/tmp").unwrap();
+
+        // Give the shell a moment to start
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let name = foreground_process_name(spawned.master_fd());
+        // Should get "sh" or similar
+        assert!(name.is_some(), "should resolve foreground process name for PTY");
+        let name = name.unwrap();
+        assert!(!name.is_empty(), "process name should not be empty");
+
+        // Clean up
+        nix::unistd::write(&spawned.master, b"exit\n").ok();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG)).ok();
+    }
+
+    #[test]
+    fn process_name_current_process() {
+        // Look up the current test process
+        let pid = std::process::id() as libc::pid_t;
+        let name = process_name(pid);
+        assert!(name.is_some(), "should resolve current process name");
+        let name = name.unwrap();
+        assert!(!name.is_empty(), "process name should not be empty");
+    }
+
+    #[test]
+    fn process_name_invalid_pid() {
+        assert!(process_name(-1).is_none());
+        // PID 0 is kernel on most systems, but might not be accessible
+        // Very large PID should not exist
+        assert!(process_name(999_999_999).is_none());
     }
 
     #[test]

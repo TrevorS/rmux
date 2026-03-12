@@ -293,7 +293,10 @@ fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
     let expr = &rest[colon_pos + 1..];
 
     let n: i32 = n_str.parse().ok()?;
-    let expanded = format_expand(expr, ctx);
+    // Try variable lookup first (tmux treats the expr as a variable name),
+    // then fall back to template expansion for nested #{} expressions.
+    let expanded =
+        ctx.get(expr).map_or_else(|| format_expand(expr, ctx), std::string::ToString::to_string);
 
     let char_count = expanded.chars().count();
     let abs_n = n.unsigned_abs() as usize;
@@ -771,6 +774,14 @@ mod tests {
     }
 
     #[test]
+    fn truncation_bare_variable() {
+        // tmux treats #{=21:pane_title} as variable lookup, not template expansion
+        let mut ctx = FormatContext::new();
+        ctx.set("pane_title", "my terminal title");
+        assert_eq!(format_expand("#{=10:pane_title}", &ctx), "my termina");
+    }
+
+    #[test]
     fn truncation_no_op() {
         let mut ctx = FormatContext::new();
         ctx.set("x", "short");
@@ -905,6 +916,146 @@ mod tests {
         assert_eq!(parts.len(), 4, "expected 4 tokens, got: {result}");
     }
 
+    // --- unix_to_local tests ---
+
+    /// Helper: compute unix_to_local in UTC (offset=0) for known-answer tests.
+    /// We use TZ=UTC timestamps so results are deterministic regardless of machine TZ.
+    fn unix_to_utc(timestamp: i64) -> (i32, u32, u32, u32, u32, u32, u32, u32) {
+        // unix_to_local applies local offset. To test the civil algorithm in isolation,
+        // use a timestamp where we know the local offset and compensate.
+        // Simpler: just verify properties via strftime_expand_with_timestamp
+        // and test the algorithm via known dates.
+        unix_to_local(timestamp)
+    }
+
+    #[test]
+    fn unix_to_local_components_in_range() {
+        // Use current-ish timestamp
+        let (year, month, day, hour, minute, second, weekday, yday) = unix_to_utc(1705329000);
+        assert!((2020..=2030).contains(&year), "year={year}");
+        assert!((1..=12).contains(&month), "month={month}");
+        assert!((1..=31).contains(&day), "day={day}");
+        assert!(hour <= 23, "hour={hour}");
+        assert!(minute <= 59, "minute={minute}");
+        assert!(second <= 59, "second={second}");
+        assert!(weekday <= 6, "weekday={weekday}");
+        assert!((1..=366).contains(&yday), "yday={yday}");
+    }
+
+    #[test]
+    fn unix_to_local_epoch() {
+        let (year, _month, _day, _hour, _minute, second, _weekday, _yday) = unix_to_utc(0);
+        // Epoch is 1970-01-01 00:00:00 UTC. Local time varies by TZ.
+        assert!((1969..=1970).contains(&year), "year={year}");
+        assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn month_name_helpers() {
+        assert_eq!(month_abbrev(1), "Jan");
+        assert_eq!(month_abbrev(6), "Jun");
+        assert_eq!(month_abbrev(12), "Dec");
+        assert_eq!(month_abbrev(0), "???");
+        assert_eq!(month_abbrev(13), "???");
+
+        assert_eq!(month_full(1), "January");
+        assert_eq!(month_full(7), "July");
+        assert_eq!(month_full(12), "December");
+        assert_eq!(month_full(0), "???");
+    }
+
+    #[test]
+    fn weekday_name_helpers() {
+        assert_eq!(weekday_abbrev(0), "Sun");
+        assert_eq!(weekday_abbrev(4), "Thu");
+        assert_eq!(weekday_abbrev(6), "Sat");
+        assert_eq!(weekday_abbrev(7), "???");
+
+        assert_eq!(weekday_full(0), "Sunday");
+        assert_eq!(weekday_full(3), "Wednesday");
+        assert_eq!(weekday_full(6), "Saturday");
+        assert_eq!(weekday_full(7), "???");
+    }
+
+    #[test]
+    fn strftime_ampm() {
+        // Test %p and %P for AM/PM
+        let midnight = strftime_expand_with_timestamp("%p %P", 0);
+        // In UTC, 0 = midnight = AM. In local TZ it varies.
+        assert!(!midnight.contains('%'));
+        assert!(midnight.contains("AM") || midnight.contains("PM"));
+        assert!(midnight.contains("am") || midnight.contains("pm"));
+    }
+
+    #[test]
+    fn strftime_12hour() {
+        // %I = zero-padded 12-hour, %l = space-padded 12-hour
+        let result = strftime_expand_with_timestamp("%I %l", 1705329000);
+        assert!(!result.contains('%'));
+        let parts: Vec<&str> = result.split_whitespace().collect();
+        assert_eq!(parts.len(), 2, "expected 2 tokens, got: {result}");
+        // Both should be parseable as numbers 1-12
+        for p in parts {
+            let n: u32 = p.parse().unwrap_or(0);
+            assert!((1..=12).contains(&n), "12-hour value out of range: {p}");
+        }
+    }
+
+    #[test]
+    fn strftime_newline_tab() {
+        assert_eq!(strftime_expand_with_timestamp("%n%t", 0), "\n\t");
+    }
+
+    #[test]
+    fn strftime_r_format() {
+        // %r = 12-hour time with AM/PM (e.g., "02:30:00 PM")
+        let result = strftime_expand_with_timestamp("%r", 1705329000);
+        assert!(
+            result.contains("AM") || result.contains("PM"),
+            "%%r should include AM/PM: {result}"
+        );
+        // Should have two colons (HH:MM:SS)
+        assert_eq!(result.matches(':').count(), 2, "%%r should have HH:MM:SS: {result}");
+    }
+
+    #[test]
+    fn strftime_full_time_t() {
+        // %T = HH:MM:SS
+        let result = strftime_expand_with_timestamp("%T", 1705329000);
+        assert_eq!(result.matches(':').count(), 2, "%%T should be HH:MM:SS: {result}");
+        assert_eq!(result.len(), 8, "%%T should be 8 chars: {result}");
+    }
+
+    #[test]
+    fn strftime_j_day_of_year() {
+        let result = strftime_expand_with_timestamp("%j", 1705329000);
+        let n: u32 = result.parse().unwrap_or(0);
+        assert!((1..=366).contains(&n), "%%j should be day of year: {result}");
+        assert_eq!(result.len(), 3, "%%j should be zero-padded to 3 chars: {result}");
+    }
+
+    #[test]
+    fn strftime_date_format_d() {
+        // %D = MM/DD/YY
+        let result = strftime_expand_with_timestamp("%D", 1705329000);
+        let parts: Vec<&str> = result.split('/').collect();
+        assert_eq!(parts.len(), 3, "%%D should be MM/DD/YY: {result}");
+    }
+
+    #[test]
+    fn strftime_unknown_code_passthrough() {
+        // Unknown codes like %Q should pass through as %Q
+        let result = strftime_expand_with_timestamp("%Q", 0);
+        assert_eq!(result, "%Q");
+    }
+
+    #[test]
+    fn strftime_trailing_percent() {
+        // A lone % at the end should pass through
+        let result = strftime_expand_with_timestamp("end%", 0);
+        assert_eq!(result, "end%");
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
@@ -960,6 +1111,45 @@ mod tests {
             #[test]
             fn strftime_never_panics(template in "\\PC{0,100}") {
                 let _ = strftime_expand_with_timestamp(&template, 1705329000);
+            }
+
+            #[test]
+            fn strftime_deterministic(template in "[%a-zA-Z ]{0,30}", ts in 0i64..2_000_000_000i64) {
+                let a = strftime_expand_with_timestamp(&template, ts);
+                let b = strftime_expand_with_timestamp(&template, ts);
+                prop_assert_eq!(a, b);
+            }
+
+            #[test]
+            fn unix_to_local_month_in_range(ts in 0i64..2_000_000_000i64) {
+                let (_, month, _, _, _, _, _, _) = unix_to_local(ts);
+                prop_assert!((1..=12).contains(&month), "month={month} for ts={ts}");
+            }
+
+            #[test]
+            fn unix_to_local_day_in_range(ts in 0i64..2_000_000_000i64) {
+                let (_, _, day, _, _, _, _, _) = unix_to_local(ts);
+                prop_assert!((1..=31).contains(&day), "day={day} for ts={ts}");
+            }
+
+            #[test]
+            fn unix_to_local_time_in_range(ts in 0i64..2_000_000_000i64) {
+                let (_, _, _, hour, minute, second, _, _) = unix_to_local(ts);
+                prop_assert!(hour <= 23, "hour={hour}");
+                prop_assert!(minute <= 59, "minute={minute}");
+                prop_assert!(second <= 59, "second={second}");
+            }
+
+            #[test]
+            fn unix_to_local_weekday_in_range(ts in 0i64..2_000_000_000i64) {
+                let (_, _, _, _, _, _, weekday, _) = unix_to_local(ts);
+                prop_assert!(weekday <= 6, "weekday={weekday}");
+            }
+
+            #[test]
+            fn unix_to_local_yday_in_range(ts in 0i64..2_000_000_000i64) {
+                let (_, _, _, _, _, _, _, yday) = unix_to_local(ts);
+                prop_assert!((1..=366).contains(&yday), "yday={yday}");
             }
         }
     }

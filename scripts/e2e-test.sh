@@ -279,6 +279,46 @@ test_last_pane_exit_closes_window() {
     harness_assert_not '1:' "Window 1 should be gone after its last pane exits"
 }
 
+# --- Status bar & auto-rename -------------------------------------------------
+
+test_status_bar_strftime() {
+    harness_start
+    sleep 0.5
+    # The default status-right includes %H:%M which should expand to HH:MM
+    # Verify no literal %H or %M appears in the status bar
+    harness_assert_not '%H' "Status bar should not show literal %H"
+    harness_assert_not '%M' "Status bar should not show literal %M"
+    harness_assert_not '%d' "Status bar should not show literal %d"
+    harness_assert_not '%b' "Status bar should not show literal %b"
+    harness_assert_not '%y' "Status bar should not show literal %y"
+}
+
+test_automatic_rename() {
+    harness_start
+    sleep 0.5
+    # Run cat (blocks forever), window name should change to "cat"
+    harness_send "cat" Enter
+    sleep 1
+    harness_assert '0:cat' "Window name should auto-rename to 'cat'"
+
+    # Kill cat, name should revert to shell
+    harness_send "" "C-c"
+    sleep 1
+    harness_assert_not '0:cat' "Window name should revert after cat exits"
+}
+
+test_automatic_rename_disabled() {
+    harness_start
+    harness_rmux set-option automatic-rename off
+    sleep 0.3
+    # Run cat, window name should NOT change
+    harness_send "cat" Enter
+    sleep 1
+    harness_assert_not '0:cat' "Window name should not change when automatic-rename is off"
+    harness_send "" "C-c"
+    sleep 0.5
+}
+
 # --- Tier 2: Operations -------------------------------------------------------
 
 test_rename_window() {
@@ -440,6 +480,11 @@ run_test test_reattach_after_detach
 run_test test_pane_exit_closes_split
 run_test test_pane_exit_preserves_remaining
 run_test test_last_pane_exit_closes_window
+
+# Status bar & auto-rename
+run_test test_status_bar_strftime
+run_test test_automatic_rename
+run_test test_automatic_rename_disabled
 
 # Tier 2: Operations
 run_test test_rename_window

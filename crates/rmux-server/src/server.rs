@@ -97,6 +97,8 @@ pub struct Server {
     paste_buffers: crate::paste::PasteBufferStore,
     /// Server hooks.
     hooks: crate::hooks::HookStore,
+    /// Tick counter for periodic tasks (auto-rename polling).
+    tick_count: u32,
 }
 
 impl Server {
@@ -122,6 +124,7 @@ impl Server {
             options: rmux_core::options::default_server_options(),
             paste_buffers: crate::paste::PasteBufferStore::default(),
             hooks: crate::hooks::HookStore::new(),
+            tick_count: 0,
         }
     }
 
@@ -177,6 +180,11 @@ impl Server {
 
                 // Periodic redraw
                 _ = redraw_interval.tick() => {
+                    // Poll foreground process for auto-rename every ~500ms (30 ticks at 60fps)
+                    self.tick_count = self.tick_count.wrapping_add(1);
+                    if self.tick_count % 30 == 0 {
+                        self.update_window_names();
+                    }
                     self.render_clients().await;
                 }
             }
@@ -1402,6 +1410,33 @@ impl Server {
         }
     }
 
+    /// Poll PTY foreground processes and update window names for auto-rename.
+    fn update_window_names(&mut self) {
+        for session in self.sessions.iter_mut() {
+            let auto_rename = session.options.get_flag("automatic-rename").unwrap_or(true);
+            if !auto_rename {
+                continue;
+            }
+            for window in session.windows.values_mut() {
+                let auto_rename_window =
+                    window.options.get_flag("automatic-rename").unwrap_or(true);
+                if !auto_rename_window {
+                    continue;
+                }
+                // Get the active pane's PTY fd
+                if let Some(pane) = window.panes.get(&window.active_pane) {
+                    if pane.pty_fd >= 0 {
+                        if let Some(name) = pty::foreground_process_name(pane.pty_fd) {
+                            if name != window.name {
+                                window.name = name;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn render_clients(&mut self) {
         // Collect client IDs that need redraw, along with their session IDs, sizes, and prompt
         let to_render: Vec<(u64, u32, u32, u32, Option<String>)> = self
@@ -1571,6 +1606,14 @@ impl Server {
     }
 }
 
+/// Get the default window name from the user's shell (e.g. "zsh", "bash").
+fn default_window_name() -> String {
+    let shell = pty::default_shell();
+    std::path::Path::new(&shell)
+        .file_name()
+        .map_or_else(|| shell.clone(), |n| n.to_string_lossy().into_owned())
+}
+
 /// Background task that reads from a PTY master fd and sends data through a channel.
 async fn pty_read_task(raw_fd: i32, pane_id: u32, tx: mpsc::Sender<(u32, Vec<u8>)>) {
     let fd = RawFdRef(raw_fd);
@@ -1667,7 +1710,7 @@ impl CommandServer for Server {
         // Create initial window with one pane
         // Reserve 1 row for status line
         let pane_height = sy.saturating_sub(1);
-        let mut window = Window::new("0".to_string(), sx, pane_height);
+        let mut window = Window::new(default_window_name(), sx, pane_height);
         let pane = Pane::new(sx, pane_height, 2000);
         let pane_id = pane.id;
         window.active_pane = pane_id;
@@ -1754,7 +1797,7 @@ impl CommandServer for Server {
             .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
 
-        let window_name = name.unwrap_or("bash").to_string();
+        let window_name = name.map_or_else(default_window_name, str::to_string);
         let mut window = Window::new(window_name, sx, pane_height);
         let pane = Pane::new(sx, pane_height, 2000);
         let pane_id = pane.id;
@@ -2810,7 +2853,7 @@ impl CommandServer for Server {
             pane.resize(sx, pane_height);
             pane.xoff = 0;
             pane.yoff = 0;
-            let mut new_window = Window::new("bash".to_string(), sx, pane_height);
+            let mut new_window = Window::new(default_window_name(), sx, pane_height);
             new_window.active_pane = pane.id;
             new_window.layout = Some(LayoutCell::new_pane(0, 0, sx, pane_height, pane.id));
             new_window.panes.insert(pane.id, pane);
@@ -3417,4 +3460,17 @@ fn split_pane_in_layout(
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_window_name_is_shell_basename() {
+        let name = default_window_name();
+        // Should be a short name like "bash", "zsh", "sh" — not a full path
+        assert!(!name.is_empty());
+        assert!(!name.contains('/'), "should be basename, not full path: {name}");
+    }
 }
