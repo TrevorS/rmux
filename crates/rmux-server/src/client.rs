@@ -33,6 +33,8 @@ pub enum PromptType {
     SearchForward,
     /// Search backward in copy mode.
     SearchBackward,
+    /// Go to line number in copy mode.
+    GotoLine,
 }
 
 /// State for the interactive command prompt (:).
@@ -66,6 +68,10 @@ pub struct ServerClient {
     pub prompt: Option<PromptState>,
     /// Mouse click tracking for double/triple-click detection.
     pub click_state: ClickState,
+    /// Unix timestamp of last activity (client input).
+    pub activity: u64,
+    /// Timed status message and its expiry instant.
+    pub timed_message: Option<(String, std::time::Instant)>,
 }
 
 /// State for detecting double/triple-click sequences.
@@ -198,6 +204,11 @@ impl ServerClient {
             sy: 24,
             prompt: None,
             click_state: ClickState::default(),
+            activity: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            timed_message: None,
         }
     }
 

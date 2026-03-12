@@ -30,11 +30,13 @@ pub fn cmd_display_message(
     }
     let message = message_parts.join(" ");
 
-    if print || !message.is_empty() {
-        // Expand format variables
-        let ctx = server.build_format_context();
-        let expanded = crate::format::format_expand(&message, &ctx);
+    // Expand format variables
+    let ctx = server.build_format_context();
+    let expanded = crate::format::format_expand(&message, &ctx);
+    if print {
         Ok(CommandResult::Output(expanded + "\n"))
+    } else if !message.is_empty() {
+        Ok(CommandResult::TimedMessage(expanded))
     } else {
         Ok(CommandResult::Ok)
     }

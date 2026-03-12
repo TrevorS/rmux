@@ -271,6 +271,10 @@ pub fn default_session_options() -> Options {
     opts.set("visual-bell", OptionValue::String("off".into()));
     opts.set("visual-silence", OptionValue::String("off".into()));
     opts.set("default-size", OptionValue::String("80x24".into()));
+    opts.set("key-table", OptionValue::String("root".into()));
+    opts.set("bell-action", OptionValue::String("any".into()));
+    opts.set("activity-action", OptionValue::String("other".into()));
+    opts.set("silence-action", OptionValue::String("none".into()));
     opts
 }
 
@@ -615,5 +619,14 @@ mod tests {
                 prop_assert!(opts.is_local(&key));
             }
         }
+    }
+
+    #[test]
+    fn session_defaults_alert_options() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_string("bell-action").unwrap(), "any");
+        assert_eq!(opts.get_string("activity-action").unwrap(), "other");
+        assert_eq!(opts.get_string("silence-action").unwrap(), "none");
+        assert_eq!(opts.get_string("key-table").unwrap(), "root");
     }
 }

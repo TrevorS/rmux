@@ -30,6 +30,8 @@ pub enum CommandResult {
     RunShell(String),
     /// Client should be suspended (SIGTSTP).
     Suspend,
+    /// Show a timed message in the status bar (display-message without -p).
+    TimedMessage(String),
 }
 
 /// A registered command handler.
@@ -182,6 +184,7 @@ pub trait CommandServer {
         table: &str,
         key_name: &str,
         argv: Vec<String>,
+        repeatable: bool,
     ) -> Result<(), ServerError>;
     /// Remove a key binding.
     fn remove_key_binding(&mut self, table: &str, key_name: &str) -> Result<(), ServerError>;

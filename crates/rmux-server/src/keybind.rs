@@ -16,14 +16,25 @@ pub enum KeyAction {
     Command(Vec<String>),
 }
 
+/// A single key binding entry.
+#[derive(Debug, Clone)]
+pub struct KeyBinding {
+    /// The command argv to execute.
+    pub argv: Vec<String>,
+    /// Whether this binding is repeatable (-r flag).
+    pub repeatable: bool,
+}
+
 /// Key binding tables and prefix mode state.
 pub struct KeyBindings {
     /// Prefix key (default: Ctrl-b).
     prefix: KeyCode,
     /// Whether we're waiting for a key after the prefix.
     in_prefix: bool,
+    /// Instant when prefix mode should expire (for repeat-time).
+    prefix_expiry: Option<std::time::Instant>,
     /// Named key tables: "prefix", "root", "copy-mode-vi", "copy-mode-emacs".
-    tables: HashMap<String, HashMap<KeyCode, Vec<String>>>,
+    tables: HashMap<String, HashMap<KeyCode, KeyBinding>>,
 }
 
 impl KeyBindings {
@@ -38,12 +49,26 @@ impl KeyBindings {
         tables.insert("copy-mode-vi".to_string(), default_copy_mode_vi());
         tables.insert("copy-mode-emacs".to_string(), default_copy_mode_emacs());
 
-        Self { prefix, in_prefix: false, tables }
+        Self { prefix, in_prefix: false, prefix_expiry: None, tables }
     }
 
     /// Add a key binding to the given table.
     pub fn add_binding(&mut self, table: &str, key: KeyCode, argv: Vec<String>) {
-        self.tables.entry(table.to_string()).or_default().insert(key, argv);
+        self.add_binding_with_repeat(table, key, argv, false);
+    }
+
+    /// Add a key binding with repeat flag.
+    pub fn add_binding_with_repeat(
+        &mut self,
+        table: &str,
+        key: KeyCode,
+        argv: Vec<String>,
+        repeatable: bool,
+    ) {
+        self.tables
+            .entry(table.to_string())
+            .or_default()
+            .insert(key, KeyBinding { argv, repeatable });
     }
 
     /// Remove a key binding from the given table.
@@ -55,6 +80,13 @@ impl KeyBindings {
     ///
     /// Checks exact key (with modifiers) first, then falls back to base key.
     pub fn lookup_in_table(&self, table: &str, key: KeyCode) -> Option<&Vec<String>> {
+        let t = self.tables.get(table)?;
+        let base = keyc_base(key);
+        t.get(&key).or_else(|| t.get(&base)).map(|b| &b.argv)
+    }
+
+    /// Look up a binding in a specific table, returning the full binding.
+    fn lookup_binding(&self, table: &str, key: KeyCode) -> Option<&KeyBinding> {
         let t = self.tables.get(table)?;
         let base = keyc_base(key);
         t.get(&key).or_else(|| t.get(&base))
@@ -71,43 +103,71 @@ impl KeyBindings {
         let Some((key, consumed)) = parse_key(data) else {
             if self.in_prefix {
                 self.in_prefix = false;
+                self.prefix_expiry = None;
             }
             // Can't parse — consume 1 byte to avoid infinite loop
             return (None, 1.min(data.len()));
         };
 
         if self.in_prefix {
-            self.in_prefix = false;
+            // Check if prefix has expired (repeat-time)
+            if let Some(expiry) = self.prefix_expiry {
+                if std::time::Instant::now() >= expiry {
+                    self.in_prefix = false;
+                    self.prefix_expiry = None;
+                    // Fall through to normal processing
+                }
+            }
+        }
 
+        if self.in_prefix {
             // Check if this key has a binding in the prefix table.
-            // Try exact match (with modifiers) first, then base key.
-            let base = keyc_base(key);
-            if let Some(argv) =
-                self.tables.get("prefix").and_then(|t| t.get(&key).or_else(|| t.get(&base)))
-            {
-                return (Some(KeyAction::Command(argv.clone())), consumed);
+            let binding = self.lookup_binding("prefix", key).cloned();
+            if let Some(binding) = binding {
+                // If repeatable, stay in prefix mode with a timeout
+                if binding.repeatable {
+                    // Keep in_prefix = true, expiry will be set by caller
+                    // via set_repeat_timeout()
+                } else {
+                    self.in_prefix = false;
+                    self.prefix_expiry = None;
+                }
+                return (Some(KeyAction::Command(binding.argv)), consumed);
             }
 
-            // Unknown binding, ignore
+            // Unknown binding, exit prefix mode
+            self.in_prefix = false;
+            self.prefix_expiry = None;
             return (None, consumed);
         }
 
         // Check root table bindings (no prefix needed)
-        let base = keyc_base(key);
-        if let Some(argv) =
-            self.tables.get("root").and_then(|t| t.get(&base).or_else(|| t.get(&key)))
-        {
-            return (Some(KeyAction::Command(argv.clone())), consumed);
+        if let Some(binding) = self.lookup_binding("root", key).cloned() {
+            return (Some(KeyAction::Command(binding.argv)), consumed);
         }
 
         // Check if this is the prefix key
         if key == self.prefix {
             self.in_prefix = true;
-            return (Some(KeyAction::SendToPane(Vec::new())), consumed); // Consume the prefix key
+            self.prefix_expiry = None;
+            return (Some(KeyAction::SendToPane(Vec::new())), consumed);
         }
 
         // Not handled - pass through to pane
         (None, consumed)
+    }
+
+    /// Whether we're currently in prefix mode.
+    pub fn in_prefix(&self) -> bool {
+        self.in_prefix
+    }
+
+    /// Set the repeat timeout (called after dispatching a repeatable binding).
+    pub fn set_repeat_timeout(&mut self, repeat_time_ms: u64) {
+        if repeat_time_ms > 0 {
+            self.prefix_expiry =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(repeat_time_ms));
+        }
     }
 
     /// List all key bindings as human-readable strings.
@@ -115,10 +175,11 @@ impl KeyBindings {
         let mut result = Vec::new();
 
         for (table_name, table) in &self.tables {
-            for (&key, argv) in table {
+            for (&key, binding) in table {
                 let key_name = key_to_string(key);
-                let cmd = argv.join(" ");
-                result.push(format!("bind-key -T {table_name} {key_name} {cmd}"));
+                let cmd = binding.argv.join(" ");
+                let repeat = if binding.repeatable { " -r" } else { "" };
+                result.push(format!("bind-key{repeat} -T {table_name} {key_name} {cmd}"));
             }
         }
 
@@ -127,92 +188,120 @@ impl KeyBindings {
     }
 }
 
+/// Helper to create a non-repeatable key binding.
+fn bind(argv: Vec<String>) -> KeyBinding {
+    KeyBinding { argv, repeatable: false }
+}
+
+/// Helper to create a repeatable key binding (-r).
+fn bind_r(argv: Vec<String>) -> KeyBinding {
+    KeyBinding { argv, repeatable: true }
+}
+
 /// Default prefix key bindings matching tmux.
-fn default_prefix_table() -> HashMap<KeyCode, Vec<String>> {
-    let mut t: HashMap<KeyCode, Vec<String>> = HashMap::new();
+fn default_prefix_table() -> HashMap<KeyCode, KeyBinding> {
+    let mut t: HashMap<KeyCode, KeyBinding> = HashMap::new();
 
     // Detach
-    t.insert(b'd' as KeyCode, vec!["detach-client".into()]);
+    t.insert(b'd' as KeyCode, bind(vec!["detach-client".into()]));
 
     // Window management
-    t.insert(b'c' as KeyCode, vec!["new-window".into()]);
-    t.insert(b'n' as KeyCode, vec!["next-window".into()]);
-    t.insert(b'p' as KeyCode, vec!["previous-window".into()]);
-    t.insert(b'l' as KeyCode, vec!["last-window".into()]);
-    t.insert(b'&' as KeyCode, vec!["kill-window".into()]);
+    t.insert(b'c' as KeyCode, bind(vec!["new-window".into()]));
+    t.insert(b'n' as KeyCode, bind(vec!["next-window".into()]));
+    t.insert(b'p' as KeyCode, bind(vec!["previous-window".into()]));
+    t.insert(b'l' as KeyCode, bind(vec!["last-window".into()]));
+    t.insert(b'&' as KeyCode, bind(vec!["kill-window".into()]));
 
     // Pane splitting
-    t.insert(b'"' as KeyCode, vec!["split-window".into()]);
-    t.insert(b'%' as KeyCode, vec!["split-window".into(), "-h".into()]);
+    t.insert(b'"' as KeyCode, bind(vec!["split-window".into()]));
+    t.insert(b'%' as KeyCode, bind(vec!["split-window".into(), "-h".into()]));
 
     // Pane navigation
-    t.insert(b'o' as KeyCode, vec!["select-pane".into(), "-t".into(), "+".into()]);
-    t.insert(b'x' as KeyCode, vec!["kill-pane".into()]);
+    t.insert(b'o' as KeyCode, bind(vec!["select-pane".into(), "-t".into(), "+".into()]));
+    t.insert(b'x' as KeyCode, bind(vec!["kill-pane".into()]));
 
     // Arrow key pane navigation
-    t.insert(KEYC_UP, vec!["select-pane".into(), "-U".into()]);
-    t.insert(KEYC_DOWN, vec!["select-pane".into(), "-D".into()]);
-    t.insert(KEYC_LEFT, vec!["select-pane".into(), "-L".into()]);
-    t.insert(KEYC_RIGHT, vec!["select-pane".into(), "-R".into()]);
+    t.insert(KEYC_UP, bind(vec!["select-pane".into(), "-U".into()]));
+    t.insert(KEYC_DOWN, bind(vec!["select-pane".into(), "-D".into()]));
+    t.insert(KEYC_LEFT, bind(vec!["select-pane".into(), "-L".into()]));
+    t.insert(KEYC_RIGHT, bind(vec!["select-pane".into(), "-R".into()]));
 
     // Window selection by number (0-9)
     for i in 0u8..=9 {
-        t.insert((b'0' + i) as KeyCode, vec!["select-window".into(), "-t".into(), i.to_string()]);
+        t.insert(
+            (b'0' + i) as KeyCode,
+            bind(vec!["select-window".into(), "-t".into(), i.to_string()]),
+        );
     }
 
     // Command prompt & copy/paste
-    t.insert(b':' as KeyCode, vec!["command-prompt".into()]);
-    t.insert(b'[' as KeyCode, vec!["copy-mode".into()]);
-    t.insert(b']' as KeyCode, vec!["paste-buffer".into()]);
-    t.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), vec!["send-prefix".into()]);
-    t.insert(KEYC_SPACE, vec!["next-layout".into()]);
-    t.insert(b'!' as KeyCode, vec!["break-pane".into()]);
-    t.insert(b';' as KeyCode, vec!["last-pane".into()]);
-    t.insert(b'{' as KeyCode, vec!["swap-pane".into(), "-U".into()]);
-    t.insert(b'}' as KeyCode, vec!["swap-pane".into(), "-D".into()]);
+    t.insert(b':' as KeyCode, bind(vec!["command-prompt".into()]));
+    t.insert(b'[' as KeyCode, bind(vec!["copy-mode".into()]));
+    t.insert(b']' as KeyCode, bind(vec!["paste-buffer".into()]));
+    t.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), bind(vec!["send-prefix".into()]));
+    t.insert(KEYC_SPACE, bind(vec!["next-layout".into()]));
+    t.insert(b'!' as KeyCode, bind(vec!["break-pane".into()]));
+    t.insert(b';' as KeyCode, bind(vec!["last-pane".into()]));
+    t.insert(b'{' as KeyCode, bind(vec!["swap-pane".into(), "-U".into()]));
+    t.insert(b'}' as KeyCode, bind(vec!["swap-pane".into(), "-D".into()]));
 
     // Prompts
     t.insert(
         b',' as KeyCode,
-        vec!["command-prompt".into(), "-I".into(), "#W".into(), "rename-window -- '%%'".into()],
+        bind(vec![
+            "command-prompt".into(),
+            "-I".into(),
+            "#W".into(),
+            "rename-window -- '%%'".into(),
+        ]),
     );
     t.insert(
         b'$' as KeyCode,
-        vec!["command-prompt".into(), "-I".into(), "#S".into(), "rename-session -- '%%'".into()],
+        bind(vec![
+            "command-prompt".into(),
+            "-I".into(),
+            "#S".into(),
+            "rename-session -- '%%'".into(),
+        ]),
     );
     t.insert(
         b'\'' as KeyCode,
-        vec!["command-prompt".into(), "-p".into(), "index".into(), "select-window -t '%%'".into()],
+        bind(vec![
+            "command-prompt".into(),
+            "-p".into(),
+            "index".into(),
+            "select-window -t '%%'".into(),
+        ]),
     );
-    t.insert(b'.' as KeyCode, vec!["command-prompt".into(), "move-window -t '%%'".into()]);
-    t.insert(b'f' as KeyCode, vec!["command-prompt".into(), "find-window -- '%%'".into()]);
+    t.insert(b'.' as KeyCode, bind(vec!["command-prompt".into(), "move-window -t '%%'".into()]));
+    t.insert(b'f' as KeyCode, bind(vec!["command-prompt".into(), "find-window -- '%%'".into()]));
 
     // Info & display
-    t.insert(b'?' as KeyCode, vec!["list-keys".into()]);
-    t.insert(b'w' as KeyCode, vec!["choose-tree".into()]);
-    t.insert(b's' as KeyCode, vec!["choose-tree".into()]);
-    t.insert(b'=' as KeyCode, vec!["choose-buffer".into()]);
-    t.insert(b'D' as KeyCode, vec!["choose-client".into()]);
-    t.insert(b'~' as KeyCode, vec!["show-messages".into()]);
-    t.insert(b'#' as KeyCode, vec!["list-buffers".into()]);
-    t.insert(b't' as KeyCode, vec!["clock-mode".into()]);
-    t.insert(b'q' as KeyCode, vec!["display-panes".into()]);
-    t.insert(b'i' as KeyCode, vec!["display-message".into()]);
-    t.insert(b'r' as KeyCode, vec!["refresh-client".into()]);
+    t.insert(b'?' as KeyCode, bind(vec!["list-keys".into()]));
+    t.insert(b'w' as KeyCode, bind(vec!["choose-tree".into()]));
+    t.insert(b's' as KeyCode, bind(vec!["choose-tree".into()]));
+    t.insert(b'=' as KeyCode, bind(vec!["choose-buffer".into()]));
+    t.insert(b'D' as KeyCode, bind(vec!["choose-client".into()]));
+    t.insert(b'~' as KeyCode, bind(vec!["show-messages".into()]));
+    t.insert(b'#' as KeyCode, bind(vec!["list-buffers".into()]));
+    t.insert(b't' as KeyCode, bind(vec!["clock-mode".into()]));
+    t.insert(b'q' as KeyCode, bind(vec!["display-panes".into()]));
+    t.insert(b'i' as KeyCode, bind(vec!["display-message".into()]));
+    t.insert(b'r' as KeyCode, bind(vec!["refresh-client".into()]));
 
     // Session switching
-    t.insert(b'(' as KeyCode, vec!["switch-client".into(), "-p".into()]);
-    t.insert(b')' as KeyCode, vec!["switch-client".into(), "-n".into()]);
+    t.insert(b'(' as KeyCode, bind(vec!["switch-client".into(), "-p".into()]));
+    t.insert(b')' as KeyCode, bind(vec!["switch-client".into(), "-n".into()]));
 
     // Rotate window
-    t.insert(keyc_build(b'o'.into(), KeyModifiers::CTRL), vec!["rotate-window".into()]);
+    t.insert(keyc_build(b'o'.into(), KeyModifiers::CTRL), bind(vec!["rotate-window".into()]));
     t.insert(
         keyc_build(b'o'.into(), KeyModifiers::META),
-        vec!["rotate-window".into(), "-D".into()],
+        bind(vec!["rotate-window".into(), "-D".into()]),
     );
 
     // Page up enters copy mode
-    t.insert(KEYC_PPAGE, vec!["copy-mode".into(), "-u".into()]);
+    t.insert(KEYC_PPAGE, bind(vec!["copy-mode".into(), "-u".into()]));
 
     default_prefix_resize(&mut t);
     default_prefix_layouts(&mut t);
@@ -221,19 +310,22 @@ fn default_prefix_table() -> HashMap<KeyCode, Vec<String>> {
 }
 
 /// Resize bindings for the prefix table.
-fn default_prefix_resize(t: &mut HashMap<KeyCode, Vec<String>>) {
+fn default_prefix_resize(t: &mut HashMap<KeyCode, KeyBinding>) {
     for (arrow, dir) in [(KEYC_UP, "-U"), (KEYC_DOWN, "-D"), (KEYC_LEFT, "-L"), (KEYC_RIGHT, "-R")]
     {
-        t.insert(keyc_build(arrow, KeyModifiers::CTRL), vec!["resize-pane".into(), dir.into()]);
+        t.insert(
+            keyc_build(arrow, KeyModifiers::CTRL),
+            bind_r(vec!["resize-pane".into(), dir.into()]),
+        );
         t.insert(
             keyc_build(arrow, KeyModifiers::META),
-            vec!["resize-pane".into(), dir.into(), "5".into()],
+            bind_r(vec!["resize-pane".into(), dir.into(), "5".into()]),
         );
     }
 }
 
 /// Layout selection bindings (M-1..5) for the prefix table.
-fn default_prefix_layouts(t: &mut HashMap<KeyCode, Vec<String>>) {
+fn default_prefix_layouts(t: &mut HashMap<KeyCode, KeyBinding>) {
     let layouts = [
         (b'1', "even-horizontal"),
         (b'2', "even-vertical"),
@@ -244,119 +336,125 @@ fn default_prefix_layouts(t: &mut HashMap<KeyCode, Vec<String>>) {
     for (digit, name) in layouts {
         t.insert(
             keyc_build(digit.into(), KeyModifiers::META),
-            vec!["select-layout".into(), name.into()],
+            bind(vec!["select-layout".into(), name.into()]),
         );
     }
 }
 
 /// Default copy-mode-vi key bindings.
-fn default_copy_mode_vi() -> HashMap<KeyCode, Vec<String>> {
+fn default_copy_mode_vi() -> HashMap<KeyCode, KeyBinding> {
     let mut m = HashMap::new();
 
     // Navigation
-    m.insert(b'h' as KeyCode, vec!["cursor-left".into()]);
-    m.insert(b'j' as KeyCode, vec!["cursor-down".into()]);
-    m.insert(b'k' as KeyCode, vec!["cursor-up".into()]);
-    m.insert(b'l' as KeyCode, vec!["cursor-right".into()]);
-    m.insert(KEYC_UP, vec!["cursor-up".into()]);
-    m.insert(KEYC_DOWN, vec!["cursor-down".into()]);
-    m.insert(KEYC_LEFT, vec!["cursor-left".into()]);
-    m.insert(KEYC_RIGHT, vec!["cursor-right".into()]);
+    m.insert(b'h' as KeyCode, bind(vec!["cursor-left".into()]));
+    m.insert(b'j' as KeyCode, bind(vec!["cursor-down".into()]));
+    m.insert(b'k' as KeyCode, bind(vec!["cursor-up".into()]));
+    m.insert(b'l' as KeyCode, bind(vec!["cursor-right".into()]));
+    m.insert(KEYC_UP, bind(vec!["cursor-up".into()]));
+    m.insert(KEYC_DOWN, bind(vec!["cursor-down".into()]));
+    m.insert(KEYC_LEFT, bind(vec!["cursor-left".into()]));
+    m.insert(KEYC_RIGHT, bind(vec!["cursor-right".into()]));
 
     // Page movement
-    m.insert(KEYC_PPAGE, vec!["page-up".into()]);
-    m.insert(KEYC_NPAGE, vec!["page-down".into()]);
-    m.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), vec!["page-up".into()]);
-    m.insert(keyc_build(b'f'.into(), KeyModifiers::CTRL), vec!["page-down".into()]);
+    m.insert(KEYC_PPAGE, bind(vec!["page-up".into()]));
+    m.insert(KEYC_NPAGE, bind(vec!["page-down".into()]));
+    m.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), bind(vec!["page-up".into()]));
+    m.insert(keyc_build(b'f'.into(), KeyModifiers::CTRL), bind(vec!["page-down".into()]));
 
     // Half page
-    m.insert(keyc_build(b'u'.into(), KeyModifiers::CTRL), vec!["halfpage-up".into()]);
-    m.insert(keyc_build(b'd'.into(), KeyModifiers::CTRL), vec!["halfpage-down".into()]);
+    m.insert(keyc_build(b'u'.into(), KeyModifiers::CTRL), bind(vec!["halfpage-up".into()]));
+    m.insert(keyc_build(b'd'.into(), KeyModifiers::CTRL), bind(vec!["halfpage-down".into()]));
 
     // Top/bottom
-    m.insert(b'g' as KeyCode, vec!["history-top".into()]);
-    m.insert(b'G' as KeyCode, vec!["history-bottom".into()]);
+    m.insert(b'g' as KeyCode, bind(vec!["history-top".into()]));
+    m.insert(b'G' as KeyCode, bind(vec!["history-bottom".into()]));
 
     // Line movement
-    m.insert(b'0' as KeyCode, vec!["start-of-line".into()]);
-    m.insert(b'$' as KeyCode, vec!["end-of-line".into()]);
-    m.insert(b'^' as KeyCode, vec!["back-to-indentation".into()]);
-    m.insert(KEYC_HOME, vec!["start-of-line".into()]);
-    m.insert(KEYC_END, vec!["end-of-line".into()]);
+    m.insert(b'0' as KeyCode, bind(vec!["start-of-line".into()]));
+    m.insert(b'$' as KeyCode, bind(vec!["end-of-line".into()]));
+    m.insert(b'^' as KeyCode, bind(vec!["back-to-indentation".into()]));
+    m.insert(KEYC_HOME, bind(vec!["start-of-line".into()]));
+    m.insert(KEYC_END, bind(vec!["end-of-line".into()]));
 
     // Word movement
-    m.insert(b'w' as KeyCode, vec!["next-word".into()]);
-    m.insert(b'b' as KeyCode, vec!["previous-word".into()]);
-    m.insert(b'e' as KeyCode, vec!["next-word-end".into()]);
+    m.insert(b'w' as KeyCode, bind(vec!["next-word".into()]));
+    m.insert(b'b' as KeyCode, bind(vec!["previous-word".into()]));
+    m.insert(b'e' as KeyCode, bind(vec!["next-word-end".into()]));
 
     // Selection
-    m.insert(b'v' as KeyCode, vec!["begin-selection".into()]);
-    m.insert(KEYC_SPACE, vec!["begin-selection".into()]);
-    m.insert(b'V' as KeyCode, vec!["select-line".into()]);
-    m.insert(keyc_build(b'v'.into(), KeyModifiers::CTRL), vec!["rectangle-toggle".into()]);
+    m.insert(b'v' as KeyCode, bind(vec!["begin-selection".into()]));
+    m.insert(KEYC_SPACE, bind(vec!["begin-selection".into()]));
+    m.insert(b'V' as KeyCode, bind(vec!["select-line".into()]));
+    m.insert(keyc_build(b'v'.into(), KeyModifiers::CTRL), bind(vec!["rectangle-toggle".into()]));
 
     // Jump to character
-    m.insert(b'f' as KeyCode, vec!["jump-forward".into()]);
-    m.insert(b'F' as KeyCode, vec!["jump-backward".into()]);
-    m.insert(b't' as KeyCode, vec!["jump-to-forward".into()]);
-    m.insert(b'T' as KeyCode, vec!["jump-to-backward".into()]);
-    m.insert(b';' as KeyCode, vec!["jump-again".into()]);
-    m.insert(b',' as KeyCode, vec!["jump-reverse".into()]);
+    m.insert(b'f' as KeyCode, bind(vec!["jump-forward".into()]));
+    m.insert(b'F' as KeyCode, bind(vec!["jump-backward".into()]));
+    m.insert(b't' as KeyCode, bind(vec!["jump-to-forward".into()]));
+    m.insert(b'T' as KeyCode, bind(vec!["jump-to-backward".into()]));
+    m.insert(b';' as KeyCode, bind(vec!["jump-again".into()]));
+    m.insert(b',' as KeyCode, bind(vec!["jump-reverse".into()]));
 
     // Search
-    m.insert(b'/' as KeyCode, vec!["search-forward".into()]);
-    m.insert(b'?' as KeyCode, vec!["search-backward".into()]);
-    m.insert(b'n' as KeyCode, vec!["search-again".into()]);
-    m.insert(b'N' as KeyCode, vec!["search-reverse".into()]);
+    m.insert(b'/' as KeyCode, bind(vec!["search-forward".into()]));
+    m.insert(b'?' as KeyCode, bind(vec!["search-backward".into()]));
+    m.insert(b'n' as KeyCode, bind(vec!["search-again".into()]));
+    m.insert(b'N' as KeyCode, bind(vec!["search-reverse".into()]));
 
     // Copy/exit
-    m.insert(KEYC_RETURN, vec!["copy-selection-and-cancel".into()]);
-    m.insert(b'y' as KeyCode, vec!["copy-selection-and-cancel".into()]);
+    m.insert(KEYC_RETURN, bind(vec!["copy-selection-and-cancel".into()]));
+    m.insert(b'y' as KeyCode, bind(vec!["copy-selection-and-cancel".into()]));
+
+    // Go to line
+    m.insert(b':' as KeyCode, bind(vec!["goto-line".into()]));
 
     // Cancel
-    m.insert(b'q' as KeyCode, vec!["cancel".into()]);
-    m.insert(KEYC_ESCAPE, vec!["cancel".into()]);
+    m.insert(b'q' as KeyCode, bind(vec!["cancel".into()]));
+    m.insert(KEYC_ESCAPE, bind(vec!["cancel".into()]));
 
     m
 }
 
 /// Default copy-mode-emacs key bindings.
-fn default_copy_mode_emacs() -> HashMap<KeyCode, Vec<String>> {
+fn default_copy_mode_emacs() -> HashMap<KeyCode, KeyBinding> {
     let mut m = HashMap::new();
 
     // Navigation
-    m.insert(KEYC_UP, vec!["cursor-up".into()]);
-    m.insert(KEYC_DOWN, vec!["cursor-down".into()]);
-    m.insert(KEYC_LEFT, vec!["cursor-left".into()]);
-    m.insert(KEYC_RIGHT, vec!["cursor-right".into()]);
-    m.insert(keyc_build(b'p'.into(), KeyModifiers::CTRL), vec!["cursor-up".into()]);
-    m.insert(keyc_build(b'n'.into(), KeyModifiers::CTRL), vec!["cursor-down".into()]);
-    m.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), vec!["cursor-left".into()]);
-    m.insert(keyc_build(b'f'.into(), KeyModifiers::CTRL), vec!["cursor-right".into()]);
+    m.insert(KEYC_UP, bind(vec!["cursor-up".into()]));
+    m.insert(KEYC_DOWN, bind(vec!["cursor-down".into()]));
+    m.insert(KEYC_LEFT, bind(vec!["cursor-left".into()]));
+    m.insert(KEYC_RIGHT, bind(vec!["cursor-right".into()]));
+    m.insert(keyc_build(b'p'.into(), KeyModifiers::CTRL), bind(vec!["cursor-up".into()]));
+    m.insert(keyc_build(b'n'.into(), KeyModifiers::CTRL), bind(vec!["cursor-down".into()]));
+    m.insert(keyc_build(b'b'.into(), KeyModifiers::CTRL), bind(vec!["cursor-left".into()]));
+    m.insert(keyc_build(b'f'.into(), KeyModifiers::CTRL), bind(vec!["cursor-right".into()]));
 
     // Page movement
-    m.insert(KEYC_PPAGE, vec!["page-up".into()]);
-    m.insert(KEYC_NPAGE, vec!["page-down".into()]);
-    m.insert(keyc_build(b'v'.into(), KeyModifiers::META), vec!["page-up".into()]);
-    m.insert(keyc_build(b'v'.into(), KeyModifiers::CTRL), vec!["page-down".into()]);
+    m.insert(KEYC_PPAGE, bind(vec!["page-up".into()]));
+    m.insert(KEYC_NPAGE, bind(vec!["page-down".into()]));
+    m.insert(keyc_build(b'v'.into(), KeyModifiers::META), bind(vec!["page-up".into()]));
+    m.insert(keyc_build(b'v'.into(), KeyModifiers::CTRL), bind(vec!["page-down".into()]));
 
     // Line movement
-    m.insert(keyc_build(b'a'.into(), KeyModifiers::CTRL), vec!["start-of-line".into()]);
-    m.insert(keyc_build(b'e'.into(), KeyModifiers::CTRL), vec!["end-of-line".into()]);
+    m.insert(keyc_build(b'a'.into(), KeyModifiers::CTRL), bind(vec!["start-of-line".into()]));
+    m.insert(keyc_build(b'e'.into(), KeyModifiers::CTRL), bind(vec!["end-of-line".into()]));
 
     // Word movement
-    m.insert(keyc_build(b'f'.into(), KeyModifiers::META), vec!["next-word".into()]);
-    m.insert(keyc_build(b'b'.into(), KeyModifiers::META), vec!["previous-word".into()]);
+    m.insert(keyc_build(b'f'.into(), KeyModifiers::META), bind(vec!["next-word".into()]));
+    m.insert(keyc_build(b'b'.into(), KeyModifiers::META), bind(vec!["previous-word".into()]));
 
     // Selection
-    m.insert(keyc_build(KEYC_SPACE, KeyModifiers::CTRL), vec!["begin-selection".into()]);
+    m.insert(keyc_build(KEYC_SPACE, KeyModifiers::CTRL), bind(vec!["begin-selection".into()]));
 
     // Copy
-    m.insert(keyc_build(b'w'.into(), KeyModifiers::META), vec!["copy-selection-and-cancel".into()]);
+    m.insert(
+        keyc_build(b'w'.into(), KeyModifiers::META),
+        bind(vec!["copy-selection-and-cancel".into()]),
+    );
 
     // Cancel
-    m.insert(keyc_build(b'g'.into(), KeyModifiers::CTRL), vec!["cancel".into()]);
-    m.insert(KEYC_ESCAPE, vec!["cancel".into()]);
+    m.insert(keyc_build(b'g'.into(), KeyModifiers::CTRL), bind(vec!["cancel".into()]));
+    m.insert(KEYC_ESCAPE, bind(vec!["cancel".into()]));
 
     m
 }
@@ -807,5 +905,79 @@ mod tests {
             }
             _ => panic!("expected Command(detach-client), got {action2:?}"),
         }
+    }
+
+    #[test]
+    fn repeatable_binding_stays_in_prefix() {
+        let mut kb = KeyBindings::default_bindings();
+        // Add a repeatable binding for 'z' in prefix table
+        kb.add_binding_with_repeat("prefix", b'z' as KeyCode, vec!["test-repeat".into()], true);
+
+        // Enter prefix mode
+        let _ = kb.process_input(b"\x02");
+        assert!(kb.in_prefix());
+
+        // Press 'z' which is repeatable
+        let (result, _) = kb.process_input(b"z");
+        assert!(matches!(result, Some(KeyAction::Command(ref argv)) if argv == &["test-repeat"]));
+        // Should still be in prefix mode (repeatable)
+        assert!(kb.in_prefix());
+
+        // Set a repeat timeout
+        kb.set_repeat_timeout(500);
+        assert!(kb.in_prefix());
+    }
+
+    #[test]
+    fn non_repeatable_binding_exits_prefix() {
+        let mut kb = KeyBindings::default_bindings();
+        let _ = kb.process_input(b"\x02");
+        assert!(kb.in_prefix());
+
+        // 'd' (detach) is NOT repeatable
+        let (result, _) = kb.process_input(b"d");
+        assert!(matches!(result, Some(KeyAction::Command(_))));
+        assert!(!kb.in_prefix());
+    }
+
+    #[test]
+    fn repeat_timeout_expires() {
+        let mut kb = KeyBindings::default_bindings();
+        let _ = kb.process_input(b"\x02");
+        // Set an already-expired timeout
+        kb.set_repeat_timeout(0);
+        kb.prefix_expiry =
+            Some(std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1)).unwrap());
+
+        // Next key should see prefix expired and fall through to normal processing
+        let (result, _) = kb.process_input(b"a");
+        // 'a' is not in root table, so passes through
+        assert!(result.is_none());
+        assert!(!kb.in_prefix());
+    }
+
+    #[test]
+    fn copy_mode_vi_goto_line_binding() {
+        let kb = KeyBindings::default_bindings();
+        let action = kb.lookup_in_table("copy-mode-vi", b':' as KeyCode);
+        assert_eq!(action, Some(&vec!["goto-line".to_string()]));
+    }
+
+    #[test]
+    fn add_binding_with_repeat_flag() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.add_binding_with_repeat("prefix", b'z' as KeyCode, vec!["test-cmd".into()], true);
+        let binding = kb.lookup_binding("prefix", b'z' as KeyCode);
+        assert!(binding.is_some());
+        assert!(binding.unwrap().repeatable);
+    }
+
+    #[test]
+    fn list_bindings_shows_repeat_flag() {
+        let mut kb = KeyBindings::default_bindings();
+        kb.add_binding_with_repeat("prefix", b'z' as KeyCode, vec!["test-cmd".into()], true);
+        let bindings = kb.list_bindings();
+        let z_binding = bindings.iter().find(|b| b.contains("test-cmd")).unwrap();
+        assert!(z_binding.contains(" -r"), "expected -r flag in: {z_binding}");
     }
 }

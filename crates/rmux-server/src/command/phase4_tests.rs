@@ -254,6 +254,16 @@ mod keybinding_tests {
     }
 
     #[test]
+    fn bind_key_with_repeat_flag() {
+        let mut s = MockCommandServer::new();
+        exec(&mut s, &["bind-key", "-r", "z", "resize-pane", "-U"]).unwrap();
+        let bindings = s.keybindings.list_bindings();
+        let z_binding = bindings.iter().find(|b| b.contains("resize-pane") && b.contains('z'));
+        assert!(z_binding.is_some(), "expected binding for z");
+        assert!(z_binding.unwrap().contains(" -r"), "expected -r flag");
+    }
+
+    #[test]
     fn bind_alias_works() {
         let mut s = MockCommandServer::new();
         exec(&mut s, &["bind", "z", "kill-session"]).unwrap();
@@ -1100,8 +1110,11 @@ mod display_message_tests {
     fn display_message_with_message() {
         let mut s = MockCommandServer::new();
 
-        let output = output_text(exec(&mut s, &["display-message", "test message"]));
-        assert!(output.contains("test message"));
+        let result = exec(&mut s, &["display-message", "test message"]).unwrap();
+        match result {
+            CommandResult::TimedMessage(msg) => assert!(msg.contains("test message")),
+            other => panic!("expected TimedMessage, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1123,6 +1136,37 @@ mod display_message_tests {
             &["display-message", "-p", "#{session_name}:#{window_index}"],
         ));
         assert!(output.contains("work:0"), "output: {output}");
+    }
+
+    #[test]
+    fn display_message_session_activity() {
+        let mut s = MockCommandServer::new();
+        let (sid, _widx, _pid) = s.create_test_session("test");
+        s.client_session_id = Some(sid);
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{session_activity}"]));
+        // session_activity is a unix timestamp, should be numeric
+        let trimmed = output.trim();
+        assert!(trimmed.parse::<u64>().is_ok(), "expected numeric timestamp, got: {trimmed}");
+    }
+
+    #[test]
+    fn display_message_pane_start_command() {
+        let mut s = MockCommandServer::new();
+        let (sid, _widx, _pid) = s.create_test_session("test");
+        s.client_session_id = Some(sid);
+
+        // pane_start_command defaults to empty
+        let output =
+            output_text(exec(&mut s, &["display-message", "-p", "cmd=#{pane_start_command}"]));
+        assert!(output.contains("cmd="), "output: {output}");
+    }
+
+    #[test]
+    fn display_message_no_message_returns_ok() {
+        let mut s = MockCommandServer::new();
+        let result = exec(&mut s, &["display-message"]).unwrap();
+        assert!(matches!(result, CommandResult::Ok));
     }
 }
 
@@ -1519,6 +1563,7 @@ impl std::fmt::Debug for crate::command::CommandResult {
             CommandResult::Exit => write!(f, "Exit"),
             CommandResult::RunShell(cmd) => write!(f, "RunShell({cmd:?})"),
             CommandResult::Suspend => write!(f, "Suspend"),
+            CommandResult::TimedMessage(msg) => write!(f, "TimedMessage({msg:?})"),
         }
     }
 }

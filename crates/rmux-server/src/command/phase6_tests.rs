@@ -286,8 +286,11 @@ mod display_tests {
     fn display_message_with_text() {
         let mut s = MockCommandServer::new();
         s.create_test_session("test");
-        let text = output_text(exec(&mut s, &["display-message", "hello world"]));
-        assert!(text.contains("hello world"));
+        let result = exec(&mut s, &["display-message", "hello world"]).unwrap();
+        match result {
+            CommandResult::TimedMessage(msg) => assert!(msg.contains("hello world")),
+            other => panic!("expected TimedMessage, got {other:?}"),
+        }
     }
 
     #[test]

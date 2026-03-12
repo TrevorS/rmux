@@ -668,10 +668,11 @@ impl CommandServer for MockCommandServer {
         table: &str,
         key_name: &str,
         argv: Vec<String>,
+        repeatable: bool,
     ) -> Result<(), ServerError> {
         let key = crate::keybind::string_to_key(key_name)
             .ok_or_else(|| ServerError::Command(format!("unknown key: {key_name}")))?;
-        self.keybindings.add_binding(table, key, argv);
+        self.keybindings.add_binding_with_repeat(table, key, argv, repeatable);
         Ok(())
     }
 
@@ -1247,6 +1248,7 @@ impl CommandServer for MockCommandServer {
                 ctx.set("session_name", &*session.name);
                 ctx.set("session_windows", session.windows.len().to_string());
                 ctx.set("session_created", session.created.to_string());
+                ctx.set("session_activity", session.activity.to_string());
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
                     if let Some(window) = session.windows.get(&widx) {
@@ -1260,6 +1262,7 @@ impl CommandServer for MockCommandServer {
                             ctx.set("pane_height", pane.screen.height().to_string());
                             ctx.set("pane_active", "1");
                             ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
+                            ctx.set("pane_start_command", &*pane.start_command);
                         }
                     }
                 }

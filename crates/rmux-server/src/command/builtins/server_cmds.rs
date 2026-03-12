@@ -99,13 +99,14 @@ fn resolve_send_keys_target(
     }
 }
 
-/// bind-key [-T table] [-n] key command [args...]
+/// bind-key [-r] [-T table] [-n] key command [args...]
 pub fn cmd_bind_key(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let table =
         if has_flag(args, "-n") { "root" } else { get_option(args, "-T").unwrap_or("prefix") };
+    let repeatable = has_flag(args, "-r");
 
     let positional = positional_args(args, &["-T"]);
     if positional.is_empty() {
@@ -118,7 +119,7 @@ pub fn cmd_bind_key(
     }
 
     let argv: Vec<String> = positional[1..].iter().map(|s| (*s).to_string()).collect();
-    server.add_key_binding(table, key_name, argv)?;
+    server.add_key_binding(table, key_name, argv, repeatable)?;
     Ok(CommandResult::Ok)
 }
 

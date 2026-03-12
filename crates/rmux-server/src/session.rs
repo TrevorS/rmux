@@ -30,6 +30,8 @@ pub struct Session {
     pub environ: HashMap<String, String>,
     /// Unix timestamp when the session was created.
     pub created: u64,
+    /// Unix timestamp of last activity (client input).
+    pub activity: u64,
 }
 
 impl Session {
@@ -51,6 +53,7 @@ impl Session {
             attached: 0,
             environ: HashMap::new(),
             created,
+            activity: created,
         }
     }
 

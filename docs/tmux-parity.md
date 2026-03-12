@@ -241,13 +241,13 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `status-justify` — left/centre/right window list alignment
 - [x] `status-left-length` / `status-right-length` — max widths
 - [x] `status-left-style` / `status-right-style` — section styles
-- [x] `status-interval` — refresh interval (defined, not yet used in tick)
+- [x] `status-interval` — refresh interval (integrated with tick loop)
 - [x] `status-keys` — emacs/vi mode for prompts
 - [x] `mouse` — mouse support
 - [x] `renumber-windows` — renumber on close
 - [x] `automatic-rename` — auto-rename from foreground process
-- [x] `display-time` — message display duration (defined, not timed)
-- [x] `repeat-time` — key repeat window (defined, not timed)
+- [x] `display-time` — message display duration (timed messages with expiry)
+- [x] `repeat-time` — key repeat window (prefix expiry for repeatable bindings)
 - [x] `set-titles` / `set-titles-string` — xterm title updates
 - [x] `message-style` / `message-command-style` — prompt styles (defined)
 - [x] `destroy-unattached` — kill session when last client detaches (defined)
@@ -258,8 +258,8 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [ ] `lock-after-time` — auto-lock timeout
 - [ ] `lock-command` — lock screen command
 - [x] `default-size` — default window size (used when no client attached)
-- [ ] `key-table` — default key table
-- [ ] `silence-action` / `bell-action` / `activity-action` — alert actions
+- [x] `key-table` — default key table
+- [x] `silence-action` / `bell-action` / `activity-action` — alert actions
 
 ### Window Options
 - [x] `mode-keys` — vi/emacs copy mode
@@ -328,9 +328,9 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] History line access (scrollback)
 - [x] Rectangle selection (Ctrl-v toggle, block copy)
 - [x] Jump to character (f/F/t/T)
-- [ ] Go to line (`:` in copy mode)
+- [x] Go to line (`:` in copy mode)
 - [ ] Mark and swap (`m`/`M-m`)
-- [ ] Copy pipe (copy and pipe to command)
+- [x] Copy pipe (copy and pipe to command)
 - [ ] Word selection (double-click equivalent)
 
 ---
@@ -433,10 +433,11 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `pane_tty` — PTY device name
 
 ### Missing Variables
-- [ ] `session_activity`, `session_alerts`
+- [x] `session_activity` — session last activity timestamp
+- [ ] `session_alerts`
 - [x] `pane_tty` — PTY device name (via `ptsname`/procfs)
-- [ ] `pane_start_command`
-- [ ] `client_activity`
+- [x] `pane_start_command` — command the pane was started with
+- [x] `client_activity` — client last activity timestamp
 
 ---
 

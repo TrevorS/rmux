@@ -189,6 +189,17 @@ impl Server {
                     if self.tick_count % 30 == 0 {
                         self.update_window_names();
                     }
+                    // Status-interval: force status bar refresh (default 15s = 937 ticks)
+                    let status_ticks = self.status_interval_ticks();
+                    if status_ticks > 0 && self.tick_count % status_ticks == 0 {
+                        for client in self.clients.values_mut() {
+                            if client.is_attached() {
+                                client.mark_redraw();
+                            }
+                        }
+                    }
+                    // Expire timed messages (display-time)
+                    self.expire_timed_messages();
                     self.render_clients().await;
                 }
             }
@@ -240,6 +251,7 @@ impl Server {
         // Find the pane and feed data through its parser
         let mut notifications = Vec::new();
         let mut replies: Option<(i32, Vec<u8>)> = None;
+        let mut alert_messages: Vec<(u32, String)> = Vec::new();
         for session in self.sessions.iter_mut() {
             for (&widx, window) in &mut session.windows {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
@@ -271,12 +283,27 @@ impl Server {
                         && window.options.get_flag("monitor-bell").unwrap_or(true)
                     {
                         window.has_bell = true;
+                        // Check bell-action to show alert message
+                        let ba = session.options.get_string("bell-action").unwrap_or("any");
+                        if ba == "any" || ba == "other" {
+                            alert_messages.push((session.id, format!("Bell in window {widx}")));
+                        }
+                    }
+                    if has_bell && is_active_window {
+                        let ba = session.options.get_string("bell-action").unwrap_or("any");
+                        if ba == "any" || ba == "current" {
+                            alert_messages.push((session.id, format!("Bell in window {widx}")));
+                        }
                     }
                     // Activity detection: set flag on non-active windows when monitor-activity is on
                     if !is_active_window
                         && window.options.get_flag("monitor-activity").unwrap_or(false)
                     {
                         window.has_activity = true;
+                        let aa = session.options.get_string("activity-action").unwrap_or("other");
+                        if aa == "any" || aa == "other" {
+                            alert_messages.push((session.id, format!("Activity in window {widx}")));
+                        }
                     }
                     // Filter out Bell notifications (handled above, not needed downstream)
                     notifications.retain(|n| !matches!(n, rmux_core::screen::Notification::Bell));
@@ -303,6 +330,20 @@ impl Server {
             // SAFETY: raw_fd is a valid PTY master fd owned by the pane.
             let fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
             nix::unistd::write(fd, &reply_bytes).ok();
+        }
+        // Show alert messages as timed messages on attached clients
+        let display_time_ms = self
+            .sessions
+            .iter()
+            .next()
+            .map_or(750, |s| s.options.get_number("display-time").unwrap_or(750) as u64);
+        let expiry = std::time::Instant::now() + std::time::Duration::from_millis(display_time_ms);
+        for (session_id, msg) in alert_messages {
+            for client in self.clients.values_mut() {
+                if client.session_id == Some(session_id) && client.is_attached() {
+                    client.timed_message = Some((msg.clone(), expiry));
+                }
+            }
         }
     }
 
@@ -534,6 +575,26 @@ impl Server {
                     client.send(&Message::Suspend).await.ok();
                 }
             }
+            Ok(CommandResult::TimedMessage(msg)) => {
+                // Show message in status bar for display-time milliseconds
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    let display_time_ms = client
+                        .session_id
+                        .and_then(|sid| {
+                            self.sessions
+                                .find_by_id(sid)
+                                .and_then(|s| s.options.get_number("display-time").ok())
+                        })
+                        .unwrap_or(750) as u64;
+                    let expiry = std::time::Instant::now()
+                        + std::time::Duration::from_millis(display_time_ms);
+                    client.timed_message = Some((msg, expiry));
+                    client.mark_redraw();
+                    if !client.is_attached() {
+                        client.send(&Message::Exit).await.ok();
+                    }
+                }
+            }
             Ok(CommandResult::RunShell(cmd)) => {
                 let output =
                     match tokio::process::Command::new("sh").arg("-c").arg(&cmd).output().await {
@@ -571,12 +632,21 @@ impl Server {
     }
 
     fn handle_input_data(&mut self, client_id: u64, data: &[u8]) {
-        let Some(client) = self.clients.get(&client_id) else {
+        // Update activity timestamps
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let Some(client) = self.clients.get_mut(&client_id) else {
             return;
         };
+        client.activity = now;
         let Some(session_id) = client.session_id else {
             return;
         };
+        if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            session.activity = now;
+        }
 
         // Check if client is in command prompt mode
         if client.prompt.is_some() {
@@ -613,6 +683,16 @@ impl Server {
                 }
                 Some(crate::keybind::KeyAction::Command(argv)) => {
                     self.queue_command(client_id, argv);
+                    // If the keybinding system stayed in prefix mode (repeatable
+                    // binding), set the repeat timeout from the session option.
+                    if self.keybindings.in_prefix() {
+                        let repeat_ms = self
+                            .sessions
+                            .find_by_id(session_id)
+                            .and_then(|s| s.options.get_number("repeat-time").ok())
+                            .unwrap_or(500) as u64;
+                        self.keybindings.set_repeat_timeout(repeat_ms);
+                    }
                 }
                 None => {
                     // Pass through to pane
@@ -1083,6 +1163,26 @@ impl Server {
         self.mark_clients_redraw(session_id);
     }
 
+    /// Go to a specific line number in the active pane's copy mode.
+    fn copy_mode_goto_line(&mut self, client_id: u64, line: u32) {
+        let Some(session_id) = self.clients.get(&client_id).and_then(|c| c.session_id) else {
+            return;
+        };
+        let Some(session) = self.sessions.find_by_id_mut(session_id) else {
+            return;
+        };
+        let Some(window) = session.active_window_mut() else {
+            return;
+        };
+        let Some(pane) = window.active_pane_mut() else {
+            return;
+        };
+        if let Some(cm) = &mut pane.copy_mode {
+            cm.goto_line(&pane.screen, line);
+        }
+        self.mark_clients_redraw(session_id);
+    }
+
     /// Handle input when the active pane is in copy mode.
     fn handle_copy_mode_input(&mut self, client_id: u64, session_id: u32, data: &[u8]) {
         use rmux_terminal::keys::parse_key;
@@ -1097,16 +1197,34 @@ impl Server {
         }
 
         // Look up binding and dispatch
-        let Some((_key_table, action_name)) = self.copy_mode_lookup(session_id, key) else {
+        let Some((_key_table, argv)) = self.copy_mode_lookup(session_id, key) else {
             return;
         };
+
+        let action_name = &argv[0];
+
+        // Handle copy-pipe variants directly (they need the command arg)
+        if action_name == "copy-pipe" || action_name == "copy-pipe-and-cancel" {
+            let command = argv.get(1).cloned().unwrap_or_default();
+            let cancel = action_name == "copy-pipe-and-cancel";
+            let copy_data = {
+                let Some(session) = self.sessions.find_by_id_mut(session_id) else { return };
+                let Some(window) = session.active_window_mut() else { return };
+                let Some(pane) = window.active_pane_mut() else { return };
+                let Some(cm) = &mut pane.copy_mode else { return };
+                copymode::copy_selection(&pane.screen, cm)
+            };
+            let action = CopyModeAction::CopyPipe { copy_data, command, cancel };
+            self.handle_copy_mode_action(client_id, session_id, action);
+            return;
+        }
 
         let action = {
             let Some(session) = self.sessions.find_by_id_mut(session_id) else { return };
             let Some(window) = session.active_window_mut() else { return };
             let Some(pane) = window.active_pane_mut() else { return };
             let Some(cm) = &mut pane.copy_mode else { return };
-            copymode::dispatch_copy_mode_action(&pane.screen, cm, &action_name)
+            copymode::dispatch_copy_mode_action(&pane.screen, cm, action_name)
         };
 
         self.handle_copy_mode_action(client_id, session_id, action);
@@ -1156,12 +1274,12 @@ impl Server {
         true
     }
 
-    /// Look up a copy-mode key binding and return (table_name, action_name).
+    /// Look up a copy-mode key binding and return (table_name, argv).
     fn copy_mode_lookup(
         &self,
         session_id: u32,
         key: rmux_core::key::KeyCode,
-    ) -> Option<(String, String)> {
+    ) -> Option<(String, Vec<String>)> {
         let key_table = self
             .sessions
             .find_by_id(session_id)?
@@ -1173,13 +1291,13 @@ impl Server {
             .clone();
 
         let base = rmux_core::key::keyc_base(key);
-        let action_name = self
+        let argv = self
             .keybindings
             .lookup_in_table(&key_table, base)
             .or_else(|| self.keybindings.lookup_in_table(&key_table, key))
-            .map(|argv| argv[0].clone())?;
+            .cloned()?;
 
-        Some((key_table, action_name))
+        Some((key_table, argv))
     }
 
     /// Handle the result of dispatching a copy-mode action.
@@ -1226,7 +1344,54 @@ impl Server {
                     }
                 }
             }
+            CopyModeAction::GotoLinePrompt => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    use crate::client::PromptType;
+                    client.prompt = Some(PromptState {
+                        prompt_type: PromptType::GotoLine,
+                        ..PromptState::default()
+                    });
+                }
+                self.mark_clients_redraw(session_id);
+            }
+            CopyModeAction::CopyPipe { copy_data, command, cancel } => {
+                if let Some(data) = &copy_data {
+                    self.paste_buffers.add(data.clone());
+                    // Pipe to the command
+                    if !command.is_empty() {
+                        Self::pipe_data_to_command(data, &command);
+                    }
+                }
+                if cancel {
+                    if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                        if let Some(window) = session.active_window_mut() {
+                            if let Some(pane) = window.active_pane_mut() {
+                                pane.exit_copy_mode();
+                            }
+                        }
+                    }
+                }
+                self.mark_clients_redraw(session_id);
+            }
             CopyModeAction::Unhandled => {}
+        }
+    }
+
+    /// Pipe data to a shell command's stdin.
+    fn pipe_data_to_command(data: &[u8], command: &str) {
+        use std::io::Write;
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut child) = child {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(data).ok();
+            }
+            // Don't wait — let it run in the background
         }
     }
 
@@ -1258,6 +1423,11 @@ impl Server {
                 }
                 PromptType::SearchBackward => {
                     self.copy_mode_search(client_id, &input, false);
+                }
+                PromptType::GotoLine => {
+                    if let Ok(line) = input.parse::<u32>() {
+                        self.copy_mode_goto_line(client_id, line);
+                    }
                 }
             }
         }
@@ -1494,6 +1664,40 @@ impl Server {
         }
     }
 
+    /// Calculate how many 16ms ticks equal the status-interval (seconds).
+    fn status_interval_ticks(&self) -> u32 {
+        // Get status-interval from the first attached session, or fall back to server default
+        let interval_secs = self
+            .clients
+            .values()
+            .find_map(|c| {
+                c.session_id.and_then(|sid| {
+                    self.sessions
+                        .find_by_id(sid)
+                        .and_then(|s| s.options.get_number("status-interval").ok())
+                })
+            })
+            .unwrap_or(15) as u32;
+        if interval_secs == 0 {
+            return 0;
+        }
+        // 1 second = ~62.5 ticks at 16ms
+        interval_secs.saturating_mul(62)
+    }
+
+    /// Expire any timed status messages whose display-time has elapsed.
+    fn expire_timed_messages(&mut self) {
+        let now = std::time::Instant::now();
+        for client in self.clients.values_mut() {
+            if let Some((_, expiry)) = &client.timed_message {
+                if now >= *expiry {
+                    client.timed_message = None;
+                    client.mark_redraw();
+                }
+            }
+        }
+    }
+
     /// Poll PTY foreground processes and update window names for auto-rename.
     fn update_window_names(&mut self) {
         for session in self.sessions.iter_mut() {
@@ -1528,14 +1732,21 @@ impl Server {
             .values_mut()
             .filter_map(|c| {
                 if c.needs_redraw() {
-                    let prompt = c.prompt.as_ref().map(|p| {
-                        use crate::client::PromptType;
-                        match p.prompt_type {
-                            PromptType::Command => format!(":{}", p.buffer),
-                            PromptType::SearchForward => format!("/{}", p.buffer),
-                            PromptType::SearchBackward => format!("?{}", p.buffer),
-                        }
-                    });
+                    // Timed message takes precedence over prompt
+                    let prompt = if let Some((msg, _)) = &c.timed_message {
+                        Some(msg.clone())
+                    } else {
+                        c.prompt.as_ref().map(|p| {
+                            use crate::client::PromptType;
+                            match p.prompt_type {
+                                PromptType::SearchForward => format!("/{}", p.buffer),
+                                PromptType::SearchBackward => format!("?{}", p.buffer),
+                                PromptType::Command | PromptType::GotoLine => {
+                                    format!(":{}", p.buffer)
+                                }
+                            }
+                        })
+                    };
                     c.session_id.map(|sid| (c.id, sid, c.sx, c.sy, prompt))
                 } else {
                     None
@@ -1672,12 +1883,13 @@ impl Server {
         // Store the master fd
         self.pty_fds.insert(pane_id, spawned.master);
 
-        // Update pane with PID
+        // Update pane with PID and start command
         for session in self.sessions.iter_mut() {
             for window in session.windows.values_mut() {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
                     pane.pid = spawned.pid.as_raw() as u32;
                     pane.pty_fd = master_raw;
+                    pane.start_command.clone_from(&shell);
                 }
             }
         }
@@ -1718,6 +1930,9 @@ impl Server {
         let path = pane.screen.path.as_deref().unwrap_or(session_cwd);
         ctx.set("pane_current_path", path);
         ctx.set("pane_pid", pane.pid.to_string());
+        if !pane.start_command.is_empty() {
+            ctx.set("pane_start_command", &*pane.start_command);
+        }
         if pane.pty_fd >= 0 {
             if let Some(tty) = pty::pty_device_name(pane.pty_fd) {
                 ctx.set("pane_tty", tty);
@@ -2412,6 +2627,7 @@ impl CommandServer for Server {
                 ctx.set("session_windows", session.windows.len().to_string());
                 ctx.set("session_attached", session.attached.to_string());
                 ctx.set("session_created", session.created.to_string());
+                ctx.set("session_activity", session.activity.to_string());
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
                     // Window flags
@@ -2448,6 +2664,7 @@ impl CommandServer for Server {
         if let Some(client) = self.clients.get(&client_id) {
             ctx.set("client_width", client.sx.to_string());
             ctx.set("client_height", client.sy.to_string());
+            ctx.set("client_activity", client.activity.to_string());
             if let Some(sid) = client.session_id {
                 if let Some(session) = self.sessions.find_by_id(sid) {
                     ctx.set("client_session", &*session.name);
@@ -2681,10 +2898,11 @@ impl CommandServer for Server {
         table: &str,
         key_name: &str,
         argv: Vec<String>,
+        repeatable: bool,
     ) -> Result<(), ServerError> {
         let key = string_to_key(key_name)
             .ok_or_else(|| ServerError::Command(format!("unknown key: {key_name}")))?;
-        self.keybindings.add_binding(table, key, argv);
+        self.keybindings.add_binding_with_repeat(table, key, argv, repeatable);
         Ok(())
     }
 

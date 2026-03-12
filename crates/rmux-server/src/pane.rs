@@ -36,6 +36,8 @@ pub struct Pane {
     pub copy_mode: Option<CopyModeState>,
     /// Child process for pipe-pane (piping PTY output to a shell command).
     pub pipe_child: Option<Child>,
+    /// The command used to start this pane's process.
+    pub start_command: String,
 }
 
 impl Pane {
@@ -61,6 +63,7 @@ impl Pane {
             dead: false,
             copy_mode: None,
             pipe_child: None,
+            start_command: String::new(),
         }
     }
 

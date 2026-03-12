@@ -168,6 +168,15 @@ impl CopyModeState {
         self.cx = 0;
     }
 
+    /// Jump to a specific line number (1-based, from top of history).
+    pub fn goto_line(&mut self, screen: &Screen, line: u32) {
+        let abs_y = line.saturating_sub(1); // Convert 1-based to 0-based
+        let total = screen.grid.history_size() + screen.height();
+        let clamped = abs_y.min(total.saturating_sub(1));
+        self.move_to_absolute_y(clamped, screen);
+        self.cx = 0;
+    }
+
     /// Move cursor to start of line.
     pub fn start_of_line(&mut self) {
         self.cx = 0;
@@ -605,6 +614,17 @@ pub enum CopyModeAction {
     SearchPrompt { forward: bool },
     /// Wait for next character for jump-to-char (f/F/t/T).
     JumpPrompt { jump_type: JumpType },
+    /// Enter goto-line prompt (`:` in vi copy mode).
+    GotoLinePrompt,
+    /// Copy selection and pipe to a command (copy-pipe / copy-pipe-and-cancel).
+    CopyPipe {
+        /// The copied data (None if no selection).
+        copy_data: Option<Vec<u8>>,
+        /// The shell command to pipe to.
+        command: String,
+        /// Whether to exit copy mode after.
+        cancel: bool,
+    },
     /// Key not recognized in copy mode.
     Unhandled,
 }
@@ -832,6 +852,7 @@ fn dispatch_search_and_jump(
         }
         "jump-again" => cm.jump_again(screen),
         "jump-reverse" => cm.jump_reverse(screen),
+        "goto-line" => return Some(CopyModeAction::GotoLinePrompt),
         _ => return None,
     }
     Some(CopyModeAction::Handled)
@@ -1406,5 +1427,66 @@ mod tests {
         assert!(text.contains("BCD"));
         assert!(text.contains("GHI"));
         assert!(text.contains("LMN"));
+    }
+
+    #[test]
+    fn goto_line_positions_cursor() {
+        let screen = make_screen_with_content(
+            80,
+            24,
+            &[
+                "line 1", "line 2", "line 3", "line 4", "line 5", "", "", "", "", "", "", "", "",
+                "", "", "", "", "", "", "", "", "", "", "",
+            ],
+        );
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        // Start at bottom
+        assert_eq!(cm.cy, 23);
+
+        // Go to line 1 (1-based)
+        cm.goto_line(&screen, 1);
+        assert_eq!(cm.cx, 0);
+        // Should be at the top of the visible area
+        let abs = cm.absolute_y(screen.grid.history_size());
+        assert_eq!(abs, 0);
+
+        // Go to line 3
+        cm.goto_line(&screen, 3);
+        let abs = cm.absolute_y(screen.grid.history_size());
+        assert_eq!(abs, 2);
+    }
+
+    #[test]
+    fn goto_line_clamps_to_total() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        // Go beyond total lines — should clamp
+        cm.goto_line(&screen, 99999);
+        let abs = cm.absolute_y(screen.grid.history_size());
+        assert!(abs < 99999);
+    }
+
+    #[test]
+    fn goto_line_zero_goes_to_top() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        // Line 0 saturates to 0
+        cm.goto_line(&screen, 0);
+        let abs = cm.absolute_y(screen.grid.history_size());
+        assert_eq!(abs, 0);
+        assert_eq!(cm.cx, 0);
+    }
+
+    #[test]
+    fn dispatch_goto_line_returns_prompt() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        match dispatch_copy_mode_action(&screen, &mut cm, "goto-line") {
+            CopyModeAction::GotoLinePrompt => {}
+            other => panic!("expected GotoLinePrompt, got {other:?}"),
+        }
     }
 }
