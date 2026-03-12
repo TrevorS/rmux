@@ -83,7 +83,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `delete-buffer` / `deleteb` — delete a buffer
 - [x] `save-buffer` / `saveb` — save buffer to file
 - [x] `load-buffer` / `loadb` — load file into buffer
-- [ ] `choose-buffer` — interactive buffer picker (falls back to list-buffers)
+- [x] `choose-buffer` — interactive buffer picker overlay
 
 ### Display & Info
 - [x] `display-message` / `display` — show/expand format string
@@ -94,10 +94,10 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `show-prompt-history` — returns prompt history entries (most recent first)
 - [x] `clear-prompt-history` — clears prompt history
 
-### Interactive UI (require client-side overlay rendering)
-- [ ] `choose-tree` — interactive session/window tree (falls back to list-sessions)
-- [ ] `choose-client` — interactive client picker (falls back to list-clients)
-- [ ] `display-menu` / `menu` — popup menu (no-op)
+### Interactive UI (overlay rendering)
+- [x] `choose-tree` — interactive session/window tree overlay
+- [x] `choose-client` — interactive client picker overlay
+- [x] `display-menu` / `menu` — popup menu overlay
 - [ ] `display-popup` / `popup` — popup window (no-op)
 - [ ] `customize-mode` — options browser (no-op)
 

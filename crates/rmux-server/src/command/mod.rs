@@ -32,6 +32,8 @@ pub enum CommandResult {
     Suspend,
     /// Show a timed message in the status bar (display-message without -p).
     TimedMessage(String),
+    /// Open an overlay on the client (choose-tree, display-menu, etc.).
+    Overlay(crate::overlay::OverlayState),
 }
 
 /// A registered command handler.
@@ -371,6 +373,17 @@ pub trait CommandServer {
     fn clear_prompt_history(&mut self);
     /// Add an entry to the prompt history.
     fn add_prompt_history(&mut self, entry: String);
+
+    // --- Overlay data ---
+    /// Get structured session info for choose-tree overlay.
+    /// Returns Vec of (session_name, window_count, attached_count).
+    fn session_info_list(&self) -> Vec<(String, usize, usize)>;
+    /// Get structured buffer info for choose-buffer overlay.
+    /// Returns Vec of (buffer_name, byte_length, preview).
+    fn buffer_info_list(&self) -> Vec<(String, usize, String)>;
+    /// Get structured client info for choose-client overlay.
+    /// Returns Vec of (client_id, session_name, terminal_size).
+    fn client_info_list(&self) -> Vec<(u64, String, String)>;
 }
 
 /// Look up a command by name or unambiguous prefix (matching tmux behavior).

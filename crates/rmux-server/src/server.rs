@@ -598,6 +598,9 @@ impl Server {
                     }
                 }
             }
+            Ok(CommandResult::Overlay(overlay_state)) => {
+                self.set_client_overlay(client_id, overlay_state);
+            }
             Ok(CommandResult::RunShell(cmd)) => {
                 let output =
                     match tokio::process::Command::new("sh").arg("-c").arg(&cmd).output().await {
@@ -649,6 +652,12 @@ impl Server {
         };
         if let Some(session) = self.sessions.find_by_id_mut(session_id) {
             session.activity = now;
+        }
+
+        // Check if client has an active overlay
+        if client.overlay.is_some() {
+            self.handle_overlay_input(client_id, data);
+            return;
         }
 
         // Check if client is in command prompt mode
@@ -1452,6 +1461,76 @@ impl Server {
     }
 
     /// Handle input when the client is in command prompt mode.
+    fn set_client_overlay(&mut self, client_id: u64, overlay: crate::overlay::OverlayState) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            if client.is_attached() {
+                client.overlay = Some(overlay);
+                client.mark_redraw();
+            }
+        }
+    }
+
+    fn handle_overlay_input(&mut self, client_id: u64, data: &[u8]) {
+        use crate::overlay::{OverlayAction, OverlayState, process_list_input, process_menu_input};
+
+        let mut offset = 0;
+        while offset < data.len() {
+            let remaining = &data[offset..];
+
+            let Some(client) = self.clients.get_mut(&client_id) else {
+                return;
+            };
+            let Some(overlay) = &mut client.overlay else {
+                return;
+            };
+
+            let (action, consumed) = match overlay {
+                OverlayState::List(list) => process_list_input(list, remaining),
+                OverlayState::Menu(menu) => process_menu_input(menu, remaining),
+            };
+
+            match action {
+                OverlayAction::Select { command } => {
+                    // Dismiss overlay and execute the selected command
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.overlay = None;
+                        client.mark_redraw();
+                    }
+                    if !command.is_empty() {
+                        self.queue_command(client_id, command);
+                    }
+                    return;
+                }
+                OverlayAction::Cancel => {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.overlay = None;
+                        client.mark_redraw();
+                    }
+                    return;
+                }
+                OverlayAction::Delete { command } => {
+                    // Execute the delete command, then redraw
+                    if !command.is_empty() {
+                        self.queue_command(client_id, command);
+                    }
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.mark_redraw();
+                    }
+                    offset += consumed;
+                }
+                OverlayAction::Handled => {
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.mark_redraw();
+                    }
+                    offset += consumed;
+                }
+                OverlayAction::Unhandled => {
+                    offset += consumed.max(1);
+                }
+            }
+        }
+    }
+
     fn handle_prompt_input(&mut self, client_id: u64, data: &[u8]) {
         use crate::client::{PromptAction, process_prompt_input};
 
@@ -1743,8 +1822,8 @@ impl Server {
     }
 
     async fn render_clients(&mut self) {
-        // Collect client IDs that need redraw, along with their session IDs, sizes, and prompt
-        let to_render: Vec<(u64, u32, u32, u32, Option<String>)> = self
+        // Collect client IDs that need redraw, along with their render info
+        let to_render: Vec<(u64, u32, u32, u32, Option<String>, bool)> = self
             .clients
             .values_mut()
             .filter_map(|c| {
@@ -1764,22 +1843,36 @@ impl Server {
                             }
                         })
                     };
-                    c.session_id.map(|sid| (c.id, sid, c.sx, c.sy, prompt))
+                    let has_overlay = c.overlay.is_some();
+                    c.session_id.map(|sid| (c.id, sid, c.sx, c.sy, prompt, has_overlay))
                 } else {
                     None
                 }
             })
             .collect();
 
-        for (client_id, session_id, sx, sy, prompt) in to_render {
-            let output = self.render_session(session_id, sx, sy, prompt.as_deref());
+        for (client_id, session_id, sx, sy, prompt, has_overlay) in to_render {
+            // Borrow overlay from the client for rendering
+            let overlay_ref = if has_overlay {
+                self.clients.get(&client_id).and_then(|c| c.overlay.as_ref())
+            } else {
+                None
+            };
+            let output = self.render_session(session_id, sx, sy, prompt.as_deref(), overlay_ref);
             if let Some(client) = self.clients.get_mut(&client_id) {
                 client.send(&Message::OutputData(output)).await.ok();
             }
         }
     }
 
-    fn render_session(&self, session_id: u32, sx: u32, sy: u32, prompt: Option<&str>) -> Vec<u8> {
+    fn render_session(
+        &self,
+        session_id: u32,
+        sx: u32,
+        sy: u32,
+        prompt: Option<&str>,
+        overlay: Option<&crate::overlay::OverlayState>,
+    ) -> Vec<u8> {
         let Some(session) = self.sessions.find_by_id(session_id) else {
             return Vec::new();
         };
@@ -1820,6 +1913,7 @@ impl Server {
             &window_list,
             prompt,
             Some(&status_config),
+            overlay,
         )
     }
 
@@ -3896,6 +3990,43 @@ impl CommandServer for Server {
             // Cap at 100 entries
             self.prompt_history.truncate(100);
         }
+    }
+
+    fn session_info_list(&self) -> Vec<(String, usize, usize)> {
+        self.sessions
+            .iter()
+            .map(|s| (s.name.clone(), s.windows.len(), s.attached as usize))
+            .collect()
+    }
+
+    fn buffer_info_list(&self) -> Vec<(String, usize, String)> {
+        self.paste_buffers
+            .list()
+            .into_iter()
+            .map(|buf| {
+                let preview: String = String::from_utf8_lossy(&buf.data)
+                    .chars()
+                    .take(50)
+                    .map(|c| if c.is_control() { '.' } else { c })
+                    .collect();
+                (buf.name.clone(), buf.data.len(), preview)
+            })
+            .collect()
+    }
+
+    fn client_info_list(&self) -> Vec<(u64, String, String)> {
+        self.clients
+            .values()
+            .filter(|c| c.is_attached())
+            .map(|c| {
+                let session_name = c
+                    .session_id
+                    .and_then(|sid| self.sessions.find_by_id(sid))
+                    .map_or("(none)".to_string(), |s| s.name.clone());
+                let size = format!("{}x{}", c.sx, c.sy);
+                (c.id, session_name, size)
+            })
+            .collect()
     }
 }
 

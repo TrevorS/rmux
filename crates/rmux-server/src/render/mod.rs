@@ -100,6 +100,7 @@ pub struct StatusConfig {
 /// Render a window's contents to raw terminal output bytes.
 ///
 /// Returns the bytes that should be written to the client's terminal.
+#[allow(clippy::too_many_arguments)]
 pub fn render_window(
     window: &Window,
     session_name: &str,
@@ -108,6 +109,7 @@ pub fn render_window(
     window_list: &[WindowInfo],
     prompt: Option<&str>,
     status_config: Option<&StatusConfig>,
+    overlay: Option<&crate::overlay::OverlayState>,
 ) -> Vec<u8> {
     let mut writer = TermWriter::new(sx as usize * sy as usize * 4);
     let show_status = status_config.is_none_or(|c| c.status_enabled);
@@ -159,6 +161,11 @@ pub fn render_window(
                 status_config,
             );
         }
+    }
+
+    // Render overlay on top of everything (except cursor)
+    if let Some(overlay) = overlay {
+        render_overlay(&mut writer, overlay, sx, sy, status_row);
     }
 
     // Position cursor at active pane (copy mode cursor if in copy mode)
@@ -623,6 +630,179 @@ fn build_status_context(
     ctx
 }
 
+/// Render an overlay on top of the terminal content.
+fn render_overlay(
+    writer: &mut TermWriter,
+    overlay: &crate::overlay::OverlayState,
+    sx: u32,
+    sy: u32,
+    _status_row: u32,
+) {
+    match overlay {
+        crate::overlay::OverlayState::List(list) => {
+            render_list_overlay(writer, list, sx, sy);
+        }
+        crate::overlay::OverlayState::Menu(menu) => {
+            render_menu_overlay(writer, menu, sx, sy);
+        }
+    }
+}
+
+/// Render a list-style overlay (choose-tree, choose-buffer, choose-client).
+fn render_list_overlay(
+    writer: &mut TermWriter,
+    list: &crate::overlay::ListOverlay,
+    sx: u32,
+    sy: u32,
+) {
+    let filtered = crate::overlay::filtered_items(list);
+    let visible_height = list.visible_height(sy);
+
+    // Title/filter row at the top
+    writer.cursor_position(0, 0);
+    writer.set_style(&Style {
+        fg: Color::BLACK,
+        bg: Color::YELLOW,
+        us: Color::Default,
+        attrs: Attrs::empty(),
+    });
+    let header = if list.filtering {
+        format!("{} [filter: {}]", list.title, list.filter)
+    } else if !list.filter.is_empty() {
+        format!("{} (/{}) [{}/{}]", list.title, list.filter, filtered.len(), list.items.len())
+    } else {
+        format!("{} [{}/{}]", list.title, filtered.len(), list.items.len())
+    };
+    let header_trunc: String = header.chars().take(sx as usize).collect();
+    writer.write_raw(header_trunc.as_bytes());
+    let pad = (sx as usize).saturating_sub(header_trunc.len());
+    for _ in 0..pad {
+        writer.write_raw(b" ");
+    }
+
+    // Item rows
+    let start = list.scroll_offset;
+    let end = (start + visible_height).min(filtered.len());
+    for row_idx in 0..visible_height {
+        let y = row_idx as u32 + 1; // +1 for title row
+        writer.cursor_position(0, y);
+
+        if start + row_idx < end {
+            let (orig_idx, item) = &filtered[start + row_idx];
+            let is_selected = *orig_idx == list.selected;
+
+            if is_selected {
+                writer.set_style(&Style {
+                    fg: Color::BLACK,
+                    bg: Color::CYAN,
+                    us: Color::Default,
+                    attrs: Attrs::empty(),
+                });
+            } else {
+                writer.set_style(&Style::DEFAULT);
+            }
+
+            // Indent
+            let indent = (item.indent * 2) as usize;
+            let prefix = " ".repeat(indent);
+            let display = format!("{prefix}{}", item.display);
+            let trunc: String = display.chars().take(sx as usize).collect();
+            writer.write_raw(trunc.as_bytes());
+
+            // Pad rest of line
+            let remaining = (sx as usize).saturating_sub(trunc.len());
+            for _ in 0..remaining {
+                writer.write_raw(b" ");
+            }
+        } else {
+            // Empty row
+            writer.set_style(&Style::DEFAULT);
+            for _ in 0..sx {
+                writer.write_raw(b" ");
+            }
+        }
+    }
+    writer.set_style(&Style::DEFAULT);
+}
+
+/// Render a menu overlay (display-menu).
+fn render_menu_overlay(
+    writer: &mut TermWriter,
+    menu: &crate::overlay::MenuOverlay,
+    sx: u32,
+    sy: u32,
+) {
+    let menu_width = (menu.width as usize).min(sx as usize);
+    let menu_x = (menu.x as usize).min(sx.saturating_sub(menu.width) as usize);
+
+    // Title row
+    let title_y = menu.y;
+    if title_y < sy {
+        writer.cursor_position(menu_x as u32, title_y);
+        writer.set_style(&Style {
+            fg: Color::BLACK,
+            bg: Color::YELLOW,
+            us: Color::Default,
+            attrs: Attrs::empty(),
+        });
+        let title_trunc: String = menu.title.chars().take(menu_width).collect();
+        writer.write_raw(title_trunc.as_bytes());
+        let pad = menu_width.saturating_sub(title_trunc.len());
+        for _ in 0..pad {
+            writer.write_raw(b" ");
+        }
+    }
+
+    // Menu items
+    for (i, item) in menu.items.iter().enumerate() {
+        let row_y = title_y + 1 + i as u32;
+        if row_y >= sy {
+            break;
+        }
+        writer.cursor_position(menu_x as u32, row_y);
+
+        if item.name.is_empty() {
+            // Separator
+            writer.set_style(&Style::DEFAULT);
+            for _ in 0..menu_width {
+                writer.write_raw("\u{2500}".as_bytes()); // ─
+            }
+        } else {
+            let is_selected = i == menu.selected;
+            if is_selected {
+                writer.set_style(&Style {
+                    fg: Color::BLACK,
+                    bg: Color::CYAN,
+                    us: Color::Default,
+                    attrs: Attrs::empty(),
+                });
+            } else {
+                writer.set_style(&Style::DEFAULT);
+            }
+
+            // Format: " name    (key)"
+            let key_str = item.key.map_or(String::new(), |k| format!("({k})"));
+            let name_width = menu_width.saturating_sub(key_str.len() + 2); // 1 leading + 1 trailing space
+            let name_trunc: String = item.name.chars().take(name_width).collect();
+            let entry = format!(" {name_trunc:<name_width$}{key_str} ");
+            let entry_trunc: String = entry.chars().take(menu_width).collect();
+            writer.write_raw(entry_trunc.as_bytes());
+        }
+    }
+
+    // Bottom border
+    let bottom_y = title_y + 1 + menu.items.len() as u32;
+    if bottom_y < sy {
+        writer.cursor_position(menu_x as u32, bottom_y);
+        writer.set_style(&Style::DEFAULT);
+        for _ in 0..menu_width {
+            writer.write_raw("\u{2500}".as_bytes());
+        }
+    }
+
+    writer.set_style(&Style::DEFAULT);
+}
+
 /// Render the command prompt line (replaces the status line when in prompt mode).
 ///
 /// `prompt_str` is the full prompt string including prefix (`:`, `/`, or `?`).
@@ -662,7 +842,7 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None);
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, None);
         assert!(!output.is_empty());
     }
 
@@ -687,7 +867,7 @@ mod tests {
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 24, &wl, None, None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, None, None);
         // Should contain the vertical border character (│ = 0xe2 0x94 0x82 in UTF-8)
         assert!(output.windows(3).any(|w| w == [0xe2, 0x94, 0x82]));
     }
@@ -701,7 +881,7 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "test");
-        let output = render_window(&window, "main", 80, 24, &wl, None, None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, None, None);
         // Should contain "test" (the window name) in the status line
         assert!(output.windows(4).any(|w| w == b"test"));
     }
@@ -710,7 +890,7 @@ mod tests {
     fn render_empty_window() {
         let window = Window::new("empty".into(), 80, 24);
         let wl = single_window_list(0, "empty");
-        let output = render_window(&window, "sess", 80, 25, &wl, None, None);
+        let output = render_window(&window, "sess", 80, 25, &wl, None, None, None);
         // Even with no panes, the status line should produce output
         assert!(!output.is_empty());
     }
@@ -734,7 +914,7 @@ mod tests {
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
         let wl = single_window_list(0, "multi");
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
         assert!(output.windows(5).any(|w| w == b"Hello"));
         assert!(output.windows(5).any(|w| w == b"World"));
     }
@@ -749,7 +929,7 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "cp");
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
         assert!(output.windows(9).any(|w| w == b"Copy mode"));
     }
 
@@ -770,7 +950,7 @@ mod tests {
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
         let wl = single_window_list(0, "cnt");
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
         assert!(output.windows(7).any(|w| w == b"2 panes"));
     }
 
@@ -787,7 +967,7 @@ mod tests {
             WindowInfo { idx: 1, name: "vim".to_string(), flags: WindowFlags::LAST },
             WindowInfo { idx: 2, name: "logs".to_string(), flags: WindowFlags::empty() },
         ];
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
         // Should contain all window names
         assert!(output.windows(6).any(|w| w == b"0:bash"));
         assert!(output.windows(5).any(|w| w == b"1:vim"));
@@ -833,7 +1013,7 @@ mod tests {
             pane_border_status: "off".to_string(),
             pane_border_format: "#{pane_index}".to_string(),
         };
-        let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
+        let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg), None);
         // Status line should contain expanded session name
         assert!(output.windows(5).any(|w| w == b"[dev]"));
         // And the right side
@@ -889,7 +1069,7 @@ mod tests {
             pane_border_status: "off".to_string(),
             pane_border_format: "#{pane_index}".to_string(),
         };
-        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None);
         // Active window uses current format
         assert!(output.windows(8).any(|w| w == b"[0]bash*"));
         // Inactive window uses normal format (no *)
@@ -978,7 +1158,7 @@ mod tests {
 
         let cfg = test_status_config();
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None);
         // Should not contain pane index as a label
         // The output is raw terminal bytes; with pane_border_status=off, no label is rendered
         assert!(!output.is_empty());
@@ -1009,12 +1189,99 @@ mod tests {
         cfg.pane_border_status = "bottom".to_string();
         cfg.pane_border_format = "PANE#{pane_index}".to_string();
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None);
         // The label should contain the pane id rendered as "PANE<id>"
         let label = format!("PANE{pid1}");
         assert!(
             output.windows(label.len()).any(|w| w == label.as_bytes()),
             "output should contain {label}"
         );
+    }
+
+    #[test]
+    fn render_list_overlay_shows_title_and_items() {
+        use crate::overlay::{ListItem, ListKind, ListOverlay, OverlayState};
+
+        let mut window = Window::new("0".into(), 80, 24);
+        let pane = Pane::new(80, 24, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let overlay = OverlayState::List(ListOverlay {
+            items: vec![
+                ListItem {
+                    display: "session-main: 2 windows".into(),
+                    command: vec!["switch-client".into()],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+                ListItem {
+                    display: "session-dev: 1 windows".into(),
+                    command: vec!["switch-client".into()],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: false,
+                    delete_command: vec![],
+                },
+            ],
+            selected: 0,
+            scroll_offset: 0,
+            filter: String::new(),
+            filtering: false,
+            title: "choose-tree".into(),
+            kind: ListKind::Tree,
+        });
+
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        // Title should be present
+        assert!(output.windows(11).any(|w| w == b"choose-tree"));
+        // Items should be present
+        assert!(output.windows(12).any(|w| w == b"session-main"));
+        assert!(output.windows(11).any(|w| w == b"session-dev"));
+    }
+
+    #[test]
+    fn render_menu_overlay_shows_items() {
+        use crate::overlay::{MenuItem, MenuOverlay, OverlayState};
+
+        let mut window = Window::new("0".into(), 80, 24);
+        let pane = Pane::new(80, 24, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let overlay = OverlayState::Menu(MenuOverlay {
+            items: vec![
+                MenuItem {
+                    name: "New Window".into(),
+                    key: Some('c'),
+                    command: vec!["new-window".into()],
+                },
+                MenuItem {
+                    name: "Kill Window".into(),
+                    key: Some('&'),
+                    command: vec!["kill-window".into()],
+                },
+            ],
+            selected: 0,
+            title: "Window".into(),
+            x: 5,
+            y: 5,
+            width: 20,
+        });
+
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        // Menu title
+        assert!(output.windows(6).any(|w| w == b"Window"));
+        // Menu items
+        assert!(output.windows(10).any(|w| w == b"New Window"));
+        assert!(output.windows(11).any(|w| w == b"Kill Window"));
     }
 }

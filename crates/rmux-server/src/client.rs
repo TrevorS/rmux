@@ -66,6 +66,8 @@ pub struct ServerClient {
     pub sy: u32,
     /// Command prompt state (Some = prompt mode active).
     pub prompt: Option<PromptState>,
+    /// Active overlay (choose-tree, display-menu, etc.).
+    pub overlay: Option<crate::overlay::OverlayState>,
     /// Mouse click tracking for double/triple-click detection.
     pub click_state: ClickState,
     /// Unix timestamp of last activity (client input).
@@ -203,6 +205,7 @@ impl ServerClient {
             sx: 80,
             sy: 24,
             prompt: None,
+            overlay: None,
             click_state: ClickState::default(),
             activity: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

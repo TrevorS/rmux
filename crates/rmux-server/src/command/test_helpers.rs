@@ -1473,4 +1473,38 @@ impl CommandServer for MockCommandServer {
             self.prompt_history.truncate(100);
         }
     }
+
+    fn session_info_list(&self) -> Vec<(String, usize, usize)> {
+        self.sessions
+            .iter()
+            .map(|s| (s.name.clone(), s.windows.len(), s.attached as usize))
+            .collect()
+    }
+
+    fn buffer_info_list(&self) -> Vec<(String, usize, String)> {
+        self.paste_buffers
+            .list()
+            .into_iter()
+            .map(|buf| {
+                let preview: String = String::from_utf8_lossy(&buf.data)
+                    .chars()
+                    .take(50)
+                    .map(|c| if c.is_control() { '.' } else { c })
+                    .collect();
+                (buf.name.clone(), buf.data.len(), preview)
+            })
+            .collect()
+    }
+
+    fn client_info_list(&self) -> Vec<(u64, String, String)> {
+        // Mock: return a single client entry
+        if let Some(sid) = self.client_session_id {
+            let session_name =
+                self.sessions.find_by_id(sid).map_or("(none)".to_string(), |s| s.name.clone());
+            let size = format!("{}x{}", self.client_sx, self.client_sy);
+            vec![(self.command_client, session_name, size)]
+        } else {
+            vec![]
+        }
+    }
 }

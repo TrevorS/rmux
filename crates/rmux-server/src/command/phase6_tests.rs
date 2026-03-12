@@ -377,10 +377,18 @@ mod display_tests {
 
     #[test]
     fn choose_tree_with_sessions() {
+        use crate::overlay::OverlayState;
         let mut s = MockCommandServer::new();
         s.create_test_session("sess");
-        let text = output_text(exec(&mut s, &["choose-tree"]));
-        assert!(text.contains("sess"));
+        let result = exec(&mut s, &["choose-tree"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                assert_eq!(list.items.len(), 1);
+                assert!(list.items[0].display.contains("sess"));
+                assert!(list.items[0].deletable);
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
     }
 
     #[test]
@@ -391,15 +399,60 @@ mod display_tests {
     }
 
     #[test]
-    fn choose_client_returns_client_info() {
+    fn choose_buffer_with_buffers() {
+        use crate::overlay::OverlayState;
         let mut s = MockCommandServer::new();
-        let text = output_text(exec(&mut s, &["choose-client"]));
-        // Mock always has one client
-        assert!(text.contains("client"));
+        s.paste_buffers.add(b"hello world".to_vec());
+        let result = exec(&mut s, &["choose-buffer"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                assert_eq!(list.items.len(), 1);
+                assert!(list.items[0].display.contains("hello world"));
+                assert!(list.items[0].deletable);
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
     }
 
     #[test]
-    fn display_menu_stub_ok() {
+    fn choose_client_returns_overlay() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        s.create_test_session("sess");
+        s.client_session_id = Some(s.sessions.iter().next().unwrap().id);
+        let result = exec(&mut s, &["choose-client"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                assert!(!list.items.is_empty());
+                assert!(list.items[0].display.contains("client"));
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_menu_with_items() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        let result = exec(
+            &mut s,
+            &["display-menu", "-T", "Test", "New", "c", "new-window", "Kill", "k", "kill-window"],
+        )
+        .unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::Menu(menu)) => {
+                assert_eq!(menu.title, "Test");
+                assert_eq!(menu.items.len(), 2);
+                assert_eq!(menu.items[0].name, "New");
+                assert_eq!(menu.items[0].key, Some('c'));
+                assert_eq!(menu.items[1].name, "Kill");
+            }
+            other => panic!("expected Overlay(Menu), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_menu_no_items() {
         let mut s = MockCommandServer::new();
         let result = exec(&mut s, &["display-menu"]);
         assert!(matches!(result.unwrap(), CommandResult::Ok));

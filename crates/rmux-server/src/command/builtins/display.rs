@@ -1,6 +1,7 @@
 //! Display and information commands.
 
 use crate::command::{CommandResult, CommandServer, get_option, has_flag};
+use crate::overlay::{ListItem, ListKind, ListOverlay, MenuItem, MenuOverlay, OverlayState};
 use crate::server::ServerError;
 
 /// display-message [-p] [-F format] [message]
@@ -196,66 +197,177 @@ fn big_digit(ch: char, row: usize) -> &'static str {
 /// choose-tree [-t target-pane]
 ///
 /// Interactive tree view of sessions and windows.
-/// Stub — interactive mode requires client-side UI overlay.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_choose_tree(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    // Fall back to listing sessions (non-interactive)
-    let sessions = server.list_sessions();
-    if sessions.is_empty() {
-        Ok(CommandResult::Output("(no sessions)\n".to_string()))
-    } else {
-        Ok(CommandResult::Output(sessions.join("\n") + "\n"))
+    let sessions = server.session_info_list();
+    let items: Vec<ListItem> = sessions
+        .into_iter()
+        .map(|(name, win_count, attached)| {
+            let attached_str =
+                if attached > 0 { format!(" (attached: {attached})") } else { String::new() };
+            ListItem {
+                display: format!("{name}: {win_count} windows{attached_str}"),
+                command: vec!["switch-client".into(), "-t".into(), name.clone()],
+                indent: 0,
+                collapsed: false,
+                hidden_children: 0,
+                deletable: true,
+                delete_command: vec!["kill-session".into(), "-t".into(), name],
+            }
+        })
+        .collect();
+
+    if items.is_empty() {
+        return Ok(CommandResult::Output("(no sessions)\n".to_string()));
     }
+
+    Ok(CommandResult::Overlay(OverlayState::List(ListOverlay {
+        items,
+        selected: 0,
+        scroll_offset: 0,
+        filter: String::new(),
+        filtering: false,
+        title: "choose-tree".into(),
+        kind: ListKind::Tree,
+    })))
 }
 
 /// choose-buffer [-t target-pane]
 ///
-/// Interactive buffer list. Stub — falls back to list-buffers.
+/// Interactive buffer list.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_choose_buffer(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    let buffers = server.list_buffers();
-    if buffers.is_empty() {
-        Ok(CommandResult::Output("(no buffers)\n".to_string()))
-    } else {
-        Ok(CommandResult::Output(buffers.join("\n") + "\n"))
+    let buffers = server.buffer_info_list();
+    let items: Vec<ListItem> = buffers
+        .into_iter()
+        .map(|(name, size, preview)| ListItem {
+            display: format!("{name}: {size} bytes \"{preview}\""),
+            command: vec!["paste-buffer".into(), "-b".into(), name.clone()],
+            indent: 0,
+            collapsed: false,
+            hidden_children: 0,
+            deletable: true,
+            delete_command: vec!["delete-buffer".into(), "-b".into(), name],
+        })
+        .collect();
+
+    if items.is_empty() {
+        return Ok(CommandResult::Output("(no buffers)\n".to_string()));
     }
+
+    Ok(CommandResult::Overlay(OverlayState::List(ListOverlay {
+        items,
+        selected: 0,
+        scroll_offset: 0,
+        filter: String::new(),
+        filtering: false,
+        title: "choose-buffer".into(),
+        kind: ListKind::Buffer,
+    })))
 }
 
 /// choose-client [-t target-pane]
 ///
-/// Interactive client list. Stub — falls back to list-clients.
+/// Interactive client list.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_choose_client(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    let clients = server.list_clients();
-    if clients.is_empty() {
-        Ok(CommandResult::Output("(no clients)\n".to_string()))
-    } else {
-        Ok(CommandResult::Output(clients.join("\n") + "\n"))
+    let clients = server.client_info_list();
+    let items: Vec<ListItem> = clients
+        .into_iter()
+        .map(|(id, session_name, size)| ListItem {
+            display: format!("client {id}: {session_name} [{size}]"),
+            command: vec!["switch-client".into(), "-t".into(), session_name.clone()],
+            indent: 0,
+            collapsed: false,
+            hidden_children: 0,
+            deletable: true,
+            delete_command: vec!["detach-client".into(), "-t".into(), id.to_string()],
+        })
+        .collect();
+
+    if items.is_empty() {
+        return Ok(CommandResult::Output("(no clients)\n".to_string()));
     }
+
+    Ok(CommandResult::Overlay(OverlayState::List(ListOverlay {
+        items,
+        selected: 0,
+        scroll_offset: 0,
+        filter: String::new(),
+        filtering: false,
+        title: "choose-client".into(),
+        kind: ListKind::Client,
+    })))
 }
 
 /// display-menu [-t target-pane] [-T title] [-x pos] [-y pos] name key command ...
 ///
-/// Show a menu. Stub — menus require client-side UI.
+/// Show a menu overlay.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_menu(
     args: &[String],
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    Ok(CommandResult::Ok)
+    let title = get_option(args, "-T").unwrap_or("Menu");
+    let x: u32 = get_option(args, "-x").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let y: u32 = get_option(args, "-y").and_then(|v| v.parse().ok()).unwrap_or(0);
+
+    // Parse positional args as triplets: name key command
+    let positional = crate::command::positional_args(args, &["-t", "-T", "-x", "-y"]);
+    let mut items = Vec::new();
+    let mut i = 0;
+    while i + 2 < positional.len() {
+        let name = positional[i];
+        let key_str = positional[i + 1];
+        let command_str = positional[i + 2];
+        let key = if key_str.len() == 1 { Some(key_str.chars().next().unwrap()) } else { None };
+
+        if name.is_empty() {
+            // Separator
+            items.push(MenuItem { name: String::new(), key: None, command: vec![] });
+        } else {
+            items.push(MenuItem {
+                name: name.to_string(),
+                key,
+                command: vec![command_str.to_string()],
+            });
+        }
+        i += 3;
+    }
+
+    if items.is_empty() {
+        return Ok(CommandResult::Ok);
+    }
+
+    // Find first non-separator for initial selection
+    let selected = items.iter().position(|it| !it.name.is_empty()).unwrap_or(0);
+    let width = items
+        .iter()
+        .map(|it| it.name.len() + it.key.map_or(0, |_| 4) + 2)
+        .max()
+        .unwrap_or(10)
+        .max(title.len() + 2) as u32;
+
+    Ok(CommandResult::Overlay(OverlayState::Menu(MenuOverlay {
+        items,
+        selected,
+        title: title.to_string(),
+        x,
+        y,
+        width,
+    })))
 }
 
 /// display-popup [-t target-pane] [-w width] [-h height] [command]

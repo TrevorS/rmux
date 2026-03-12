@@ -1564,6 +1564,7 @@ impl std::fmt::Debug for crate::command::CommandResult {
             CommandResult::RunShell(cmd) => write!(f, "RunShell({cmd:?})"),
             CommandResult::Suspend => write!(f, "Suspend"),
             CommandResult::TimedMessage(msg) => write!(f, "TimedMessage({msg:?})"),
+            CommandResult::Overlay(_) => write!(f, "Overlay(...)"),
         }
     }
 }

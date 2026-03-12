@@ -27,6 +27,7 @@ pub mod hooks;
 pub mod keybind;
 pub mod navigate;
 pub mod notify;
+pub mod overlay;
 pub mod pane;
 pub mod paste;
 pub mod render;
