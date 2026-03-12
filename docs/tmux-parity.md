@@ -1,6 +1,6 @@
 # tmux Parity Checklist
 
-Tracks rmux feature completeness relative to tmux 3.4. Updated 2026-03-10.
+Tracks rmux feature completeness relative to tmux 3.4. Updated 2026-03-11.
 
 Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 
@@ -245,7 +245,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `status-keys` — emacs/vi mode for prompts
 - [x] `mouse` — mouse support
 - [x] `renumber-windows` — renumber on close
-- [x] `automatic-rename` — auto-rename from process title
+- [x] `automatic-rename` — auto-rename from foreground process
 - [x] `display-time` — message display duration (defined, not timed)
 - [x] `repeat-time` — key repeat window (defined, not timed)
 - [x] `set-titles` / `set-titles-string` — xterm title updates
@@ -305,6 +305,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Synchronized output (mode 2026 defers redraw)
 - [x] Xterm title escape (OSC 2) via set-titles
 - [x] Cursor style passthrough (block/underline/bar)
+- [x] Status line strftime expansion (`%H:%M`, `%d-%b-%y`, etc.)
 - [x] Status line style changes within format strings (`#[fg=red]`)
 - [ ] Pane border status line (pane-border-status)
 - [ ] Window flags beyond `*` (e.g., `-`, `#`, `!`, `Z`, `M`)
@@ -442,10 +443,10 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Hooks system (set-hook/show-hooks)
 - [x] Environment variable management
 - [x] Mouse event handling (click, drag, scroll, SGR encoding)
-- [x] Automatic window rename via OSC 0/2
+- [x] Automatic window rename via OSC 0/2 and foreground process polling
 - [x] Clipboard via OSC 52
 - [x] ~60fps render tick
-- [x] Fuzzing infrastructure (8 targets)
+- [x] Fuzzing infrastructure (9 targets)
 - [x] Property-based testing (proptest)
 - [ ] Control mode (`tmux -C`)
 - [ ] Socket session naming (`tmux -L name`)
