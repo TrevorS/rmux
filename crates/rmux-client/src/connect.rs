@@ -16,6 +16,7 @@ pub async fn send_identify(
     writer: &mut MessageWriter,
     term: &str,
     cwd: &str,
+    flags: i64,
 ) -> Result<(), CodecError> {
     let ttyname = nix::unistd::ttyname(std::io::stdin())
         .map(|p| p.to_string_lossy().into_owned())
@@ -25,7 +26,7 @@ pub async fn send_identify(
     let pid = std::process::id() as i32;
 
     let msgs = build_identify_sequence(
-        0, // flags
+        flags,
         term,
         &ttyname,
         cwd,

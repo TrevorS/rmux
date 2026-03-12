@@ -64,6 +64,27 @@ impl AsFd for RawFdRef {
     }
 }
 
+/// Format a control mode `%output` notification.
+///
+/// tmux format: `%output %<pane_id> <octal-escaped-data>\n`
+/// Printable ASCII is passed through; backslash is escaped as `\\`;
+/// all other bytes are octal-escaped as `\NNN`.
+pub fn format_control_output(pane_id: u32, data: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = format!("%output %{pane_id} ");
+    for &b in data {
+        if b == b'\\' {
+            out.push_str("\\\\");
+        } else if (0x20..0x7F).contains(&b) {
+            out.push(b as char);
+        } else {
+            write!(out, "\\{b:03o}").ok();
+        }
+    }
+    out.push('\n');
+    out
+}
+
 /// The rmux server.
 pub struct Server {
     /// Socket path.
@@ -104,6 +125,8 @@ pub struct Server {
     message_log: std::collections::VecDeque<String>,
     /// Prompt history (most recent first).
     prompt_history: Vec<String>,
+    /// Queued control mode notifications to send on next tick.
+    control_notifications: Vec<(u32, String)>,
 }
 
 impl Server {
@@ -132,6 +155,7 @@ impl Server {
             tick_count: 0,
             message_log: std::collections::VecDeque::new(),
             prompt_history: Vec::new(),
+            control_notifications: Vec::new(),
         }
     }
 
@@ -203,6 +227,7 @@ impl Server {
                     }
                     // Expire timed messages (display-time)
                     self.expire_timed_messages();
+                    self.flush_control_notifications().await;
                     self.render_clients().await;
                 }
             }
@@ -251,10 +276,15 @@ impl Server {
             return;
         }
 
+        if Self::route_popup_output(&mut self.clients, pane_id, data) {
+            return;
+        }
+
         // Find the pane and feed data through its parser
         let mut notifications = Vec::new();
         let mut replies: Option<(i32, Vec<u8>)> = None;
         let mut alert_messages: Vec<(u32, String)> = Vec::new();
+        let mut pane_session_id: Option<u32> = None;
         for session in self.sessions.iter_mut() {
             for (&widx, window) in &mut session.windows {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
@@ -310,6 +340,7 @@ impl Server {
                     }
                     // Filter out Bell notifications (handled above, not needed downstream)
                     notifications.retain(|n| !matches!(n, rmux_core::screen::Notification::Bell));
+                    pane_session_id = Some(session.id);
                     // Mark attached clients for redraw — but defer if
                     // the pane is in synchronized output mode (mode 2026).
                     let in_sync =
@@ -333,6 +364,10 @@ impl Server {
             // SAFETY: raw_fd is a valid PTY master fd owned by the pane.
             let fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
             nix::unistd::write(fd, &reply_bytes).ok();
+        }
+        // Send %output to control mode clients
+        if let Some(sid) = pane_session_id {
+            self.send_control_output(sid, pane_id, data).await;
         }
         // Show alert messages as timed messages on attached clients
         let display_time_ms = self
@@ -384,6 +419,24 @@ impl Server {
     /// Handle a pane whose process has exited.
     async fn handle_pane_exit(&mut self, pane_id: u32) {
         tracing::info!("pane {pane_id} process exited");
+
+        // Check if this is a popup pane — close the popup overlay
+        let popup_client = self.clients.iter().find_map(|(&cid, c)| {
+            if let Some(crate::overlay::OverlayState::Popup(popup)) = &c.overlay {
+                if popup.pane_id == pane_id {
+                    return Some(cid);
+                }
+            }
+            None
+        });
+        if let Some(client_id) = popup_client {
+            self.cleanup_pane(pane_id);
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.overlay = None;
+                client.mark_redraw();
+            }
+            return;
+        }
 
         // Find which session/window owns this pane
         let location = self
@@ -495,10 +548,14 @@ impl Server {
                 let done = client.identify.process(&msg);
                 if done {
                     client.flags.insert(ClientFlags::IDENTIFIED);
+                    client.control_mode = (client.identify.flags
+                        & rmux_protocol::identify::flags::IDENTIFY_CONTROL)
+                        != 0;
                     tracing::info!(
-                        "client {client_id} identified: term={}, cwd={}",
+                        "client {client_id} identified: term={}, cwd={}, control={}",
                         client.identify.term,
                         client.identify.cwd,
+                        client.control_mode,
                     );
                 }
                 return;
@@ -600,6 +657,9 @@ impl Server {
             }
             Ok(CommandResult::Overlay(overlay_state)) => {
                 self.set_client_overlay(client_id, overlay_state);
+            }
+            Ok(CommandResult::SpawnPopup(config)) => {
+                self.spawn_popup(client_id, config);
             }
             Ok(CommandResult::RunShell(cmd)) => {
                 let output =
@@ -1570,6 +1630,15 @@ impl Server {
             let (action, consumed) = match overlay {
                 OverlayState::List(list) => process_list_input(list, remaining),
                 OverlayState::Menu(menu) => process_menu_input(menu, remaining),
+                OverlayState::Popup(popup) => {
+                    // Forward input to the popup's PTY
+                    if popup.pty_fd >= 0 {
+                        // SAFETY: pty_fd is a valid open fd managed by the popup lifecycle
+                        let fd = unsafe { BorrowedFd::borrow_raw(popup.pty_fd) };
+                        let _ = nix::unistd::write(fd, remaining);
+                    }
+                    crate::overlay::process_popup_input(popup, remaining)
+                }
             };
 
             match action {
@@ -1914,7 +1983,7 @@ impl Server {
             .clients
             .values_mut()
             .filter_map(|c| {
-                if c.needs_redraw() {
+                if c.needs_redraw() && !c.control_mode {
                     // Timed message takes precedence over prompt
                     let prompt = if let Some((msg, _)) = &c.timed_message {
                         Some(msg.clone())
@@ -2118,6 +2187,143 @@ impl Server {
         self.pty_tasks.insert(pane_id, handle);
 
         Ok(())
+    }
+
+    /// Queue a control mode notification for a session's control clients.
+    fn queue_control_notification(&mut self, session_id: u32, notification: String) {
+        self.control_notifications.push((session_id, notification));
+    }
+
+    /// Drain and send all queued control notifications.
+    async fn flush_control_notifications(&mut self) {
+        let notifications: Vec<(u32, String)> = self.control_notifications.drain(..).collect();
+        for (session_id, text) in notifications {
+            let cids: Vec<u64> = self
+                .clients
+                .values()
+                .filter(|c| c.control_mode && c.session_id == Some(session_id) && c.is_attached())
+                .map(|c| c.id)
+                .collect();
+            if !cids.is_empty() {
+                let msg = Message::OutputData(text.into_bytes());
+                for cid in cids {
+                    if let Some(client) = self.clients.get_mut(&cid) {
+                        client.send(&msg).await.ok();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Send `%output` notification to all control mode clients for a session.
+    async fn send_control_output(&mut self, session_id: u32, pane_id: u32, data: &[u8]) {
+        let control_clients: Vec<u64> = self
+            .clients
+            .values()
+            .filter(|c| c.control_mode && c.session_id == Some(session_id) && c.is_attached())
+            .map(|c| c.id)
+            .collect();
+        if control_clients.is_empty() {
+            return;
+        }
+        let notification = Self::format_control_output(pane_id, data);
+        let msg = Message::OutputData(notification.into_bytes());
+        for cid in control_clients {
+            if let Some(client) = self.clients.get_mut(&cid) {
+                client.send(&msg).await.ok();
+            }
+        }
+    }
+
+    /// Format a control mode `%output` notification.
+    ///
+    /// tmux format: `%output %<pane_id> <octal-escaped-data>\n`
+    fn format_control_output(pane_id: u32, data: &[u8]) -> String {
+        format_control_output(pane_id, data)
+    }
+
+    /// Route PTY output to a popup pane if one matches. Returns true if handled.
+    fn route_popup_output(
+        clients: &mut HashMap<u64, ServerClient>,
+        pane_id: u32,
+        data: &[u8],
+    ) -> bool {
+        for client in clients.values_mut() {
+            if let Some(crate::overlay::OverlayState::Popup(popup)) = &mut client.overlay {
+                if popup.pane_id == pane_id {
+                    popup.parser.parse(data, &mut popup.screen);
+                    client.mark_redraw();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Spawn a popup window for a client with an embedded PTY.
+    fn spawn_popup(&mut self, client_id: u64, config: command::PopupConfig) {
+        use crate::overlay::{OverlayState, PopupOverlay};
+
+        let pane_id = crate::pane::Pane::new(config.width, config.height, 0).id;
+
+        // Get CWD from current session
+        let cwd = self
+            .clients
+            .get(&client_id)
+            .and_then(|c| c.session_id)
+            .and_then(|sid| self.sessions.find_by_id(sid))
+            .map_or_else(|| "/tmp".to_string(), |s| s.cwd.clone());
+
+        // Spawn PTY process
+        let default_shell = pty::default_shell();
+        let shell = config.command.as_deref().unwrap_or(&default_shell);
+        let pty_result = pty::Pty::open(config.width as u16, config.height as u16);
+        let Ok(pty_pair) = pty_result else {
+            tracing::warn!("popup: failed to open PTY");
+            return;
+        };
+
+        let Ok(spawned) = pty_pair.spawn_shell(shell, &cwd) else {
+            tracing::warn!("popup: failed to spawn process");
+            return;
+        };
+
+        let master_raw = spawned.master_fd();
+        if let Err(e) = pty::set_nonblocking(master_raw) {
+            tracing::warn!("popup: failed to set non-blocking: {e}");
+            return;
+        }
+
+        // Store PTY fd
+        self.pty_fds.insert(pane_id, spawned.master);
+
+        // Spawn async read task
+        let tx = self.pty_tx.clone();
+        let handle = tokio::spawn(async move {
+            pty_read_task(master_raw, pane_id, tx).await;
+        });
+        self.pty_tasks.insert(pane_id, handle);
+
+        // Create the popup overlay
+        let popup = PopupOverlay {
+            x: config.x,
+            y: config.y,
+            width: config.width,
+            height: config.height,
+            title: config.title,
+            has_border: config.has_border,
+            close_on_exit: config.close_on_exit,
+            pane_id,
+            screen: rmux_core::screen::Screen::new(config.width, config.height, 0),
+            parser: rmux_terminal::input::InputParser::new(),
+            pty_fd: master_raw,
+            pid: spawned.pid.as_raw() as u32,
+        };
+
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.overlay = Some(OverlayState::Popup(Box::new(popup)));
+            client.mark_redraw();
+        }
     }
 
     /// Clean up PTY resources for a pane.
@@ -2339,7 +2545,9 @@ impl CommandServer for Server {
             .sessions
             .find_by_name_mut(name)
             .ok_or_else(|| ServerError::Command(format!("session not found: {name}")))?;
+        let sid = session.id;
         session.name = new_name.to_string();
+        self.queue_control_notification(sid, format!("%session-renamed {new_name}\n"));
         Ok(())
     }
 
@@ -2374,6 +2582,7 @@ impl CommandServer for Server {
         self.spawn_pane_process(pane_id, sx, pane_height, cwd)?;
 
         self.fire_hook("after-new-window");
+        self.queue_control_notification(session_id, format!("%window-add @{window_idx}\n"));
         Ok((window_idx, pane_id))
     }
 
@@ -2404,6 +2613,7 @@ impl CommandServer for Server {
 
         // Mark clients for redraw
         self.mark_clients_redraw(session_id);
+        self.queue_control_notification(session_id, format!("%window-close @{window_idx}\n"));
 
         Ok(())
     }
@@ -2421,6 +2631,7 @@ impl CommandServer for Server {
         session.select_window(window_idx);
         self.mark_clients_redraw(session_id);
         self.fire_hook("after-select-window");
+        self.queue_control_notification(session_id, format!("%window-changed @{window_idx}\n"));
         Ok(())
     }
 
@@ -2505,6 +2716,10 @@ impl CommandServer for Server {
 
         window.name = name.to_string();
         self.mark_clients_redraw(session_id);
+        self.queue_control_notification(
+            session_id,
+            format!("%window-renamed @{window_idx} {name}\n"),
+        );
         Ok(())
     }
 
@@ -3957,6 +4172,12 @@ impl CommandServer for Server {
                 session.attached += 1;
             }
         }
+        if let Some(name) = self.sessions.find_by_id(session_id).map(|s| s.name.clone()) {
+            self.queue_control_notification(
+                session_id,
+                format!("%session-changed ${session_id} {name}\n"),
+            );
+        }
         Ok(())
     }
 
@@ -4130,6 +4351,24 @@ impl CommandServer for Server {
             })
             .collect()
     }
+
+    fn close_popup(&mut self) {
+        let client_id = self.command_client;
+        let popup_pane_id = self.clients.get(&client_id).and_then(|c| {
+            if let Some(crate::overlay::OverlayState::Popup(popup)) = &c.overlay {
+                Some(popup.pane_id)
+            } else {
+                None
+            }
+        });
+        if let Some(pane_id) = popup_pane_id {
+            self.cleanup_pane(pane_id);
+        }
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.overlay = None;
+            client.mark_redraw();
+        }
+    }
 }
 
 /// Format an option value as a display string.
@@ -4191,5 +4430,84 @@ mod tests {
         // Should be a short name like "bash", "zsh", "sh" — not a full path
         assert!(!name.is_empty());
         assert!(!name.contains('/'), "should be basename, not full path: {name}");
+    }
+
+    // ============================================================
+    // format_control_output
+    // ============================================================
+
+    #[test]
+    fn control_output_printable_ascii() {
+        let result = format_control_output(42, b"hello world");
+        assert_eq!(result, "%output %42 hello world\n");
+    }
+
+    #[test]
+    fn control_output_empty_data() {
+        let result = format_control_output(0, b"");
+        assert_eq!(result, "%output %0 \n");
+    }
+
+    #[test]
+    fn control_output_backslash_escaped() {
+        let result = format_control_output(1, b"a\\b");
+        assert_eq!(result, "%output %1 a\\\\b\n");
+    }
+
+    #[test]
+    fn control_output_control_chars_octal() {
+        let result = format_control_output(5, b"\x1b[0m");
+        assert_eq!(result, "%output %5 \\033[0m\n");
+    }
+
+    #[test]
+    fn control_output_null_byte_octal() {
+        let result = format_control_output(0, &[0x00]);
+        assert_eq!(result, "%output %0 \\000\n");
+    }
+
+    #[test]
+    fn control_output_newline_octal() {
+        let result = format_control_output(0, b"line1\nline2");
+        assert_eq!(result, "%output %0 line1\\012line2\n");
+    }
+
+    #[test]
+    fn control_output_tab_octal() {
+        let result = format_control_output(0, b"a\tb");
+        assert_eq!(result, "%output %0 a\\011b\n");
+    }
+
+    #[test]
+    fn control_output_del_octal() {
+        // DEL (0x7F) is not printable, should be octal
+        let result = format_control_output(0, &[0x7F]);
+        assert_eq!(result, "%output %0 \\177\n");
+    }
+
+    #[test]
+    fn control_output_high_bytes_octal() {
+        let result = format_control_output(0, &[0xFF, 0x80]);
+        assert_eq!(result, "%output %0 \\377\\200\n");
+    }
+
+    #[test]
+    fn control_output_mixed_content() {
+        // Mix of printable, backslash, control, and high bytes
+        let result = format_control_output(99, b"OK\x1b\\END\xff");
+        assert_eq!(result, "%output %99 OK\\033\\\\END\\377\n");
+    }
+
+    #[test]
+    fn control_output_space_is_printable() {
+        let result = format_control_output(0, b" ");
+        assert_eq!(result, "%output %0  \n");
+    }
+
+    #[test]
+    fn control_output_tilde_is_printable() {
+        // 0x7E (~) is the last printable ASCII char
+        let result = format_control_output(0, b"~");
+        assert_eq!(result, "%output %0 ~\n");
     }
 }

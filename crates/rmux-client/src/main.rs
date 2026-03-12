@@ -59,8 +59,10 @@ fn main() {
         .build()
         .expect("failed to create tokio runtime");
 
-    let exit_code =
-        rt.block_on(async { run_client(&path, &command_args, opts.no_start_server).await });
+    let control_mode = opts.control_mode;
+    let exit_code = rt.block_on(async {
+        run_client(&path, &command_args, opts.no_start_server, control_mode).await
+    });
 
     match exit_code {
         Ok(code) => process::exit(code),
@@ -75,6 +77,7 @@ async fn run_client(
     socket_path: &std::path::Path,
     command_args: &[&str],
     no_start_server: bool,
+    control_mode: bool,
 ) -> Result<i32, ClientError> {
     // Check if we need to start the server
     let needs_server = !no_start_server
@@ -120,13 +123,23 @@ async fn run_client(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "/".to_string());
 
-    connect::send_identify(&mut writer, &term, &cwd).await.map_err(ClientError::IdentifyFailed)?;
+    let mut identify_flags = 0i64;
+    if control_mode {
+        identify_flags |= rmux_protocol::identify::flags::IDENTIFY_CONTROL;
+    }
+    connect::send_identify(&mut writer, &term, &cwd, identify_flags)
+        .await
+        .map_err(ClientError::IdentifyFailed)?;
 
     // Send command and handle response
     match dispatch::run_command(&mut reader, &mut writer, command_args).await? {
         -1 => {
-            // Server said Ready - switch to attached mode
-            dispatch::run_attached(&mut reader, &mut writer).await?;
+            // Server said Ready - switch to attached/control mode
+            if control_mode {
+                dispatch::run_control(&mut reader, &mut writer).await?;
+            } else {
+                dispatch::run_attached(&mut reader, &mut writer).await?;
+            }
             Ok(0)
         }
         code => Ok(code),

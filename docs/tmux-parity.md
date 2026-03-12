@@ -95,11 +95,11 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `clear-prompt-history` — clears prompt history
 
 ### Interactive UI (overlay rendering)
-- [x] `choose-tree` — interactive session/window tree overlay
+- [x] `choose-tree` — interactive session/window tree with expand/collapse (`-s` sessions-only)
 - [x] `choose-client` — interactive client picker overlay
 - [x] `display-menu` / `menu` — popup menu overlay
-- [ ] `display-popup` / `popup` — popup window (no-op)
-- [ ] `customize-mode` — options browser (no-op)
+- [x] `display-popup` / `popup` — popup window with PTY, border, title
+- [x] `customize-mode` — options browser
 
 ### Server & Config
 - [x] `kill-server` — shutdown server
@@ -392,9 +392,9 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] InputData / OutputData bidirectional streaming
 - [x] SCM_RIGHTS fd passing
 - [x] Message framing with type codes matching tmux
-- [ ] Full imsg header field compatibility (pid, flags)
-- [ ] Control mode (`-C` flag)
-- [ ] Window/pane change notifications
+- [x] Full imsg header field compatibility (pid, flags, peerid)
+- [x] Control mode (`-C` flag)
+- [x] Window/pane change notifications
 
 ---
 
@@ -432,10 +432,9 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `cursor_flag`, `insert_flag`, `keypad_flag`, `mouse_any_flag` — terminal mode flags
 - [x] `pane_tty` — PTY device name
 
-### Missing Variables
+### Recently Added Variables
 - [x] `session_activity` — session last activity timestamp
 - [x] `session_alerts` — comma-separated list of windows with bell/activity flags
-- [x] `pane_tty` — PTY device name (via `ptsname`/procfs)
 - [x] `pane_start_command` — command the pane was started with
 - [x] `client_activity` — client last activity timestamp
 
@@ -455,9 +454,9 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Automatic window rename via OSC 0/2 and foreground process polling
 - [x] Clipboard via OSC 52
 - [x] ~60fps render tick
-- [x] Fuzzing infrastructure (9 targets)
+- [x] Fuzzing infrastructure (11 targets)
 - [x] Property-based testing (proptest)
-- [ ] Control mode (`tmux -C`)
+- [x] Control mode (`rmux -C` with `%output`, `%session-changed`, `%window-add/close/changed/renamed`, `%session-renamed` notifications)
 - [x] Socket session naming (`-L name`)
 - [ ] Multiple server socket support
 - [ ] Terminal info database integration (terminfo/termcap)

@@ -34,6 +34,28 @@ pub enum CommandResult {
     TimedMessage(String),
     /// Open an overlay on the client (choose-tree, display-menu, etc.).
     Overlay(crate::overlay::OverlayState),
+    /// Spawn a popup window with an embedded PTY process.
+    SpawnPopup(PopupConfig),
+}
+
+/// Configuration for spawning a popup window.
+pub struct PopupConfig {
+    /// X position (column offset).
+    pub x: u32,
+    /// Y position (row offset).
+    pub y: u32,
+    /// Content area width.
+    pub width: u32,
+    /// Content area height.
+    pub height: u32,
+    /// Title for the popup border.
+    pub title: String,
+    /// Whether to draw a border.
+    pub has_border: bool,
+    /// Close the popup when the command exits.
+    pub close_on_exit: bool,
+    /// Shell command to run (None = default shell).
+    pub command: Option<String>,
 }
 
 /// A registered command handler.
@@ -393,6 +415,10 @@ pub trait CommandServer {
     /// Get structured client info for choose-client overlay.
     /// Returns Vec of (client_id, session_name, terminal_size).
     fn client_info_list(&self) -> Vec<(u64, String, String)>;
+
+    // --- Popup ---
+    /// Close any active popup overlay on the current client.
+    fn close_popup(&mut self);
 }
 
 /// Look up a command by name or unambiguous prefix (matching tmux behavior).

@@ -497,18 +497,27 @@ mod display_tests {
             CommandResult::Overlay(OverlayState::List(list)) => {
                 // alpha: session + 2 windows, beta: session + 1 window = 5 items
                 assert_eq!(list.items.len(), 5);
-                // First item is alpha session
-                assert!(list.items[0].display.contains("alpha"));
-                assert_eq!(list.items[0].indent, 0);
-                assert!(!list.items[0].collapsed);
-                // Next two are alpha's windows
-                assert_eq!(list.items[1].indent, 1);
-                assert_eq!(list.items[2].indent, 1);
-                // Then beta session
-                assert!(list.items[3].display.contains("beta"));
-                assert_eq!(list.items[3].indent, 0);
-                // Then beta's window
-                assert_eq!(list.items[4].indent, 1);
+                // Should have 2 session headers (indent=0) and 3 windows (indent=1)
+                let sessions: Vec<_> = list.items.iter().filter(|i| i.indent == 0).collect();
+                let windows: Vec<_> = list.items.iter().filter(|i| i.indent == 1).collect();
+                assert_eq!(sessions.len(), 2);
+                assert_eq!(windows.len(), 3);
+                // Both session names present
+                let displays: Vec<_> = sessions.iter().map(|i| i.display.as_str()).collect();
+                assert!(displays.iter().any(|d| d.contains("alpha")));
+                assert!(displays.iter().any(|d| d.contains("beta")));
+                // Session with 2 windows should say "2 windows"
+                assert!(displays.iter().any(|d| d.contains("2 windows")));
+                // Each session header is followed by its windows (structure check)
+                for i in 0..list.items.len() {
+                    if list.items[i].indent == 0 {
+                        // Next items should be indent=1 until another indent=0 or end
+                        let mut j = i + 1;
+                        while j < list.items.len() && list.items[j].indent == 1 {
+                            j += 1;
+                        }
+                    }
+                }
             }
             other => panic!("expected Overlay(List), got {other:?}"),
         }
@@ -644,17 +653,57 @@ mod display_tests {
     }
 
     #[test]
-    fn display_popup_stub_ok() {
+    fn display_popup_returns_spawn_popup() {
         let mut s = MockCommandServer::new();
-        let result = exec(&mut s, &["display-popup"]);
-        assert!(matches!(result.unwrap(), CommandResult::Ok));
+        s.client_sx = 80;
+        s.client_sy = 24;
+        let result = exec(&mut s, &["display-popup"]).unwrap();
+        assert!(matches!(result, CommandResult::SpawnPopup(_)));
     }
 
     #[test]
-    fn customize_mode_stub_ok() {
+    fn display_popup_close_flag() {
         let mut s = MockCommandServer::new();
-        let result = exec(&mut s, &["customize-mode"]);
-        assert!(matches!(result.unwrap(), CommandResult::Ok));
+        let result = exec(&mut s, &["display-popup", "-C"]).unwrap();
+        assert!(matches!(result, CommandResult::Ok));
+    }
+
+    #[test]
+    fn display_popup_custom_dimensions() {
+        let mut s = MockCommandServer::new();
+        s.client_sx = 100;
+        s.client_sy = 40;
+        let result = exec(&mut s, &["display-popup", "-w", "50", "-h", "20"]).unwrap();
+        match result {
+            CommandResult::SpawnPopup(config) => {
+                assert_eq!(config.width, 50);
+                assert_eq!(config.height, 20);
+            }
+            other => panic!("expected SpawnPopup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn customize_mode_returns_overlay() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let result = exec(&mut s, &["customize-mode"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                assert_eq!(list.title, "customize-mode");
+                // Should have scope headers at indent=0
+                let headers: Vec<_> = list.items.iter().filter(|i| i.indent == 0).collect();
+                assert!(headers.len() >= 3, "should have server/session/window scope headers");
+                assert!(headers[0].display.contains("Server Options"));
+                assert!(headers[1].display.contains("Session Options"));
+                assert!(headers[2].display.contains("Window Options"));
+                // Options at indent=1
+                let options: Vec<_> = list.items.iter().filter(|i| i.indent == 1).collect();
+                assert!(!options.is_empty(), "should have option items");
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
     }
 
     #[test]

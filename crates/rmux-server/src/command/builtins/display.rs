@@ -396,28 +396,171 @@ pub fn cmd_display_menu(
     })))
 }
 
-/// display-popup [-t target-pane] [-w width] [-h height] [command]
+/// display-popup [-B] [-C] [-E|-EE] [-T title] [-t target-pane]
+///               [-w width] [-h height] [-x pos] [-y pos] [command]
 ///
-/// Show a popup window. Stub — popups require client-side UI.
+/// Show a popup window with an embedded shell or command.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_popup(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    Ok(CommandResult::Ok)
+    // -C closes any existing popup
+    if has_flag(args, "-C") {
+        server.close_popup();
+        return Ok(CommandResult::Ok);
+    }
+
+    let title = get_option(args, "-T").unwrap_or("").to_string();
+    let has_border = !has_flag(args, "-B"); // -B disables border
+    let close_on_exit = has_flag(args, "-E") || has_flag(args, "-EE");
+
+    // Parse dimensions — support percentage or absolute values
+    let client_sx = server.client_sx();
+    let client_sy = server.client_sy().saturating_sub(1); // reserve status line
+
+    let width = get_option(args, "-w")
+        .map_or(client_sx * 80 / 100, |v| parse_popup_dimension(v, client_sx))
+        .max(1);
+    let height = get_option(args, "-h")
+        .map_or(client_sy * 80 / 100, |v| parse_popup_dimension(v, client_sy))
+        .max(1);
+
+    // Position — default centers the popup
+    let x = get_option(args, "-x")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| client_sx.saturating_sub(width + u32::from(has_border) * 2) / 2);
+    let y = get_option(args, "-y")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| client_sy.saturating_sub(height + u32::from(has_border) * 2) / 2);
+
+    // Collect the command (remaining positional args)
+    let positional = crate::command::positional_args(args, &["-t", "-T", "-w", "-h", "-x", "-y"]);
+    let command = if positional.is_empty() { None } else { Some(positional.join(" ")) };
+
+    Ok(CommandResult::SpawnPopup(crate::command::PopupConfig {
+        x,
+        y,
+        width,
+        height,
+        title,
+        has_border,
+        close_on_exit,
+        command,
+    }))
+}
+
+/// Parse a popup dimension value — either absolute or percentage (e.g., "80%").
+fn parse_popup_dimension(value: &str, base: u32) -> u32 {
+    if let Some(pct) = value.strip_suffix('%') {
+        pct.parse::<u32>().unwrap_or(80) * base / 100
+    } else {
+        value.parse::<u32>().unwrap_or(base * 80 / 100)
+    }
 }
 
 /// customize-mode [-t target-pane]
 ///
-/// Interactive options browser. Stub — requires client-side UI.
+/// Interactive options browser showing all options by scope.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_customize_mode(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    Ok(CommandResult::Ok)
+    let mut items = Vec::new();
+
+    // Server options
+    let server_opts = server.show_options("server", None);
+    items.push(ListItem {
+        display: format!("Server Options ({} items)", server_opts.len()),
+        command: vec![],
+        indent: 0,
+        collapsed: false,
+        hidden_children: 0,
+        deletable: false,
+        delete_command: vec![],
+    });
+    for opt in &server_opts {
+        let (key, value) = opt.split_once(' ').unwrap_or((opt, ""));
+        items.push(ListItem {
+            display: format!("{key}: {value}"),
+            command: vec!["set-option".into(), "-g".into(), key.to_string(), value.to_string()],
+            indent: 1,
+            collapsed: false,
+            hidden_children: 0,
+            deletable: false,
+            delete_command: vec![],
+        });
+    }
+
+    // Session options
+    let session_id = server.client_session_id();
+    let session_opts = server.show_options("session", session_id);
+    let session_label = if let Some(sid) = session_id {
+        server.session_name_for_id(sid).unwrap_or_else(|| sid.to_string())
+    } else {
+        "none".to_string()
+    };
+    items.push(ListItem {
+        display: format!("Session Options [{session_label}] ({} items)", session_opts.len()),
+        command: vec![],
+        indent: 0,
+        collapsed: false,
+        hidden_children: 0,
+        deletable: false,
+        delete_command: vec![],
+    });
+    for opt in &session_opts {
+        let (key, value) = opt.split_once(' ').unwrap_or((opt, ""));
+        items.push(ListItem {
+            display: format!("{key}: {value}"),
+            command: vec!["set-option".into(), key.to_string(), value.to_string()],
+            indent: 1,
+            collapsed: false,
+            hidden_children: 0,
+            deletable: false,
+            delete_command: vec![],
+        });
+    }
+
+    // Window options
+    let window_opts = server.show_options("window", session_id);
+    items.push(ListItem {
+        display: format!("Window Options ({} items)", window_opts.len()),
+        command: vec![],
+        indent: 0,
+        collapsed: false,
+        hidden_children: 0,
+        deletable: false,
+        delete_command: vec![],
+    });
+    for opt in &window_opts {
+        let (key, value) = opt.split_once(' ').unwrap_or((opt, ""));
+        items.push(ListItem {
+            display: format!("{key}: {value}"),
+            command: vec!["set-option".into(), "-w".into(), key.to_string(), value.to_string()],
+            indent: 1,
+            collapsed: false,
+            hidden_children: 0,
+            deletable: false,
+            delete_command: vec![],
+        });
+    }
+
+    if items.is_empty() {
+        return Ok(CommandResult::Output("(no options)\n".to_string()));
+    }
+
+    Ok(CommandResult::Overlay(OverlayState::List(ListOverlay {
+        items,
+        selected: 0,
+        scroll_offset: 0,
+        filter: String::new(),
+        filtering: false,
+        title: "customize-mode".into(),
+        kind: ListKind::Tree,
+    })))
 }
 
 /// clear-prompt-history
@@ -548,4 +691,62 @@ pub fn cmd_lock_client(
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
     Ok(CommandResult::Ok)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============================================================
+    // parse_popup_dimension
+    // ============================================================
+
+    #[test]
+    fn popup_dimension_absolute() {
+        assert_eq!(parse_popup_dimension("40", 100), 40);
+    }
+
+    #[test]
+    fn popup_dimension_percentage() {
+        assert_eq!(parse_popup_dimension("50%", 100), 50);
+    }
+
+    #[test]
+    fn popup_dimension_percentage_rounding() {
+        // 33% of 100 = 33
+        assert_eq!(parse_popup_dimension("33%", 100), 33);
+    }
+
+    #[test]
+    fn popup_dimension_100_percent() {
+        assert_eq!(parse_popup_dimension("100%", 120), 120);
+    }
+
+    #[test]
+    fn popup_dimension_0_percent() {
+        assert_eq!(parse_popup_dimension("0%", 100), 0);
+    }
+
+    #[test]
+    fn popup_dimension_invalid_falls_back() {
+        // Invalid absolute falls back to 80% of base
+        assert_eq!(parse_popup_dimension("abc", 100), 80);
+    }
+
+    #[test]
+    fn popup_dimension_invalid_percent_falls_back() {
+        // Invalid percentage value falls back to 80% of base
+        assert_eq!(parse_popup_dimension("abc%", 100), 80);
+    }
+
+    #[test]
+    fn popup_dimension_large_base() {
+        assert_eq!(parse_popup_dimension("75%", 200), 150);
+    }
+
+    #[test]
+    fn popup_dimension_zero_base() {
+        assert_eq!(parse_popup_dimension("50%", 0), 0);
+        assert_eq!(parse_popup_dimension("abc", 0), 0);
+    }
 }

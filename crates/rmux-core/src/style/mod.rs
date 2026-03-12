@@ -244,4 +244,176 @@ mod tests {
         let s3 = Style { attrs: Attrs::UNDERSCORE, us: Color::RED, ..Style::DEFAULT };
         assert!(s1.looks_equal(&s3));
     }
+
+    // ============================================================
+    // parse_style — additional coverage
+    // ============================================================
+
+    #[test]
+    fn parse_style_underline_color() {
+        let s = parse_style("us=cyan,underscore");
+        assert_eq!(s.us, Color::CYAN);
+        assert!(s.attrs.contains(Attrs::UNDERSCORE));
+    }
+
+    #[test]
+    fn parse_style_all_attrs() {
+        let s =
+            parse_style("bold,dim,underscore,blink,reverse,hidden,italics,strikethrough,overline");
+        assert!(s.attrs.contains(Attrs::BOLD));
+        assert!(s.attrs.contains(Attrs::DIM));
+        assert!(s.attrs.contains(Attrs::UNDERSCORE));
+        assert!(s.attrs.contains(Attrs::BLINK));
+        assert!(s.attrs.contains(Attrs::REVERSE));
+        assert!(s.attrs.contains(Attrs::HIDDEN));
+        assert!(s.attrs.contains(Attrs::ITALICS));
+        assert!(s.attrs.contains(Attrs::STRIKETHROUGH));
+        assert!(s.attrs.contains(Attrs::OVERLINE));
+    }
+
+    #[test]
+    fn parse_style_noattr_clears() {
+        let s = parse_style("bold,italics,noattr");
+        assert!(s.attrs.is_empty());
+    }
+
+    #[test]
+    fn parse_style_none_clears() {
+        let s = parse_style("bold,none");
+        assert!(s.attrs.is_empty());
+    }
+
+    #[test]
+    fn parse_style_color_spelling() {
+        let s = parse_style("fg=color100");
+        assert_eq!(s.fg, Color::Palette(100));
+    }
+
+    #[test]
+    fn parse_style_empty_string() {
+        let s = parse_style("");
+        assert_eq!(s, Style::DEFAULT);
+    }
+
+    #[test]
+    fn parse_style_unknown_ignored() {
+        let s = parse_style("bold,notarealattr,italics");
+        assert!(s.attrs.contains(Attrs::BOLD));
+        assert!(s.attrs.contains(Attrs::ITALICS));
+    }
+
+    #[test]
+    fn parse_style_whitespace_trimmed() {
+        let s = parse_style(" bold , fg=red ");
+        assert!(s.attrs.contains(Attrs::BOLD));
+        assert_eq!(s.fg, Color::RED);
+    }
+
+    #[test]
+    fn parse_style_all_named_colors() {
+        for (name, expected) in [
+            ("black", Color::BLACK),
+            ("red", Color::RED),
+            ("green", Color::GREEN),
+            ("yellow", Color::YELLOW),
+            ("blue", Color::BLUE),
+            ("magenta", Color::MAGENTA),
+            ("cyan", Color::CYAN),
+            ("white", Color::WHITE),
+            ("brightblack", Color::BRIGHT_BLACK),
+            ("brightred", Color::BRIGHT_RED),
+            ("brightgreen", Color::BRIGHT_GREEN),
+            ("brightyellow", Color::BRIGHT_YELLOW),
+            ("brightblue", Color::BRIGHT_BLUE),
+            ("brightmagenta", Color::BRIGHT_MAGENTA),
+            ("brightcyan", Color::BRIGHT_CYAN),
+            ("brightwhite", Color::BRIGHT_WHITE),
+        ] {
+            let s = parse_style(&format!("fg={name}"));
+            assert_eq!(s.fg, expected, "failed for color {name}");
+        }
+    }
+
+    #[test]
+    fn parse_style_hex_all_channels() {
+        let s = parse_style("bg=#1a2b3c");
+        assert_eq!(s.bg, Color::Rgb { r: 0x1a, g: 0x2b, b: 0x3c });
+    }
+
+    #[test]
+    fn parse_style_hex_bad_length_ignored() {
+        let s = parse_style("fg=#abc");
+        assert_eq!(s.fg, Color::Default); // Not 6 hex chars
+    }
+
+    #[test]
+    fn parse_style_hex_bad_hex_ignored() {
+        let s = parse_style("fg=#gggggg");
+        assert_eq!(s.fg, Color::Default);
+    }
+
+    #[test]
+    fn parse_style_colour_boundary() {
+        let s = parse_style("fg=colour0");
+        assert_eq!(s.fg, Color::Palette(0));
+        let s = parse_style("fg=colour255");
+        assert_eq!(s.fg, Color::Palette(255));
+    }
+
+    #[test]
+    fn parse_style_fg_default() {
+        let s = parse_style("fg=default");
+        assert_eq!(s.fg, Color::Default);
+    }
+
+    #[test]
+    fn parse_style_default_after_attrs() {
+        // "default" resets everything, including previously set attrs
+        let s = parse_style("fg=red,bold,default");
+        assert_eq!(s, Style::DEFAULT);
+    }
+
+    #[test]
+    fn parse_style_multiple_commas() {
+        let s = parse_style("bold,,italics,,,");
+        assert!(s.attrs.contains(Attrs::BOLD));
+        assert!(s.attrs.contains(Attrs::ITALICS));
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn parse_style_never_panics(input in ".*") {
+                let _ = parse_style(&input);
+            }
+
+            #[test]
+            fn parse_style_ascii_never_panics(
+                input in proptest::collection::vec(any::<u8>(), 0..200)
+            ) {
+                if let Ok(s) = std::str::from_utf8(&input) {
+                    let _ = parse_style(s);
+                }
+            }
+
+            #[test]
+            fn parse_style_structured(
+                fg in proptest::option::of("(red|green|blue|cyan|magenta|yellow|white|black|default|colour[0-9]{1,3}|#[0-9a-f]{6})"),
+                bg in proptest::option::of("(red|green|blue|cyan|magenta|yellow|white|black|default|colour[0-9]{1,3}|#[0-9a-f]{6})"),
+                attrs in proptest::collection::vec("(bold|dim|underscore|blink|reverse|hidden|italics|strikethrough|overline|none|noattr|default)", 0..5),
+            ) {
+                let mut parts = Vec::new();
+                if let Some(f) = &fg { parts.push(format!("fg={f}")); }
+                if let Some(b) = &bg { parts.push(format!("bg={b}")); }
+                parts.extend(attrs);
+                let style_str = parts.join(",");
+                let result = parse_style(&style_str);
+                // Just verify it returns a valid Style without panicking
+                let _ = result.is_default();
+            }
+        }
+    }
 }

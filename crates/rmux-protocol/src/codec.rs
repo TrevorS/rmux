@@ -1,9 +1,7 @@
 //! imsg-compatible message encoding and decoding.
 //!
 //! tmux uses OpenBSD's imsg protocol over Unix domain sockets. Each message has a
-//! fixed-size header followed by variable-length data.
-//!
-//! TODO: File descriptor passing via SCM_RIGHTS ancillary data is not yet implemented.
+//! fixed-size 16-byte header (type, len, flags, peerid, pid) followed by variable-length data.
 
 use crate::message::{Message, MessageType, MsgCommand};
 use bytes::{BufMut, BytesMut};
@@ -14,6 +12,24 @@ pub const IMSG_HEADER_SIZE: usize = 16;
 
 /// Maximum imsg data size.
 pub const IMSG_MAX_DATA: usize = 16384;
+
+/// imsg header flag: file descriptor attached via SCM_RIGHTS.
+pub const IMSG_HEADER_FLAG_FD: u16 = 0x01;
+
+/// Parsed imsg header fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImsgHeader {
+    /// Message type code.
+    pub msg_type: u32,
+    /// Total message length (header + data).
+    pub len: u16,
+    /// Header flags (e.g., `IMSG_HEADER_FLAG_FD`).
+    pub flags: u16,
+    /// Peer ID for client routing.
+    pub peerid: u32,
+    /// Sender's process ID.
+    pub pid: u32,
+}
 
 /// Protocol errors.
 #[derive(Debug, thiserror::Error)]
@@ -32,10 +48,22 @@ pub enum CodecError {
     Io(#[from] std::io::Error),
 }
 
-/// Encode a message into a buffer.
+/// Encode a message into a buffer with default header fields (peerid=0, flags=0).
 ///
 /// Returns the number of bytes written.
 pub fn encode_message(msg: &Message, buf: &mut BytesMut) -> Result<usize, CodecError> {
+    encode_message_full(msg, 0, 0, buf)
+}
+
+/// Encode a message with explicit peerid and flags.
+///
+/// Returns the number of bytes written.
+pub fn encode_message_full(
+    msg: &Message,
+    peerid: u32,
+    flags: u16,
+    buf: &mut BytesMut,
+) -> Result<usize, CodecError> {
     let msg_type = message_to_type(msg);
 
     // Reserve space for the header (we'll fill it after encoding data)
@@ -56,48 +84,63 @@ pub fn encode_message(msg: &Message, buf: &mut BytesMut) -> Result<usize, CodecE
     header[0..4].copy_from_slice(&(msg_type as u32).to_le_bytes());
     // len (u16 LE)
     header[4..6].copy_from_slice(&(total_len as u16).to_le_bytes());
-    // flags (u16 LE) - 0
-    header[6..8].copy_from_slice(&0u16.to_le_bytes());
-    // peerid (u32 LE) - 0
-    header[8..12].copy_from_slice(&0u32.to_le_bytes());
+    // flags (u16 LE)
+    header[6..8].copy_from_slice(&flags.to_le_bytes());
+    // peerid (u32 LE)
+    header[8..12].copy_from_slice(&peerid.to_le_bytes());
     // pid (u32 LE) - our pid
     header[12..16].copy_from_slice(&(std::process::id()).to_le_bytes());
 
     Ok(total_len)
 }
 
-/// Decode a message from a buffer.
+/// Decode a message from a buffer, discarding header fields.
 ///
 /// Returns `None` if the buffer doesn't contain a complete message.
 pub fn decode_message(buf: &mut BytesMut) -> Result<Option<Message>, CodecError> {
+    decode_message_full(buf).map(|opt| opt.map(|(_, msg)| msg))
+}
+
+/// Decode a message from a buffer, returning the full imsg header.
+///
+/// Returns `None` if the buffer doesn't contain a complete message.
+pub fn decode_message_full(
+    buf: &mut BytesMut,
+) -> Result<Option<(ImsgHeader, Message)>, CodecError> {
     if buf.len() < IMSG_HEADER_SIZE {
         return Ok(None);
     }
 
     // Parse header
     let msg_type_raw = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    let msg_len = u16::from_le_bytes([buf[4], buf[5]]) as usize;
+    let msg_len = u16::from_le_bytes([buf[4], buf[5]]);
+    let flags = u16::from_le_bytes([buf[6], buf[7]]);
+    let peerid = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let pid = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
 
-    if msg_len < IMSG_HEADER_SIZE {
+    let total_len = msg_len as usize;
+    if total_len < IMSG_HEADER_SIZE {
         return Err(match MessageType::from_raw(msg_type_raw) {
             Some(msg_type) => CodecError::InvalidData { msg_type },
             None => CodecError::UnknownType(msg_type_raw),
         });
     }
 
-    if buf.len() < msg_len {
+    if buf.len() < total_len {
         return Ok(None); // Need more data
     }
 
     let msg_type =
         MessageType::from_raw(msg_type_raw).ok_or(CodecError::UnknownType(msg_type_raw))?;
 
+    let hdr = ImsgHeader { msg_type: msg_type_raw, len: msg_len, flags, peerid, pid };
+
     // Extract data portion
     let _ = buf.split_to(IMSG_HEADER_SIZE); // Skip header
-    let data_len = msg_len - IMSG_HEADER_SIZE;
+    let data_len = total_len - IMSG_HEADER_SIZE;
     let data = buf.split_to(data_len);
 
-    decode_message_data(msg_type, &data).map(Some)
+    decode_message_data(msg_type, &data).map(|msg| Some((hdr, msg)))
 }
 
 fn encode_message_data(msg: &Message, buf: &mut BytesMut) {
@@ -430,12 +473,14 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 pub struct MessageReader {
     stream: OwnedReadHalf,
     buf: BytesMut,
+    /// Header from the last decoded message.
+    last_header: Option<ImsgHeader>,
 }
 
 impl MessageReader {
     /// Create a new reader from a stream read half.
     pub fn new(stream: OwnedReadHalf) -> Self {
-        Self { stream, buf: BytesMut::with_capacity(8192) }
+        Self { stream, buf: BytesMut::with_capacity(8192), last_header: None }
     }
 
     /// Read the next message from the stream.
@@ -444,7 +489,8 @@ impl MessageReader {
     pub async fn read_message(&mut self) -> Result<Option<Message>, CodecError> {
         loop {
             // Try to decode from existing buffer
-            if let Some(msg) = decode_message(&mut self.buf)? {
+            if let Some((hdr, msg)) = decode_message_full(&mut self.buf)? {
+                self.last_header = Some(hdr);
                 return Ok(Some(msg));
             }
 
@@ -455,23 +501,30 @@ impl MessageReader {
             }
         }
     }
+
+    /// Returns the imsg header from the last successfully decoded message.
+    pub fn last_header(&self) -> Option<&ImsgHeader> {
+        self.last_header.as_ref()
+    }
 }
 
 /// Async message writer wrapping the write half of a Unix stream.
 pub struct MessageWriter {
     stream: OwnedWriteHalf,
     buf: BytesMut,
+    /// Peer ID to set in outgoing message headers.
+    pub peerid: u32,
 }
 
 impl MessageWriter {
     /// Create a new writer from a stream write half.
     pub fn new(stream: OwnedWriteHalf) -> Self {
-        Self { stream, buf: BytesMut::with_capacity(8192) }
+        Self { stream, buf: BytesMut::with_capacity(8192), peerid: 0 }
     }
 
-    /// Write a message to the stream.
+    /// Write a message to the stream, using this writer's peerid.
     pub async fn write_message(&mut self, msg: &Message) -> Result<(), CodecError> {
-        encode_message(msg, &mut self.buf)?;
+        encode_message_full(msg, self.peerid, 0, &mut self.buf)?;
         let data = self.buf.split();
         self.stream.write_all(&data).await.map_err(CodecError::Io)?;
         Ok(())
@@ -675,6 +728,35 @@ mod tests {
             // Just verify we can roundtrip without errors
             assert!(!format!("{decoded:?}").is_empty());
         }
+    }
+
+    #[test]
+    fn encode_decode_full_header_roundtrip() {
+        let msg = Message::Ready;
+        let mut buf = BytesMut::new();
+        encode_message_full(&msg, 42, IMSG_HEADER_FLAG_FD, &mut buf).unwrap();
+        let (hdr, decoded) = decode_message_full(&mut buf).unwrap().unwrap();
+        assert!(matches!(decoded, Message::Ready));
+        assert_eq!(hdr.peerid, 42);
+        assert_eq!(hdr.flags, IMSG_HEADER_FLAG_FD);
+        assert_eq!(hdr.pid, std::process::id());
+        assert_eq!(hdr.msg_type, MessageType::Ready as u32);
+        assert_eq!(hdr.len as usize, IMSG_HEADER_SIZE);
+    }
+
+    #[test]
+    fn encode_decode_full_header_with_data() {
+        let msg = Message::OutputData(b"hello".to_vec());
+        let mut buf = BytesMut::new();
+        encode_message_full(&msg, 99, 0, &mut buf).unwrap();
+        let (hdr, decoded) = decode_message_full(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::OutputData(d) => assert_eq!(d, b"hello"),
+            other => panic!("expected OutputData, got {other:?}"),
+        }
+        assert_eq!(hdr.peerid, 99);
+        assert_eq!(hdr.flags, 0);
+        assert_eq!(hdr.len as usize, IMSG_HEADER_SIZE + 5);
     }
 
     #[test]
@@ -1073,6 +1155,43 @@ mod tests {
                 let mut buf = BytesMut::from(data.as_slice());
                 // Should never panic, only return Ok or Err
                 let _ = decode_message(&mut buf);
+            }
+
+            #[test]
+            fn imsg_header_peerid_roundtrip(peerid in any::<u32>()) {
+                let msg = Message::Ready;
+                let mut buf = BytesMut::new();
+                encode_message_full(&msg, peerid, 0, &mut buf).unwrap();
+                let (hdr, _) = decode_message_full(&mut buf).unwrap().unwrap();
+                prop_assert_eq!(hdr.peerid, peerid);
+            }
+
+            #[test]
+            fn imsg_header_flags_roundtrip(flags in any::<u16>()) {
+                let msg = Message::Detach;
+                let mut buf = BytesMut::new();
+                encode_message_full(&msg, 0, flags, &mut buf).unwrap();
+                let (hdr, _) = decode_message_full(&mut buf).unwrap().unwrap();
+                prop_assert_eq!(hdr.flags, flags);
+            }
+
+            #[test]
+            fn imsg_header_full_roundtrip(
+                peerid in any::<u32>(),
+                flags in any::<u16>(),
+                data in proptest::collection::vec(any::<u8>(), 0..100),
+            ) {
+                let msg = Message::OutputData(data.clone());
+                let mut buf = BytesMut::new();
+                encode_message_full(&msg, peerid, flags, &mut buf).unwrap();
+                let (hdr, decoded) = decode_message_full(&mut buf).unwrap().unwrap();
+                prop_assert_eq!(hdr.peerid, peerid);
+                prop_assert_eq!(hdr.flags, flags);
+                prop_assert_eq!(hdr.pid, std::process::id());
+                match decoded {
+                    Message::OutputData(d) => prop_assert_eq!(d, data),
+                    other => prop_assert!(false, "expected OutputData, got {:?}", other),
+                }
             }
         }
     }

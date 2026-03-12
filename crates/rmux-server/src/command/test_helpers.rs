@@ -1522,4 +1522,8 @@ impl CommandServer for MockCommandServer {
             vec![]
         }
     }
+
+    fn close_popup(&mut self) {
+        // Mock: no-op
+    }
 }

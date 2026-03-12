@@ -112,6 +112,62 @@ pub async fn run_attached(
     Ok(())
 }
 
+/// Run the control mode client loop.
+///
+/// In control mode, stdin is read line-by-line (not raw mode) and each line
+/// is sent as a command. Server sends text notifications (e.g., `%output`)
+/// which are printed to stdout as-is.
+pub async fn run_control(
+    reader: &mut MessageReader,
+    writer: &mut MessageWriter,
+) -> Result<(), CodecError> {
+    use tokio::io::AsyncBufReadExt;
+
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut line_buf = String::new();
+
+    loop {
+        tokio::select! {
+            // Read lines from stdin (commands)
+            result = stdin.read_line(&mut line_buf) => {
+                match result {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        let line = line_buf.trim();
+                        if !line.is_empty() {
+                            let argv: Vec<&str> = line.split_whitespace().collect();
+                            crate::connect::send_command(writer, &argv).await?;
+                        }
+                        line_buf.clear();
+                    }
+                    Err(e) => return Err(CodecError::Io(e)),
+                }
+            }
+
+            // Read messages from server
+            result = reader.read_message() => {
+                match result {
+                    Ok(Some(msg)) => match msg {
+                        Message::OutputData(data) => {
+                            stdout.write_all(&data).await.map_err(CodecError::Io)?;
+                            stdout.flush().await.map_err(CodecError::Io)?;
+                        }
+                        Message::Detach | Message::Exit | Message::Exited => {
+                            break;
+                        }
+                        _ => {}
+                    },
+                    Ok(None) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Run a non-attached command: send command, read response, exit.
 pub async fn run_command(
     reader: &mut MessageReader,

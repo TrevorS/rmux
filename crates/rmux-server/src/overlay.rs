@@ -70,16 +70,46 @@ pub struct MenuOverlay {
     pub width: u32,
 }
 
+/// State for display-popup: a floating window with an embedded PTY.
+pub struct PopupOverlay {
+    /// X position (column).
+    pub x: u32,
+    /// Y position (row).
+    pub y: u32,
+    /// Width of the popup content area.
+    pub width: u32,
+    /// Height of the popup content area.
+    pub height: u32,
+    /// Title displayed in the top border.
+    pub title: String,
+    /// Whether to draw a border around the popup.
+    pub has_border: bool,
+    /// Close the popup when the command exits.
+    pub close_on_exit: bool,
+    /// Pane ID of the embedded popup pane (for PTY routing).
+    pub pane_id: u32,
+    /// Screen state for the embedded pane.
+    pub screen: rmux_core::screen::Screen,
+    /// Input parser for processing PTY output.
+    pub parser: rmux_terminal::input::InputParser,
+    /// PTY master fd for writing input to the popup process.
+    pub pty_fd: i32,
+    /// PID of the popup process.
+    pub pid: u32,
+}
+
 /// The overlay currently active on a client.
 pub enum OverlayState {
     /// choose-tree, choose-buffer, choose-client.
     List(ListOverlay),
     /// display-menu.
     Menu(MenuOverlay),
+    /// display-popup.
+    Popup(Box<PopupOverlay>),
 }
 
 /// Action returned from overlay input processing.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum OverlayAction {
     /// Input consumed, overlay state updated, needs redraw.
     Handled,
@@ -379,6 +409,19 @@ fn move_menu_up(state: &mut MenuOverlay) {
             return;
         }
     }
+}
+
+/// Process input for a popup overlay.
+///
+/// All input is forwarded to the popup's PTY. Returns `(action, bytes_consumed)`.
+/// The caller writes the data to `popup.pty_fd`. We return `Handled` for all
+/// input; the server handles the actual PTY write.
+pub fn process_popup_input(_popup: &mut PopupOverlay, data: &[u8]) -> (OverlayAction, usize) {
+    if data.is_empty() {
+        return (OverlayAction::Handled, 0);
+    }
+    // All input forwarded to the popup PTY — consume entire buffer
+    (OverlayAction::Handled, data.len())
 }
 
 /// Get the filtered items for a list overlay.
@@ -1017,6 +1060,76 @@ mod tests {
                 let (_, consumed) = process_menu_input(&mut menu, &[byte]);
                 assert!(consumed >= 1, "consumed {consumed} for byte {byte:#x}");
             }
+
+            #[test]
+            fn popup_input_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+                let mut popup = PopupOverlay {
+                    x: 5, y: 5, width: 40, height: 20,
+                    title: String::new(), has_border: true,
+                    close_on_exit: true, pane_id: 0,
+                    screen: rmux_core::screen::Screen::new(40, 20, 0),
+                    parser: rmux_terminal::input::InputParser::new(),
+                    pty_fd: -1, pid: 0,
+                };
+                let (action, consumed) = process_popup_input(&mut popup, &data);
+                assert_eq!(action, OverlayAction::Handled);
+                assert_eq!(consumed, data.len());
+            }
         }
+    }
+
+    // ============================================================
+    // Popup input processing
+    // ============================================================
+
+    fn test_popup() -> PopupOverlay {
+        PopupOverlay {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+            title: "test".into(),
+            has_border: true,
+            close_on_exit: true,
+            pane_id: 42,
+            screen: rmux_core::screen::Screen::new(40, 20, 0),
+            parser: rmux_terminal::input::InputParser::new(),
+            pty_fd: -1,
+            pid: 0,
+        }
+    }
+
+    #[test]
+    fn popup_input_empty_returns_zero() {
+        let mut popup = test_popup();
+        let (action, consumed) = process_popup_input(&mut popup, b"");
+        assert_eq!(action, OverlayAction::Handled);
+        assert_eq!(consumed, 0);
+    }
+
+    #[test]
+    fn popup_input_consumes_all() {
+        let mut popup = test_popup();
+        let data = b"hello world\x1b[A";
+        let (action, consumed) = process_popup_input(&mut popup, data);
+        assert_eq!(action, OverlayAction::Handled);
+        assert_eq!(consumed, data.len());
+    }
+
+    #[test]
+    fn popup_input_single_byte() {
+        let mut popup = test_popup();
+        let (action, consumed) = process_popup_input(&mut popup, b"x");
+        assert_eq!(action, OverlayAction::Handled);
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn popup_input_binary_data() {
+        let mut popup = test_popup();
+        let data: Vec<u8> = (0..=255).collect();
+        let (action, consumed) = process_popup_input(&mut popup, &data);
+        assert_eq!(action, OverlayAction::Handled);
+        assert_eq!(consumed, 256);
     }
 }

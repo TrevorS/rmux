@@ -645,6 +645,9 @@ fn render_overlay(
         crate::overlay::OverlayState::Menu(menu) => {
             render_menu_overlay(writer, menu, sx, sy);
         }
+        crate::overlay::OverlayState::Popup(popup) => {
+            render_popup_overlay(writer, popup, sx, sy);
+        }
     }
 }
 
@@ -804,6 +807,90 @@ fn render_menu_overlay(
         writer.set_style(&Style::DEFAULT);
         for _ in 0..menu_width {
             writer.write_raw("\u{2500}".as_bytes());
+        }
+    }
+
+    writer.set_style(&Style::DEFAULT);
+}
+
+/// Render a popup overlay (display-popup) with border and embedded screen content.
+fn render_popup_overlay(
+    writer: &mut TermWriter,
+    popup: &crate::overlay::PopupOverlay,
+    sx: u32,
+    sy: u32,
+) {
+    let border = u32::from(popup.has_border);
+    // Total box dimensions including border
+    let total_w = popup.width + border * 2;
+    let total_h = popup.height + border * 2;
+
+    // Clamp to terminal size
+    let total_w = total_w.min(sx);
+    let total_h = total_h.min(sy);
+    let content_w = total_w.saturating_sub(border * 2);
+    let content_h = total_h.saturating_sub(border * 2);
+
+    let x0 = popup.x.min(sx.saturating_sub(total_w));
+    let y0 = popup.y.min(sy.saturating_sub(total_h));
+
+    let border_style = Style::DEFAULT;
+
+    if popup.has_border {
+        // Top border: ┌─ title ─┐
+        writer.cursor_position(x0, y0);
+        writer.set_style(&border_style);
+        writer.write_raw("\u{250C}".as_bytes()); // ┌
+
+        let title_bytes = popup.title.as_str();
+        let avail = content_w as usize;
+        let title_trunc: String = title_bytes.chars().take(avail).collect();
+        let title_len = title_trunc.chars().count();
+        writer.write_raw(title_trunc.as_bytes());
+        for _ in title_len..avail {
+            writer.write_raw("\u{2500}".as_bytes()); // ─
+        }
+        writer.write_raw("\u{2510}".as_bytes()); // ┐
+
+        // Bottom border: └──┘
+        writer.cursor_position(x0, y0 + total_h - 1);
+        writer.set_style(&border_style);
+        writer.write_raw("\u{2514}".as_bytes()); // └
+        for _ in 0..content_w {
+            writer.write_raw("\u{2500}".as_bytes()); // ─
+        }
+        writer.write_raw("\u{2518}".as_bytes()); // ┘
+    }
+
+    // Content rows
+    let screen = &popup.screen;
+    let cx0 = x0 + border;
+    let cy0 = y0 + border;
+
+    for y in 0..content_h {
+        writer.cursor_position(cx0, cy0 + y);
+
+        for x in 0..content_w {
+            let cell = screen.grid.get_cell(x, y);
+            if cell.is_padding() {
+                continue;
+            }
+            writer.set_style(&cell.style);
+            let bytes = cell.data.as_bytes();
+            if bytes.is_empty() || bytes == [b' '] {
+                writer.write_raw(b" ");
+            } else {
+                writer.write_raw(bytes);
+            }
+        }
+
+        // Side borders
+        if popup.has_border {
+            writer.cursor_position(x0, cy0 + y);
+            writer.set_style(&border_style);
+            writer.write_raw("\u{2502}".as_bytes()); // │
+            writer.cursor_position(x0 + total_w - 1, cy0 + y);
+            writer.write_raw("\u{2502}".as_bytes()); // │
         }
     }
 

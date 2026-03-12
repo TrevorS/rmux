@@ -74,6 +74,8 @@ pub struct ServerClient {
     pub activity: u64,
     /// Timed status message and its expiry instant.
     pub timed_message: Option<(String, std::time::Instant)>,
+    /// Control mode: send text notifications instead of raw terminal output.
+    pub control_mode: bool,
 }
 
 /// State for detecting double/triple-click sequences.
@@ -212,6 +214,7 @@ impl ServerClient {
                 .unwrap_or_default()
                 .as_secs(),
             timed_message: None,
+            control_mode: false,
         }
     }
 
