@@ -114,7 +114,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [ ] `lock-server` / `lock` — stub (no-op)
 - [ ] `lock-session` / `locks` — stub (no-op)
 - [ ] `lock-client` / `lockc` — stub (no-op)
-- [ ] `resize-window` / `resizew` — stub (no-op, sizing is automatic)
+- [x] `resize-window` / `resizew` — resize with `-x`, `-y`, `-A`
 
 ### Hooks & Environment
 - [x] `set-hook` — register hook commands

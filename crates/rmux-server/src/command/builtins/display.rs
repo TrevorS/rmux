@@ -321,15 +321,44 @@ pub fn cmd_pipe_pane(
     Ok(CommandResult::Ok)
 }
 
-/// resize-window [-t target-window] [-x width] [-y height]
+/// resize-window [-t target-window] [-x width] [-y height] [-A]
 ///
-/// Resize a window manually. Stub — window sizing is usually automatic.
-#[allow(clippy::unnecessary_wraps)]
+/// Resize a window to a specific size.
 pub fn cmd_resize_window(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let session_id = if let Some(target) = get_option(args, "-t") {
+        server
+            .find_session_id(target)
+            .ok_or_else(|| ServerError::Command(format!("session not found: {target}")))?
+    } else {
+        server
+            .client_session_id()
+            .ok_or_else(|| ServerError::Command("no current session".into()))?
+    };
+
+    let window_idx = server.active_window_for(session_id).unwrap_or(0);
+
+    let sx = get_option(args, "-x")
+        .map(|v| v.parse::<u32>().map_err(|_| ServerError::Command(format!("invalid width: {v}"))))
+        .transpose()?;
+    let sy = get_option(args, "-y")
+        .map(|v| v.parse::<u32>().map_err(|_| ServerError::Command(format!("invalid height: {v}"))))
+        .transpose()?;
+
+    if sx.is_none() && sy.is_none() && !has_flag(args, "-A") {
+        return Err(ServerError::Command("usage: resize-window [-x width] [-y height]".into()));
+    }
+
+    // -A adjusts to smallest client (for now, use client dimensions)
+    let (sx, sy) = if has_flag(args, "-A") {
+        (Some(server.client_sx()), Some(server.client_sy().saturating_sub(1)))
+    } else {
+        (sx, sy)
+    };
+
+    server.resize_window(session_id, window_idx, sx, sy)?;
     Ok(CommandResult::Ok)
 }
 

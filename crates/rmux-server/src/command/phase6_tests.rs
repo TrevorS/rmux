@@ -443,9 +443,31 @@ mod display_tests {
     }
 
     #[test]
-    fn resize_window_stub_ok() {
+    fn resize_window_with_dimensions() {
         let mut s = MockCommandServer::new();
+        s.create_test_session("resize-test");
+        let result = exec(&mut s, &["resize-window", "-x", "100", "-y", "40"]);
+        assert!(matches!(result.unwrap(), CommandResult::Ok));
+        let sid = s.client_session_id.unwrap();
+        let widx = s.sessions.find_by_id(sid).unwrap().active_window;
+        let window = &s.sessions.find_by_id(sid).unwrap().windows[&widx];
+        assert_eq!(window.sx, 100);
+        assert_eq!(window.sy, 40);
+    }
+
+    #[test]
+    fn resize_window_requires_args() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("resize-test");
         let result = exec(&mut s, &["resize-window"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resize_window_adjust() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("resize-test");
+        let result = exec(&mut s, &["resize-window", "-A"]);
         assert!(matches!(result.unwrap(), CommandResult::Ok));
     }
 

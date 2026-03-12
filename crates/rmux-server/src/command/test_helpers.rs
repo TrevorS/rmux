@@ -737,6 +737,30 @@ impl CommandServer for MockCommandServer {
 
     // --- Resize ---
 
+    fn resize_window(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        sx: Option<u32>,
+        sy: Option<u32>,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        if let Some(w) = sx {
+            window.sx = w;
+        }
+        if let Some(h) = sy {
+            window.sy = h;
+        }
+        Ok(())
+    }
+
     fn resize_pane(
         &mut self,
         session_id: u32,

@@ -2709,6 +2709,62 @@ impl CommandServer for Server {
 
     // --- Resize ---
 
+    fn resize_window(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        sx: Option<u32>,
+        sy: Option<u32>,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+
+        let new_sx = sx.unwrap_or(window.sx);
+        let new_sy = sy.unwrap_or(window.sy);
+        window.sx = new_sx;
+        window.sy = new_sy;
+
+        // Rebuild layout with new dimensions
+        let pane_ids: Vec<u32> = window.panes.keys().copied().collect();
+        if pane_ids.len() <= 1 {
+            if let Some((&pid, pane)) = window.panes.iter_mut().next() {
+                pane.resize(new_sx, new_sy);
+                pane.xoff = 0;
+                pane.yoff = 0;
+                window.layout = Some(LayoutCell::new_pane(0, 0, new_sx, new_sy, pid));
+            }
+        } else {
+            let layout = if window
+                .layout
+                .as_ref()
+                .is_some_and(|l| l.cell_type == rmux_core::layout::LayoutType::LeftRight)
+            {
+                layout_even_horizontal(new_sx, new_sy, &pane_ids)
+            } else {
+                layout_even_vertical(new_sx, new_sy, &pane_ids)
+            };
+            for &pid in &pane_ids {
+                if let Some(cell) = layout.find_pane(pid) {
+                    if let Some(pane) = window.panes.get_mut(&pid) {
+                        pane.resize(cell.sx, cell.sy);
+                        pane.xoff = cell.x_off;
+                        pane.yoff = cell.y_off;
+                    }
+                }
+            }
+            window.layout = Some(layout);
+        }
+
+        self.mark_clients_redraw(session_id);
+        Ok(())
+    }
+
     fn resize_pane(
         &mut self,
         session_id: u32,

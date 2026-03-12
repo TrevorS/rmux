@@ -198,6 +198,14 @@ pub trait CommandServer {
     ) -> Result<String, ServerError>;
 
     // --- Resize ---
+    /// Resize a window to the given dimensions.
+    fn resize_window(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        sx: Option<u32>,
+        sy: Option<u32>,
+    ) -> Result<(), ServerError>;
     /// Resize a pane by direction or absolute size.
     fn resize_pane(
         &mut self,
