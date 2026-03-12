@@ -702,10 +702,17 @@ fn render_list_overlay(
                 writer.set_style(&Style::DEFAULT);
             }
 
-            // Indent
-            let indent = (item.indent * 2) as usize;
-            let prefix = " ".repeat(indent);
-            let display = format!("{prefix}{}", item.display);
+            // Indent and tree indicators
+            let indent_spaces = " ".repeat((item.indent * 2) as usize);
+            let is_tree = list.kind == crate::overlay::ListKind::Tree;
+            let tree_indicator = if is_tree && item.indent == 0 && item.collapsed {
+                "\u{25B8} " // ▸ collapsed
+            } else if is_tree && item.indent == 0 {
+                "\u{25BE} " // ▾ expanded
+            } else {
+                ""
+            };
+            let display = format!("{indent_spaces}{tree_indicator}{}", item.display);
             let trunc: String = display.chars().take(sx as usize).collect();
             writer.write_raw(trunc.as_bytes());
 

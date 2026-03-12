@@ -4,7 +4,7 @@
 //! It manages all sessions, windows, and panes using a tokio single-threaded runtime.
 
 use crate::client::{ClientFlags, PromptState, ServerClient};
-use crate::command::{self, CommandResult, CommandServer, Direction};
+use crate::command::{self, CommandResult, CommandServer, Direction, SessionTreeInfo};
 use crate::copymode::{self, CopyModeAction};
 use crate::keybind::{KeyBindings, string_to_key};
 use crate::navigate;
@@ -1470,6 +1470,89 @@ impl Server {
         }
     }
 
+    /// Rebuild the choose-tree overlay, preserving collapsed state per session.
+    fn rebuild_tree_overlay(&mut self, client_id: u64) {
+        use crate::overlay::{ListItem, ListKind, ListOverlay, OverlayState};
+
+        let Some(client) = self.clients.get(&client_id) else { return };
+        // Collect which sessions are collapsed from the current overlay
+        let mut collapsed_sessions = std::collections::HashSet::new();
+        let mut prev_selected = 0;
+        if let Some(OverlayState::List(list)) = &client.overlay {
+            prev_selected = list.selected;
+            for item in &list.items {
+                if item.indent == 0 && item.collapsed {
+                    // Extract session name from display (before ':')
+                    if let Some(name) = item.display.split(':').next() {
+                        collapsed_sessions.insert(name.to_string());
+                    }
+                }
+            }
+        }
+
+        let tree_info = self.session_tree_info();
+        let mut items = Vec::new();
+
+        for (session_name, attached, windows) in tree_info {
+            let is_collapsed = collapsed_sessions.contains(&session_name);
+            let attached_str =
+                if attached > 0 { format!(" (attached: {attached})") } else { String::new() };
+            let win_count = windows.len();
+            items.push(ListItem {
+                display: format!("{session_name}: {win_count} windows{attached_str}"),
+                command: vec!["switch-client".into(), "-t".into(), session_name.clone()],
+                indent: 0,
+                collapsed: is_collapsed,
+                hidden_children: if is_collapsed { win_count } else { 0 },
+                deletable: true,
+                delete_command: vec!["kill-session".into(), "-t".into(), session_name.clone()],
+            });
+
+            if !is_collapsed {
+                for (idx, win_name, is_active, pane_count) in &windows {
+                    let active_str = if *is_active { "*" } else { "" };
+                    let panes_str = if *pane_count > 1 {
+                        format!(" ({pane_count} panes)")
+                    } else {
+                        String::new()
+                    };
+                    items.push(ListItem {
+                        display: format!("{idx}: {win_name}{active_str}{panes_str}"),
+                        command: vec![
+                            "select-window".into(),
+                            "-t".into(),
+                            format!("{session_name}:{idx}"),
+                        ],
+                        indent: 1,
+                        collapsed: false,
+                        hidden_children: 0,
+                        deletable: true,
+                        delete_command: vec![
+                            "kill-window".into(),
+                            "-t".into(),
+                            format!("{session_name}:{idx}"),
+                        ],
+                    });
+                }
+            }
+        }
+
+        let selected = prev_selected.min(items.len().saturating_sub(1));
+        let overlay = OverlayState::List(ListOverlay {
+            items,
+            selected,
+            scroll_offset: 0,
+            filter: String::new(),
+            filtering: false,
+            title: "choose-tree".into(),
+            kind: ListKind::Tree,
+        });
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.overlay = Some(overlay);
+            client.mark_redraw();
+        }
+    }
+
     fn handle_overlay_input(&mut self, client_id: u64, data: &[u8]) {
         use crate::overlay::{OverlayAction, OverlayState, process_list_input, process_menu_input};
 
@@ -1516,6 +1599,10 @@ impl Server {
                     if let Some(client) = self.clients.get_mut(&client_id) {
                         client.mark_redraw();
                     }
+                    offset += consumed;
+                }
+                OverlayAction::RebuildTree => {
+                    self.rebuild_tree_overlay(client_id);
                     offset += consumed;
                 }
                 OverlayAction::Handled => {
@@ -3996,6 +4083,21 @@ impl CommandServer for Server {
         self.sessions
             .iter()
             .map(|s| (s.name.clone(), s.windows.len(), s.attached as usize))
+            .collect()
+    }
+
+    fn session_tree_info(&self) -> Vec<SessionTreeInfo> {
+        self.sessions
+            .iter()
+            .map(|s| {
+                let mut windows: Vec<(u32, String, bool, usize)> = s
+                    .windows
+                    .iter()
+                    .map(|(&idx, w)| (idx, w.name.clone(), idx == s.active_window, w.pane_count()))
+                    .collect();
+                windows.sort_by_key(|&(idx, _, _, _)| idx);
+                (s.name.clone(), s.attached as usize, windows)
+            })
             .collect()
     }
 

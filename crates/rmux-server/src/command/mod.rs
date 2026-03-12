@@ -49,6 +49,12 @@ pub struct CommandEntry {
     pub usage: &'static str,
 }
 
+/// Info about a window within a session tree: (index, name, is_active, pane_count).
+pub type WindowTreeInfo = (u32, String, bool, usize);
+
+/// Info about a session in the tree: (session_name, attached_count, windows).
+pub type SessionTreeInfo = (String, usize, Vec<WindowTreeInfo>);
+
 /// Direction for pane navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -378,6 +384,9 @@ pub trait CommandServer {
     /// Get structured session info for choose-tree overlay.
     /// Returns Vec of (session_name, window_count, attached_count).
     fn session_info_list(&self) -> Vec<(String, usize, usize)>;
+    /// Get session tree info: sessions with their windows.
+    /// Returns Vec of (session_name, attached_count, windows: Vec<(idx, name, is_active, pane_count)>).
+    fn session_tree_info(&self) -> Vec<SessionTreeInfo>;
     /// Get structured buffer info for choose-buffer overlay.
     /// Returns Vec of (buffer_name, byte_length, preview).
     fn buffer_info_list(&self) -> Vec<(String, usize, String)>;

@@ -194,32 +194,58 @@ fn big_digit(ch: char, row: usize) -> &'static str {
     DIGITS[idx].get(row).copied().unwrap_or("   ")
 }
 
-/// choose-tree [-t target-pane]
+/// choose-tree [-s] [-w] [-t target-pane]
 ///
 /// Interactive tree view of sessions and windows.
+/// Default shows sessions expanded with windows. `-s` collapses to sessions only.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_choose_tree(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    let sessions = server.session_info_list();
-    let items: Vec<ListItem> = sessions
-        .into_iter()
-        .map(|(name, win_count, attached)| {
-            let attached_str =
-                if attached > 0 { format!(" (attached: {attached})") } else { String::new() };
-            ListItem {
-                display: format!("{name}: {win_count} windows{attached_str}"),
-                command: vec!["switch-client".into(), "-t".into(), name.clone()],
-                indent: 0,
-                collapsed: false,
-                hidden_children: 0,
-                deletable: true,
-                delete_command: vec!["kill-session".into(), "-t".into(), name],
+    let sessions_only = has_flag(args, "-s");
+    let tree_info = server.session_tree_info();
+    let mut items = Vec::new();
+
+    for (session_name, attached, windows) in tree_info {
+        let attached_str =
+            if attached > 0 { format!(" (attached: {attached})") } else { String::new() };
+        let win_count = windows.len();
+        items.push(ListItem {
+            display: format!("{session_name}: {win_count} windows{attached_str}"),
+            command: vec!["switch-client".into(), "-t".into(), session_name.clone()],
+            indent: 0,
+            collapsed: sessions_only,
+            hidden_children: win_count,
+            deletable: true,
+            delete_command: vec!["kill-session".into(), "-t".into(), session_name.clone()],
+        });
+
+        if !sessions_only {
+            for (idx, win_name, is_active, pane_count) in &windows {
+                let active_str = if *is_active { "*" } else { "" };
+                let panes_str =
+                    if *pane_count > 1 { format!(" ({pane_count} panes)") } else { String::new() };
+                items.push(ListItem {
+                    display: format!("{idx}: {win_name}{active_str}{panes_str}"),
+                    command: vec![
+                        "select-window".into(),
+                        "-t".into(),
+                        format!("{session_name}:{idx}"),
+                    ],
+                    indent: 1,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: true,
+                    delete_command: vec![
+                        "kill-window".into(),
+                        "-t".into(),
+                        format!("{session_name}:{idx}"),
+                    ],
+                });
             }
-        })
-        .collect();
+        }
+    }
 
     if items.is_empty() {
         return Ok(CommandResult::Output("(no sessions)\n".to_string()));

@@ -4,7 +4,7 @@
 //! methods with in-memory state management (sessions, windows, panes, options,
 //! key bindings).
 
-use crate::command::{CommandServer, Direction};
+use crate::command::{CommandServer, Direction, SessionTreeInfo};
 use crate::keybind::KeyBindings;
 use crate::pane::Pane;
 use crate::paste::PasteBufferStore;
@@ -1478,6 +1478,21 @@ impl CommandServer for MockCommandServer {
         self.sessions
             .iter()
             .map(|s| (s.name.clone(), s.windows.len(), s.attached as usize))
+            .collect()
+    }
+
+    fn session_tree_info(&self) -> Vec<SessionTreeInfo> {
+        self.sessions
+            .iter()
+            .map(|s| {
+                let mut windows: Vec<(u32, String, bool, usize)> = s
+                    .windows
+                    .iter()
+                    .map(|(&idx, w)| (idx, w.name.clone(), idx == s.active_window, w.pane_count()))
+                    .collect();
+                windows.sort_by_key(|&(idx, _, _, _)| idx);
+                (s.name.clone(), s.attached as usize, windows)
+            })
             .collect()
     }
 

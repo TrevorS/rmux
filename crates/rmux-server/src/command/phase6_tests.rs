@@ -383,9 +383,33 @@ mod display_tests {
         let result = exec(&mut s, &["choose-tree"]).unwrap();
         match result {
             CommandResult::Overlay(OverlayState::List(list)) => {
+                // Session + its window(s)
+                assert!(list.items.len() >= 2);
+                // First item is the session (indent=0)
+                assert!(list.items[0].display.contains("sess"));
+                assert_eq!(list.items[0].indent, 0);
+                assert!(!list.items[0].collapsed);
+                assert!(list.items[0].deletable);
+                // Second item is a window (indent=1)
+                assert_eq!(list.items[1].indent, 1);
+            }
+            other => panic!("expected Overlay(List), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choose_tree_sessions_only_flag() {
+        use crate::overlay::OverlayState;
+        let mut s = MockCommandServer::new();
+        s.create_test_session("sess");
+        let result = exec(&mut s, &["choose-tree", "-s"]).unwrap();
+        match result {
+            CommandResult::Overlay(OverlayState::List(list)) => {
+                // With -s, only session items (no windows)
                 assert_eq!(list.items.len(), 1);
                 assert!(list.items[0].display.contains("sess"));
-                assert!(list.items[0].deletable);
+                assert_eq!(list.items[0].indent, 0);
+                assert!(list.items[0].collapsed);
             }
             other => panic!("expected Overlay(List), got {other:?}"),
         }

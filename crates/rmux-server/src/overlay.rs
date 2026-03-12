@@ -89,6 +89,8 @@ pub enum OverlayAction {
     Select { command: Vec<String> },
     /// Delete action on current item.
     Delete { command: Vec<String> },
+    /// Tree node toggled — server should rebuild the tree overlay.
+    RebuildTree,
     /// Input not consumed by overlay.
     Unhandled,
 }
@@ -153,6 +155,19 @@ pub fn process_list_input(state: &mut ListOverlay, data: &[u8]) -> (OverlayActio
                 }
                 (OverlayAction::Handled, 3)
             }
+            // Right arrow — expand collapsed tree node
+            b'C' => {
+                if toggle_tree_node(state, true) {
+                    (OverlayAction::RebuildTree, 3)
+                } else {
+                    (OverlayAction::Handled, 3)
+                }
+            }
+            // Left arrow — collapse expanded tree node
+            b'D' => {
+                toggle_tree_node(state, false);
+                (OverlayAction::Handled, 3)
+            }
             _ => (OverlayAction::Handled, 3),
         },
         // Bare escape / q — cancel
@@ -198,6 +213,46 @@ pub fn process_list_input(state: &mut ListOverlay, data: &[u8]) -> (OverlayActio
             (OverlayAction::Handled, 1)
         }
         _ => (OverlayAction::Handled, 1),
+    }
+}
+
+/// Toggle expand/collapse on a tree node. Returns true if a rebuild is needed.
+///
+/// Collapse removes child items from the vec directly.
+/// Expand marks the node as expanded and returns true so the server can rebuild.
+fn toggle_tree_node(state: &mut ListOverlay, expand: bool) -> bool {
+    if state.kind != ListKind::Tree {
+        return false;
+    }
+    let idx = state.selected;
+    if idx >= state.items.len() {
+        return false;
+    }
+
+    if expand {
+        // Only expand indent=0 items that are collapsed
+        if state.items[idx].indent != 0 || !state.items[idx].collapsed {
+            return false;
+        }
+        state.items[idx].collapsed = false;
+        true // server must rebuild to insert children
+    } else {
+        // Collapse: remove children (indent > 0 items following this indent=0 item)
+        if state.items[idx].indent != 0 || state.items[idx].collapsed {
+            return false;
+        }
+        let mut children = 0;
+        while idx + 1 + children < state.items.len()
+            && state.items[idx + 1 + children].indent > state.items[idx].indent
+        {
+            children += 1;
+        }
+        if children > 0 {
+            state.items.drain((idx + 1)..(idx + 1 + children));
+            state.items[idx].collapsed = true;
+            state.items[idx].hidden_children = children;
+        }
+        false
     }
 }
 
@@ -707,5 +762,134 @@ mod tests {
         state.items.clear();
         let (action, _) = process_list_input(&mut state, b"\r");
         assert!(matches!(action, OverlayAction::Cancel));
+    }
+
+    // ============================================================
+    // Tree expand/collapse tests
+    // ============================================================
+
+    fn test_tree_overlay() -> ListOverlay {
+        ListOverlay {
+            items: vec![
+                ListItem {
+                    display: "sess-0: 2 windows".into(),
+                    command: vec!["switch-client".into(), "-t".into(), "sess-0".into()],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: true,
+                    delete_command: vec!["kill-session".into(), "-t".into(), "sess-0".into()],
+                },
+                ListItem {
+                    display: "0: bash*".into(),
+                    command: vec!["select-window".into(), "-t".into(), "sess-0:0".into()],
+                    indent: 1,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: true,
+                    delete_command: vec!["kill-window".into(), "-t".into(), "sess-0:0".into()],
+                },
+                ListItem {
+                    display: "1: vim".into(),
+                    command: vec!["select-window".into(), "-t".into(), "sess-0:1".into()],
+                    indent: 1,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: true,
+                    delete_command: vec!["kill-window".into(), "-t".into(), "sess-0:1".into()],
+                },
+                ListItem {
+                    display: "sess-1: 1 windows".into(),
+                    command: vec!["switch-client".into(), "-t".into(), "sess-1".into()],
+                    indent: 0,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: true,
+                    delete_command: vec!["kill-session".into(), "-t".into(), "sess-1".into()],
+                },
+                ListItem {
+                    display: "0: zsh*".into(),
+                    command: vec!["select-window".into(), "-t".into(), "sess-1:0".into()],
+                    indent: 1,
+                    collapsed: false,
+                    hidden_children: 0,
+                    deletable: true,
+                    delete_command: vec!["kill-window".into(), "-t".into(), "sess-1:0".into()],
+                },
+            ],
+            selected: 0,
+            scroll_offset: 0,
+            filter: String::new(),
+            filtering: false,
+            title: "choose-tree".into(),
+            kind: ListKind::Tree,
+        }
+    }
+
+    #[test]
+    fn tree_collapse_removes_children() {
+        let mut state = test_tree_overlay();
+        assert_eq!(state.items.len(), 5);
+
+        // Left arrow collapses sess-0 (selected=0)
+        let (action, consumed) = process_list_input(&mut state, b"\x1b[D");
+        assert!(matches!(action, OverlayAction::Handled));
+        assert_eq!(consumed, 3);
+        assert!(state.items[0].collapsed);
+        assert_eq!(state.items[0].hidden_children, 2);
+        // Children removed: sess-0's 2 windows gone
+        assert_eq!(state.items.len(), 3);
+        // Next item is sess-1
+        assert!(state.items[1].display.contains("sess-1"));
+    }
+
+    #[test]
+    fn tree_collapse_already_collapsed_is_noop() {
+        let mut state = test_tree_overlay();
+        state.items[0].collapsed = true;
+        let original_len = state.items.len();
+        let (action, _) = process_list_input(&mut state, b"\x1b[D");
+        assert!(matches!(action, OverlayAction::Handled));
+        assert_eq!(state.items.len(), original_len);
+    }
+
+    #[test]
+    fn tree_expand_returns_rebuild() {
+        let mut state = test_tree_overlay();
+        // First collapse
+        let (_, _) = process_list_input(&mut state, b"\x1b[D");
+        assert!(state.items[0].collapsed);
+
+        // Right arrow expands — returns RebuildTree
+        let (action, consumed) = process_list_input(&mut state, b"\x1b[C");
+        assert!(matches!(action, OverlayAction::RebuildTree));
+        assert_eq!(consumed, 3);
+        assert!(!state.items[0].collapsed);
+    }
+
+    #[test]
+    fn tree_expand_already_expanded_is_noop() {
+        let mut state = test_tree_overlay();
+        let (action, _) = process_list_input(&mut state, b"\x1b[C");
+        assert!(matches!(action, OverlayAction::Handled));
+    }
+
+    #[test]
+    fn tree_collapse_on_child_item_is_noop() {
+        let mut state = test_tree_overlay();
+        state.selected = 1; // a window item (indent=1)
+        let original_len = state.items.len();
+        let (action, _) = process_list_input(&mut state, b"\x1b[D");
+        assert!(matches!(action, OverlayAction::Handled));
+        assert_eq!(state.items.len(), original_len);
+    }
+
+    #[test]
+    fn tree_toggle_non_tree_kind_is_noop() {
+        let mut state = test_tree_overlay();
+        state.kind = ListKind::Buffer;
+        let (action, _) = process_list_input(&mut state, b"\x1b[D");
+        assert!(matches!(action, OverlayAction::Handled));
+        assert!(!state.items[0].collapsed);
     }
 }
