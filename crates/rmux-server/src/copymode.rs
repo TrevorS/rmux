@@ -56,6 +56,8 @@ pub struct CopyModeState {
     pub last_jump: Option<JumpState>,
     /// Pending jump type — waiting for user to type the target character.
     pub pending_jump: Option<JumpType>,
+    /// Mark position (set by `m`, swapped by `M-m`/backtick).
+    pub mark: Option<(u32, u32)>, // (absolute_x, absolute_y)
 }
 
 impl CopyModeState {
@@ -80,6 +82,7 @@ impl CopyModeState {
             },
             last_jump: None,
             pending_jump: None,
+            mark: None,
         }
     }
 
@@ -175,6 +178,25 @@ impl CopyModeState {
         let clamped = abs_y.min(total.saturating_sub(1));
         self.move_to_absolute_y(clamped, screen);
         self.cx = 0;
+    }
+
+    /// Set mark at current cursor position.
+    pub fn set_mark(&mut self, history_size: u32) {
+        let abs_y = self.absolute_y(history_size);
+        self.mark = Some((self.cx, abs_y));
+    }
+
+    /// Swap cursor with mark position.
+    pub fn swap_mark(&mut self, screen: &Screen) {
+        if let Some((mark_x, mark_y)) = self.mark {
+            let history_size = screen.grid.history_size();
+            let cur_abs_y = self.absolute_y(history_size);
+            // Save current position as mark
+            self.mark = Some((self.cx, cur_abs_y));
+            // Move cursor to old mark position
+            self.cx = mark_x.min(screen.width().saturating_sub(1));
+            self.move_to_absolute_y(mark_y, screen);
+        }
     }
 
     /// Move cursor to start of line.
@@ -804,6 +826,8 @@ fn dispatch_navigation(
         "middle-line" => cm.middle_line(screen),
         "top-line" => cm.top_line(),
         "bottom-line" => cm.bottom_line(screen),
+        "set-mark" => cm.set_mark(screen.grid.history_size()),
+        "swap-mark" => cm.swap_mark(screen),
         _ => return None,
     }
     Some(CopyModeAction::Handled)
@@ -1488,5 +1512,154 @@ mod tests {
             CopyModeAction::GotoLinePrompt => {}
             other => panic!("expected GotoLinePrompt, got {other:?}"),
         }
+    }
+
+    // ============================================================
+    // Mark and swap tests
+    // ============================================================
+
+    #[test]
+    fn set_mark_records_position() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cx = 10;
+        cm.cy = 5;
+        assert!(cm.mark.is_none());
+
+        cm.set_mark(screen.grid.history_size());
+        assert!(cm.mark.is_some());
+        let (mx, my) = cm.mark.unwrap();
+        assert_eq!(mx, 10);
+        let expected_abs = cm.absolute_y(screen.grid.history_size());
+        assert_eq!(my, expected_abs);
+    }
+
+    #[test]
+    fn set_mark_updates_on_second_call() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cx = 5;
+        cm.cy = 3;
+        cm.set_mark(screen.grid.history_size());
+        let (mx1, _) = cm.mark.unwrap();
+        assert_eq!(mx1, 5);
+
+        cm.cx = 20;
+        cm.cy = 10;
+        cm.set_mark(screen.grid.history_size());
+        let (mx2, _) = cm.mark.unwrap();
+        assert_eq!(mx2, 20);
+    }
+
+    #[test]
+    fn swap_mark_exchanges_positions() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        // Set mark at (5, cy=10)
+        cm.cx = 5;
+        cm.cy = 10;
+        cm.set_mark(screen.grid.history_size());
+        let mark_abs_y = cm.absolute_y(screen.grid.history_size());
+
+        // Move cursor to (20, cy=15)
+        cm.cx = 20;
+        cm.cy = 15;
+        let cursor_abs_y = cm.absolute_y(screen.grid.history_size());
+
+        // Swap
+        cm.swap_mark(&screen);
+
+        // Cursor should now be at old mark position
+        assert_eq!(cm.cx, 5);
+        // Mark should now be at old cursor position
+        let (new_mx, new_my) = cm.mark.unwrap();
+        assert_eq!(new_mx, 20);
+        assert_eq!(new_my, cursor_abs_y);
+
+        // Verify cursor moved to mark's absolute y
+        let new_abs_y = cm.absolute_y(screen.grid.history_size());
+        assert_eq!(new_abs_y, mark_abs_y);
+    }
+
+    #[test]
+    fn swap_mark_noop_without_mark() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cx = 10;
+        cm.cy = 5;
+
+        // swap_mark with no mark set should be a no-op
+        cm.swap_mark(&screen);
+        assert_eq!(cm.cx, 10);
+        assert_eq!(cm.cy, 5);
+        assert!(cm.mark.is_none());
+    }
+
+    #[test]
+    fn swap_mark_double_swap_restores() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        cm.cx = 3;
+        cm.cy = 7;
+        cm.set_mark(screen.grid.history_size());
+
+        cm.cx = 40;
+        cm.cy = 20;
+        let orig_cx = cm.cx;
+        let orig_cy = cm.cy;
+
+        // Double swap should restore to original
+        cm.swap_mark(&screen);
+        cm.swap_mark(&screen);
+        assert_eq!(cm.cx, orig_cx);
+        assert_eq!(cm.cy, orig_cy);
+    }
+
+    #[test]
+    fn dispatch_set_mark() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+        cm.cx = 15;
+        cm.cy = 8;
+
+        let action = dispatch_copy_mode_action(&screen, &mut cm, "set-mark");
+        assert!(matches!(action, CopyModeAction::Handled));
+        assert!(cm.mark.is_some());
+    }
+
+    #[test]
+    fn dispatch_swap_mark() {
+        let screen = Screen::new(80, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        // Set mark first
+        cm.cx = 5;
+        cm.cy = 5;
+        cm.set_mark(screen.grid.history_size());
+
+        // Move cursor
+        cm.cx = 30;
+        cm.cy = 15;
+
+        let action = dispatch_copy_mode_action(&screen, &mut cm, "swap-mark");
+        assert!(matches!(action, CopyModeAction::Handled));
+        // Cursor should have moved to old mark x
+        assert_eq!(cm.cx, 5);
+    }
+
+    #[test]
+    fn swap_mark_clamps_x_to_screen_width() {
+        let screen = Screen::new(40, 24, 2000);
+        let mut cm = CopyModeState::enter(&screen, "vi");
+
+        // Set mark at x=50 (beyond 40-col screen) by directly setting
+        cm.mark = Some((50, cm.absolute_y(screen.grid.history_size())));
+        cm.cx = 10;
+
+        cm.swap_mark(&screen);
+        // Should clamp to screen width - 1
+        assert_eq!(cm.cx, 39);
     }
 }

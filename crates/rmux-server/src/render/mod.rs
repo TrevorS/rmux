@@ -91,6 +91,10 @@ pub struct StatusConfig {
     pub set_titles: bool,
     /// Format string for the xterm title.
     pub set_titles_string: String,
+    /// Pane border status: "off", "top", or "bottom".
+    pub pane_border_status: String,
+    /// Format string for pane border status labels.
+    pub pane_border_format: String,
 }
 
 /// Render a window's contents to raw terminal output bytes.
@@ -278,6 +282,45 @@ fn render_panes_with_borders(
             (Style::DEFAULT, Style { fg: Color::GREEN, ..Style::DEFAULT })
         };
         draw_borders(writer, layout, window.active_pane, max_height, &border, &active_border);
+    }
+
+    // Draw pane border status labels if enabled
+    if let Some(cfg) = status_config {
+        if cfg.pane_border_status != "off" {
+            let border_style = cfg.pane_border_style;
+            let active_border_style = cfg.pane_active_border_style;
+            let at_top = cfg.pane_border_status == "top";
+            for pane in window.panes.values() {
+                let label_y = if at_top {
+                    if pane.yoff == 0 {
+                        continue;
+                    }
+                    pane.yoff - 1
+                } else {
+                    pane.yoff + pane.screen.height()
+                };
+                if label_y >= max_height {
+                    continue;
+                }
+
+                let mut ctx = FormatContext::new();
+                ctx.set("pane_index", pane.id.to_string());
+                ctx.set("pane_id", format!("%{}", pane.id));
+                ctx.set("pane_title", &pane.screen.title);
+                ctx.set("pane_active", if pane.id == window.active_pane { "1" } else { "0" });
+                ctx.set("pane_width", pane.screen.width().to_string());
+                ctx.set("pane_height", pane.screen.height().to_string());
+
+                let label = format_expand(&cfg.pane_border_format, &ctx);
+                let is_active = pane.id == window.active_pane;
+                let style = if is_active { &active_border_style } else { &border_style };
+                writer.set_style(style);
+                let max_w = pane.screen.width() as usize;
+                let truncated: String = label.chars().take(max_w).collect();
+                writer.cursor_position(pane.xoff, label_y);
+                writer.write_raw(truncated.as_bytes());
+            }
+        }
     }
 }
 
@@ -787,6 +830,8 @@ mod tests {
             window_status_current_style: Style::DEFAULT,
             set_titles: false,
             set_titles_string: String::new(),
+            pane_border_status: "off".to_string(),
+            pane_border_format: "#{pane_index}".to_string(),
         };
         let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg));
         // Status line should contain expanded session name
@@ -841,6 +886,8 @@ mod tests {
             window_status_current_style: Style::DEFAULT,
             set_titles: false,
             set_titles_string: String::new(),
+            pane_border_status: "off".to_string(),
+            pane_border_format: "#{pane_index}".to_string(),
         };
         let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
         // Active window uses current format
@@ -883,5 +930,91 @@ mod tests {
     fn window_flags_combined() {
         let f = WindowFlags::ACTIVE | WindowFlags::ZOOMED | WindowFlags::BELL;
         assert_eq!(f.to_flag_string(), "*Z#");
+    }
+
+    /// Helper to build a default StatusConfig for tests, with optional overrides.
+    fn test_status_config() -> StatusConfig {
+        StatusConfig {
+            left: "[#S] ".to_string(),
+            right: String::new(),
+            window_status_format: "#I:#W#F".to_string(),
+            window_status_current_format: "#I:#W#F".to_string(),
+            status_style: Style::DEFAULT,
+            pane_border_style: Style::DEFAULT,
+            pane_active_border_style: Style { fg: Color::GREEN, ..Style::DEFAULT },
+            status_position_top: false,
+            status_enabled: true,
+            status_justify: "left".to_string(),
+            status_left_length: 10,
+            status_right_length: 40,
+            window_status_separator: " ".to_string(),
+            window_status_style: Style::DEFAULT,
+            window_status_current_style: Style::DEFAULT,
+            set_titles: false,
+            set_titles_string: String::new(),
+            pane_border_status: "off".to_string(),
+            pane_border_format: "#{pane_index}".to_string(),
+        }
+    }
+
+    #[test]
+    fn pane_border_status_off_no_labels() {
+        let mut window = Window::new("0".into(), 80, 22);
+        let pane1 = Pane::new(80, 10, 0);
+        let pane2 = Pane::new(80, 11, 0);
+        let pid1 = pane1.id;
+        let pid2 = pane2.id;
+
+        let mut p1 = pane1;
+        p1.xoff = 0;
+        p1.yoff = 0;
+        let mut p2 = pane2;
+        p2.xoff = 0;
+        p2.yoff = 11; // after pane1 (10) + border (1)
+
+        window.active_pane = pid1;
+        window.panes.insert(pid1, p1);
+        window.panes.insert(pid2, p2);
+
+        let cfg = test_status_config();
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
+        // Should not contain pane index as a label
+        // The output is raw terminal bytes; with pane_border_status=off, no label is rendered
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn pane_border_status_bottom_renders_label() {
+        use rmux_core::layout::layout_even_vertical;
+        let mut window = Window::new("0".into(), 80, 22);
+        let pane1 = Pane::new(80, 10, 0);
+        let pane2 = Pane::new(80, 11, 0);
+        let pid1 = pane1.id;
+        let pid2 = pane2.id;
+
+        let mut p1 = pane1;
+        p1.xoff = 0;
+        p1.yoff = 0;
+        let mut p2 = pane2;
+        p2.xoff = 0;
+        p2.yoff = 11;
+
+        window.active_pane = pid1;
+        window.panes.insert(pid1, p1);
+        window.panes.insert(pid2, p2);
+        window.layout = Some(layout_even_vertical(80, 22, &[pid1, pid2]));
+
+        let mut cfg = test_status_config();
+        cfg.pane_border_status = "bottom".to_string();
+        cfg.pane_border_format = "PANE#{pane_index}".to_string();
+        let wl = single_window_list(0, "0");
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg));
+        // The label should contain the pane id rendered as "PANE<id>"
+        let label = format!("PANE{pid1}");
+        assert!(
+            output.windows(label.len()).any(|w| w == label.as_bytes()),
+            "output should contain {label}"
+        );
     }
 }

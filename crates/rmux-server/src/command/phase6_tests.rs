@@ -683,3 +683,248 @@ mod server_cmd_tests {
         assert!(result.is_err());
     }
 }
+
+// ============================================================
+// Prompt history tests
+// ============================================================
+
+mod prompt_history_tests {
+    use super::*;
+
+    #[test]
+    fn show_prompt_history_empty() {
+        let mut s = MockCommandServer::new();
+        let output = output_text(exec(&mut s, &["show-prompt-history"]));
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn show_prompt_history_returns_entries() {
+        let mut s = MockCommandServer::new();
+        s.add_prompt_history("set status on".into());
+        s.add_prompt_history("list-sessions".into());
+
+        let output = output_text(exec(&mut s, &["show-prompt-history"]));
+        assert!(output.contains("list-sessions"));
+        assert!(output.contains("set status on"));
+    }
+
+    #[test]
+    fn clear_prompt_history_empties_entries() {
+        let mut s = MockCommandServer::new();
+        s.add_prompt_history("new-session".into());
+        s.add_prompt_history("kill-session".into());
+
+        let result = exec(&mut s, &["clear-prompt-history"]);
+        assert!(result.is_ok());
+
+        let output = output_text(exec(&mut s, &["show-prompt-history"]));
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn prompt_history_deduplicates_consecutive() {
+        let mut s = MockCommandServer::new();
+        s.add_prompt_history("list-keys".into());
+        s.add_prompt_history("list-keys".into());
+
+        let history = s.show_prompt_history();
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn prompt_history_most_recent_first() {
+        let mut s = MockCommandServer::new();
+        s.add_prompt_history("first".into());
+        s.add_prompt_history("second".into());
+        s.add_prompt_history("third".into());
+
+        let history = s.show_prompt_history();
+        assert_eq!(history[0], "third");
+        assert_eq!(history[1], "second");
+        assert_eq!(history[2], "first");
+    }
+
+    #[test]
+    fn prompt_history_truncates_at_100() {
+        let mut s = MockCommandServer::new();
+        for i in 0..150 {
+            s.add_prompt_history(format!("cmd-{i}"));
+        }
+        let history = s.show_prompt_history();
+        assert_eq!(history.len(), 100);
+    }
+}
+
+// ============================================================
+// Session alerts format variable tests
+// ============================================================
+
+mod session_alerts_tests {
+    use super::*;
+
+    #[test]
+    fn session_alerts_in_format_context() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("main");
+
+        let result = exec(&mut s, &["display-message", "-p", "#{session_alerts}"]);
+        match result.unwrap() {
+            CommandResult::Output(text) => {
+                // With no alerts, should be empty
+                assert!(text.trim().is_empty(), "expected empty alerts, got: {text}");
+            }
+            other => panic!("expected Output, got {other:?}"),
+        }
+    }
+}
+
+// ============================================================
+// Pane border status option tests
+// ============================================================
+
+mod pane_border_status_tests {
+    use super::*;
+
+    #[test]
+    fn pane_border_status_default_off() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["show-options", "-w", "pane-border-status"]));
+        assert!(output.contains("off"), "default should be off: {output}");
+    }
+
+    #[test]
+    fn set_pane_border_status_top() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(&mut s, &["set-option", "-w", "pane-border-status", "top"]);
+        assert!(result.is_ok());
+
+        let output = output_text(exec(&mut s, &["show-options", "-w", "pane-border-status"]));
+        assert!(output.contains("top"), "should be top: {output}");
+    }
+
+    #[test]
+    fn set_pane_border_format() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(
+            &mut s,
+            &["set-option", "-w", "pane-border-format", "#{pane_index} #{pane_title}"],
+        );
+        assert!(result.is_ok());
+
+        let output = output_text(exec(&mut s, &["show-options", "-w", "pane-border-format"]));
+        assert!(output.contains("#{pane_index}"), "should have format: {output}");
+    }
+}
+
+// ============================================================
+// Lock options tests
+// ============================================================
+
+mod lock_option_tests {
+    use super::*;
+
+    #[test]
+    fn lock_after_time_default_zero() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["show-options", "lock-after-time"]));
+        assert!(output.contains('0'), "default should be 0: {output}");
+    }
+
+    #[test]
+    fn set_lock_after_time() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(&mut s, &["set-option", "-g", "lock-after-time", "300"]);
+        assert!(result.is_ok());
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "lock-after-time"]));
+        assert!(output.contains("300"), "should be 300: {output}");
+    }
+
+    #[test]
+    fn lock_command_default() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["show-options", "lock-command"]));
+        assert!(output.contains("lock -np"), "default should be 'lock -np': {output}");
+    }
+
+    #[test]
+    fn set_lock_command() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(&mut s, &["set-option", "-g", "lock-command", "vlock"]);
+        assert!(result.is_ok());
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "lock-command"]));
+        assert!(output.contains("vlock"), "should be vlock: {output}");
+    }
+}
+
+// ============================================================
+// Word separators option tests
+// ============================================================
+
+mod word_separators_tests {
+    use super::*;
+
+    #[test]
+    fn word_separators_default() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["show-options", "word-separators"]));
+        assert!(output.contains("word-separators"), "should exist: {output}");
+    }
+
+    #[test]
+    fn set_word_separators() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let result = exec(&mut s, &["set-option", "-g", "word-separators", " -_@"]);
+        assert!(result.is_ok());
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "word-separators"]));
+        assert!(output.contains("-_@"), "should contain custom separators: {output}");
+    }
+}
+
+// ============================================================
+// Key binding tests for mark bindings
+// ============================================================
+
+mod mark_binding_tests {
+    use super::*;
+
+    #[test]
+    fn default_copy_mode_vi_has_mark_binding() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["list-keys"]));
+        // 'm' should be bound to set-mark in copy-mode-vi
+        assert!(output.contains("set-mark"), "should have set-mark binding: {output}");
+    }
+
+    #[test]
+    fn default_copy_mode_vi_has_swap_mark_binding() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["list-keys"]));
+        assert!(output.contains("swap-mark"), "should have swap-mark binding: {output}");
+    }
+}

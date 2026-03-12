@@ -275,6 +275,8 @@ pub fn default_session_options() -> Options {
     opts.set("bell-action", OptionValue::String("any".into()));
     opts.set("activity-action", OptionValue::String("other".into()));
     opts.set("silence-action", OptionValue::String("none".into()));
+    opts.set("lock-after-time", OptionValue::Number(0)); // 0 = disabled
+    opts.set("lock-command", OptionValue::String("lock -np".into()));
     opts
 }
 
@@ -289,6 +291,13 @@ pub fn default_window_options() -> Options {
     opts.set("monitor-activity", OptionValue::Flag(false));
     opts.set("pane-border-style", OptionValue::String("default".into()));
     opts.set("pane-active-border-style", OptionValue::String("fg=green".into()));
+    opts.set("pane-border-status", OptionValue::String("off".into()));
+    opts.set(
+        "pane-border-format",
+        OptionValue::String(
+            "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"".into(),
+        ),
+    );
     opts.set("remain-on-exit", OptionValue::Flag(false));
     opts.set("alternate-screen", OptionValue::Flag(true));
     opts.set("monitor-bell", OptionValue::Flag(true));
@@ -628,5 +637,31 @@ mod tests {
         assert_eq!(opts.get_string("activity-action").unwrap(), "other");
         assert_eq!(opts.get_string("silence-action").unwrap(), "none");
         assert_eq!(opts.get_string("key-table").unwrap(), "root");
+    }
+
+    #[test]
+    fn session_defaults_lock_options() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_number("lock-after-time").unwrap(), 0);
+        assert_eq!(opts.get_string("lock-command").unwrap(), "lock -np");
+    }
+
+    #[test]
+    fn session_defaults_word_separators() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_string("word-separators").unwrap(), " ");
+    }
+
+    #[test]
+    fn window_defaults_pane_border_status() {
+        let opts = default_window_options();
+        assert_eq!(opts.get_string("pane-border-status").unwrap(), "off");
+        assert!(opts.get_string("pane-border-format").unwrap().contains("pane_index"));
+    }
+
+    #[test]
+    fn window_defaults_copy_mode_mark_style() {
+        let opts = default_window_options();
+        assert_eq!(opts.get_string("copy-mode-mark-style").unwrap(), "bg=red,fg=black");
     }
 }

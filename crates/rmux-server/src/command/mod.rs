@@ -363,6 +363,14 @@ pub trait CommandServer {
     /// Start or stop piping a pane's output to a shell command.
     /// If `command` is `None`, stop the existing pipe.
     fn pipe_pane(&mut self, command: Option<&str>) -> Result<(), ServerError>;
+
+    // --- Prompt history ---
+    /// Get the prompt history entries.
+    fn show_prompt_history(&self) -> Vec<String>;
+    /// Clear the prompt history.
+    fn clear_prompt_history(&mut self);
+    /// Add an entry to the prompt history.
+    fn add_prompt_history(&mut self, entry: String);
 }
 
 /// Look up a command by name or unambiguous prefix (matching tmux behavior).

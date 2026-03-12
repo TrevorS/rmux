@@ -40,6 +40,8 @@ pub struct MockCommandServer {
     pub copy_mode_entered: bool,
     /// Hook store for testing.
     pub hooks: crate::hooks::HookStore,
+    /// Prompt history.
+    pub prompt_history: Vec<String>,
 }
 
 impl MockCommandServer {
@@ -59,6 +61,7 @@ impl MockCommandServer {
             paste_buffers: PasteBufferStore::default(),
             copy_mode_entered: false,
             hooks: crate::hooks::HookStore::new(),
+            prompt_history: Vec::new(),
         }
     }
 
@@ -1249,6 +1252,22 @@ impl CommandServer for MockCommandServer {
                 ctx.set("session_windows", session.windows.len().to_string());
                 ctx.set("session_created", session.created.to_string());
                 ctx.set("session_activity", session.activity.to_string());
+                let alerts: Vec<String> = session
+                    .sorted_window_indices()
+                    .iter()
+                    .filter_map(|&idx| {
+                        let w = session.windows.get(&idx)?;
+                        let mut flags = String::new();
+                        if w.has_bell {
+                            flags.push('#');
+                        }
+                        if w.has_activity {
+                            flags.push('!');
+                        }
+                        if flags.is_empty() { None } else { Some(format!("{idx}:{flags}")) }
+                    })
+                    .collect();
+                ctx.set("session_alerts", alerts.join(", "));
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
                     if let Some(window) = session.windows.get(&widx) {
@@ -1438,5 +1457,20 @@ impl CommandServer for MockCommandServer {
 
     fn pipe_pane(&mut self, _command: Option<&str>) -> Result<(), ServerError> {
         Ok(())
+    }
+
+    fn show_prompt_history(&self) -> Vec<String> {
+        self.prompt_history.clone()
+    }
+
+    fn clear_prompt_history(&mut self) {
+        self.prompt_history.clear();
+    }
+
+    fn add_prompt_history(&mut self, entry: String) {
+        if self.prompt_history.first().is_none_or(|last| *last != entry) {
+            self.prompt_history.insert(0, entry);
+            self.prompt_history.truncate(100);
+        }
     }
 }

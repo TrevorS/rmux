@@ -286,9 +286,10 @@ pub fn cmd_customize_mode(
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_clear_prompt_history(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
+    server.clear_prompt_history();
     Ok(CommandResult::Ok)
 }
 
@@ -296,10 +297,15 @@ pub fn cmd_clear_prompt_history(
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_show_prompt_history(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    Ok(CommandResult::Output(String::new()))
+    let history = server.show_prompt_history();
+    if history.is_empty() {
+        Ok(CommandResult::Output(String::new()))
+    } else {
+        Ok(CommandResult::Output(history.join("\n") + "\n"))
+    }
 }
 
 /// pipe-pane [-o] [-t target-pane] [command]

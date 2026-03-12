@@ -102,6 +102,8 @@ pub struct Server {
     tick_count: u32,
     /// Recent server messages for show-messages.
     message_log: std::collections::VecDeque<String>,
+    /// Prompt history (most recent first).
+    prompt_history: Vec<String>,
 }
 
 impl Server {
@@ -129,6 +131,7 @@ impl Server {
             hooks: crate::hooks::HookStore::new(),
             tick_count: 0,
             message_log: std::collections::VecDeque::new(),
+            prompt_history: Vec::new(),
         }
     }
 
@@ -1033,21 +1036,33 @@ impl Server {
     /// Double-click: select the word at the given screen position.
     fn copy_mode_select_word(&mut self, session_id: u32, x: u32, y: u32) {
         if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+            let word_seps =
+                session.options.get_string("word-separators").unwrap_or(" ").to_string();
             if let Some(window) = session.active_window_mut() {
                 if let Some(pane) = window.active_pane_mut() {
                     if let Some(cm) = &mut pane.copy_mode {
                         cm.cx = x;
                         cm.cy = y;
-                        // Find word boundaries
+                        // Find word boundaries using word-separators option
                         let abs_y = cm.absolute_y(pane.screen.grid.history_size());
                         if let Some(line) = pane.screen.grid.get_line_absolute(abs_y) {
                             let max = line.cell_count();
+                            let is_sep = |cell_data: &[u8]| -> bool {
+                                if cell_data.is_empty() {
+                                    return true;
+                                }
+                                // Check each char against word-separators
+                                if let Ok(s) = std::str::from_utf8(cell_data) {
+                                    s.chars().any(|c| word_seps.contains(c))
+                                } else {
+                                    false
+                                }
+                            };
                             // Find word start
                             let mut start = x;
                             while start > 0 {
                                 let cell = line.get_cell(start - 1);
-                                let bytes = cell.data.as_bytes();
-                                if bytes.is_empty() || bytes == [b' '] {
+                                if is_sep(cell.data.as_bytes()) {
                                     break;
                                 }
                                 start -= 1;
@@ -1056,8 +1071,7 @@ impl Server {
                             let mut end = x;
                             while end + 1 < max {
                                 let cell = line.get_cell(end + 1);
-                                let bytes = cell.data.as_bytes();
-                                if bytes.is_empty() || bytes == [b' '] {
+                                if is_sep(cell.data.as_bytes()) {
                                     break;
                                 }
                                 end += 1;
@@ -1411,6 +1425,9 @@ impl Server {
             (buf, pt)
         };
         if !input.is_empty() {
+            // Add to prompt history
+            self.prompt_history.insert(0, input.clone());
+            self.prompt_history.truncate(100);
             match prompt_type {
                 PromptType::Command => {
                     let argv = crate::config::tokenize_command(&input);
@@ -1793,11 +1810,29 @@ impl Server {
             .collect();
         window_list.sort_by_key(|w| w.idx);
 
-        // Build status config from session options
-        let status_style_str =
-            session.options.get_string("status-style").unwrap_or("bg=green,fg=black");
-        let status_style = rmux_core::style::parse_style(status_style_str);
-        let status_config = render::StatusConfig {
+        let status_config = Self::build_status_config(session, window);
+
+        render::render_window(
+            window,
+            &session.name,
+            sx,
+            sy,
+            &window_list,
+            prompt,
+            Some(&status_config),
+        )
+    }
+
+    /// Build `StatusConfig` from session and window options.
+    fn build_status_config(
+        session: &crate::session::Session,
+
+        window: &crate::window::Window,
+    ) -> render::StatusConfig {
+        let status_style = rmux_core::style::parse_style(
+            session.options.get_string("status-style").unwrap_or("bg=green,fg=black"),
+        );
+        render::StatusConfig {
             left: session
                 .options
                 .get_string("status-left")
@@ -1850,17 +1885,17 @@ impl Server {
                 .get_string("set-titles-string")
                 .unwrap_or("#S:#I:#W")
                 .to_string(),
-        };
-
-        render::render_window(
-            window,
-            &session.name,
-            sx,
-            sy,
-            &window_list,
-            prompt,
-            Some(&status_config),
-        )
+            pane_border_status: window
+                .options
+                .get_string("pane-border-status")
+                .unwrap_or("off")
+                .to_string(),
+            pane_border_format: window
+                .options
+                .get_string("pane-border-format")
+                .unwrap_or("#{pane_index}")
+                .to_string(),
+        }
     }
 
     /// Spawn a shell process for a pane.
@@ -2628,6 +2663,23 @@ impl CommandServer for Server {
                 ctx.set("session_attached", session.attached.to_string());
                 ctx.set("session_created", session.created.to_string());
                 ctx.set("session_activity", session.activity.to_string());
+                // session_alerts: list windows with bell/activity flags
+                let alerts: Vec<String> = session
+                    .sorted_window_indices()
+                    .iter()
+                    .filter_map(|&idx| {
+                        let w = session.windows.get(&idx)?;
+                        let mut flags = String::new();
+                        if w.has_bell {
+                            flags.push('#');
+                        }
+                        if w.has_activity {
+                            flags.push('!');
+                        }
+                        if flags.is_empty() { None } else { Some(format!("{idx}:{flags}")) }
+                    })
+                    .collect();
+                ctx.set("session_alerts", alerts.join(", "));
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
                     // Window flags
@@ -3825,6 +3877,25 @@ impl CommandServer for Server {
 
     fn show_hooks(&self) -> Vec<String> {
         self.hooks.list()
+    }
+
+    // --- Prompt history ---
+
+    fn show_prompt_history(&self) -> Vec<String> {
+        self.prompt_history.clone()
+    }
+
+    fn clear_prompt_history(&mut self) {
+        self.prompt_history.clear();
+    }
+
+    fn add_prompt_history(&mut self, entry: String) {
+        // Don't add duplicates of the most recent entry
+        if self.prompt_history.first().is_none_or(|last| *last != entry) {
+            self.prompt_history.insert(0, entry);
+            // Cap at 100 entries
+            self.prompt_history.truncate(100);
+        }
     }
 }
 

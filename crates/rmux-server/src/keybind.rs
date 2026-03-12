@@ -395,6 +395,10 @@ fn default_copy_mode_vi() -> HashMap<KeyCode, KeyBinding> {
     m.insert(b';' as KeyCode, bind(vec!["jump-again".into()]));
     m.insert(b',' as KeyCode, bind(vec!["jump-reverse".into()]));
 
+    // Mark
+    m.insert(b'm' as KeyCode, bind(vec!["set-mark".into()]));
+    m.insert(keyc_build(b'm'.into(), KeyModifiers::META), bind(vec!["swap-mark".into()]));
+
     // Search
     m.insert(b'/' as KeyCode, bind(vec!["search-forward".into()]));
     m.insert(b'?' as KeyCode, bind(vec!["search-backward".into()]));
@@ -979,5 +983,25 @@ mod tests {
         let bindings = kb.list_bindings();
         let z_binding = bindings.iter().find(|b| b.contains("test-cmd")).unwrap();
         assert!(z_binding.contains(" -r"), "expected -r flag in: {z_binding}");
+    }
+
+    #[test]
+    fn copy_mode_vi_has_set_mark_binding() {
+        let kb = KeyBindings::default_bindings();
+        let table = kb.tables.get("copy-mode-vi").expect("copy-mode-vi table");
+        let binding = table.get(&(b'm' as KeyCode));
+        assert!(binding.is_some(), "m should be bound in copy-mode-vi");
+        assert_eq!(binding.unwrap().argv, vec!["set-mark"]);
+    }
+
+    #[test]
+    fn copy_mode_vi_has_swap_mark_binding() {
+        let kb = KeyBindings::default_bindings();
+        let table = kb.tables.get("copy-mode-vi").expect("copy-mode-vi table");
+        // M-m = Meta + m
+        let meta_m = keyc_build(b'm'.into(), KeyModifiers::META);
+        let binding = table.get(&meta_m);
+        assert!(binding.is_some(), "M-m should be bound in copy-mode-vi");
+        assert_eq!(binding.unwrap().argv, vec!["swap-mark"]);
     }
 }

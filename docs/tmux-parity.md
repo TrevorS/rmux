@@ -1,6 +1,6 @@
 # tmux Parity Checklist
 
-Tracks rmux feature completeness relative to tmux 3.4. Updated 2026-03-11.
+Tracks rmux feature completeness relative to tmux 3.4. Updated 2026-03-12.
 
 Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 
@@ -91,8 +91,8 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `display-panes` / `displayp` — show pane info (text, not overlay)
 - [x] `clock-mode` — display ASCII clock
 - [x] `show-messages` / `showmsgs` — display server message log
-- [ ] `show-prompt-history` — stub (returns empty)
-- [ ] `clear-prompt-history` — stub (no-op)
+- [x] `show-prompt-history` — returns prompt history entries (most recent first)
+- [x] `clear-prompt-history` — clears prompt history
 
 ### Interactive UI (require client-side overlay rendering)
 - [ ] `choose-tree` — interactive session/window tree (falls back to list-sessions)
@@ -255,8 +255,8 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `visual-activity` / `visual-bell` / `visual-silence` — notification styles (defined)
 - [x] `word-separators` — word boundary chars for copy mode (defined)
 - [x] `window-status-format` / `window-status-current-format` — per-window format
-- [ ] `lock-after-time` — auto-lock timeout
-- [ ] `lock-command` — lock screen command
+- [x] `lock-after-time` — auto-lock timeout (option defined, default 0 = disabled)
+- [x] `lock-command` — lock screen command (option defined, default "lock -np")
 - [x] `default-size` — default window size (used when no client attached)
 - [x] `key-table` — default key table
 - [x] `silence-action` / `bell-action` / `activity-action` — alert actions
@@ -307,7 +307,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Cursor style passthrough (block/underline/bar)
 - [x] Status line strftime expansion (`%H:%M`, `%d-%b-%y`, etc.)
 - [x] Status line style changes within format strings (`#[fg=red]`)
-- [ ] Pane border status line (pane-border-status)
+- [x] Pane border status line (pane-border-status top/bottom with format expansion)
 - [x] Window flags (`*`, `-`, `#`, `!`, `Z`) via `WindowFlags` bitflags
 - [x] Window activity/bell detection (BEL notification sets `#` flag, output sets `!` flag when `monitor-activity`/`monitor-bell` enabled; cleared on window select)
 
@@ -329,9 +329,9 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Rectangle selection (Ctrl-v toggle, block copy)
 - [x] Jump to character (f/F/t/T)
 - [x] Go to line (`:` in copy mode)
-- [ ] Mark and swap (`m`/`M-m`)
+- [x] Mark and swap (`m` set-mark, `M-m` swap-mark in copy-mode-vi)
 - [x] Copy pipe (copy and pipe to command)
-- [ ] Word selection (double-click equivalent)
+- [x] Word selection (double-click with word-separators option support)
 
 ---
 
@@ -434,7 +434,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 
 ### Missing Variables
 - [x] `session_activity` — session last activity timestamp
-- [ ] `session_alerts`
+- [x] `session_alerts` — comma-separated list of windows with bell/activity flags
 - [x] `pane_tty` — PTY device name (via `ptsname`/procfs)
 - [x] `pane_start_command` — command the pane was started with
 - [x] `client_activity` — client last activity timestamp
