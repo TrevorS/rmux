@@ -14,6 +14,7 @@ use crate::session::SessionManager;
 use crate::window::Window;
 use rmux_core::layout::{LayoutCell, layout_even_horizontal, layout_even_vertical};
 use rmux_core::options::OptionValue;
+use rmux_core::screen::ModeFlags;
 use rmux_protocol::codec::{self, MessageReader, MessageWriter};
 use rmux_protocol::message::Message;
 use rmux_terminal::pty;
@@ -2323,13 +2324,29 @@ impl CommandServer for Server {
                 ctx.set("session_id", format!("${session_id}"));
                 ctx.set("session_windows", session.windows.len().to_string());
                 ctx.set("session_attached", session.attached.to_string());
+                ctx.set("session_created", session.created.to_string());
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
+                    // Window flags
+                    let mut wflags = render::WindowFlags::ACTIVE;
+                    if session.last_window == Some(widx) {
+                        wflags |= render::WindowFlags::LAST;
+                    }
+                    ctx.set("window_flags", wflags.to_flag_string());
                     if let Some(window) = session.windows.get(&widx) {
                         ctx.set("window_name", &*window.name);
                         ctx.set("window_id", format!("@{}", window.id));
                         ctx.set("window_panes", window.pane_count().to_string());
                         ctx.set("window_active", "1");
+                        // Window layout name
+                        if let Some(layout) = &window.layout {
+                            let layout_name = match layout.cell_type {
+                                rmux_core::layout::LayoutType::TopBottom => "even-vertical",
+                                rmux_core::layout::LayoutType::LeftRight
+                                | rmux_core::layout::LayoutType::Pane => "even-horizontal",
+                            };
+                            ctx.set("window_layout", layout_name);
+                        }
                         if let Some(pane) = window.active_pane() {
                             ctx.set("pane_id", format!("%{}", pane.id));
                             ctx.set("pane_index", pane.id.to_string());
@@ -2337,6 +2354,7 @@ impl CommandServer for Server {
                             ctx.set("pane_width", pane.screen.width().to_string());
                             ctx.set("pane_height", pane.screen.height().to_string());
                             ctx.set("pane_active", "1");
+                            ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
                             ctx.set("pane_current_command", &*window.name);
                             // Use per-pane CWD from OSC 7, fall back to session CWD
                             let path = pane.screen.path.as_deref().unwrap_or(&session.cwd);
@@ -2352,6 +2370,28 @@ impl CommandServer for Server {
                                 "alternate_on",
                                 if pane.screen.alternate.is_some() { "1" } else { "0" },
                             );
+                            // Mode flags
+                            let mode = pane.screen.mode;
+                            ctx.set(
+                                "cursor_flag",
+                                if mode.contains(ModeFlags::CURSOR_KEYS) { "1" } else { "0" },
+                            );
+                            ctx.set(
+                                "insert_flag",
+                                if mode.contains(ModeFlags::INSERT) { "1" } else { "0" },
+                            );
+                            ctx.set(
+                                "keypad_flag",
+                                if mode.contains(ModeFlags::KEYPAD) { "1" } else { "0" },
+                            );
+                            ctx.set(
+                                "mouse_any_flag",
+                                if mode.intersects(ModeFlags::MOUSE_BUTTON | ModeFlags::MOUSE_ANY) {
+                                    "1"
+                                } else {
+                                    "0"
+                                },
+                            );
                         }
                     }
                 }
@@ -2361,6 +2401,15 @@ impl CommandServer for Server {
         let client_id = self.command_client;
         ctx.set("client_name", format!("client-{client_id}"));
         ctx.set("client_tty", "/dev/tty");
+        if let Some(client) = self.clients.get(&client_id) {
+            ctx.set("client_width", client.sx.to_string());
+            ctx.set("client_height", client.sy.to_string());
+            if let Some(sid) = client.session_id {
+                if let Some(session) = self.sessions.find_by_id(sid) {
+                    ctx.set("client_session", &*session.name);
+                }
+            }
+        }
         if let Ok(hostname) = nix::unistd::gethostname() {
             let h = hostname.to_string_lossy().to_string();
             if let Some(short) = h.split('.').next() {

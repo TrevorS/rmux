@@ -401,14 +401,14 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 ## Format Variables
 
 ### Implemented
-- [x] `session_name`, `session_id`, `session_windows`, `session_attached`
-- [x] `window_name`, `window_index`, `window_id`, `window_active`, `window_flags`, `window_panes`
-- [x] `pane_id`, `pane_index`, `pane_title`, `pane_active`, `pane_width`, `pane_height`
+- [x] `session_name`, `session_id`, `session_windows`, `session_attached`, `session_created`
+- [x] `window_name`, `window_index`, `window_id`, `window_active`, `window_flags`, `window_panes`, `window_layout`
+- [x] `pane_id`, `pane_index`, `pane_title`, `pane_active`, `pane_width`, `pane_height`, `pane_dead`
 - [x] `pane_current_command`, `pane_current_path` (OSC 7), `pane_pid`
 - [x] `pane_in_mode`, `alternate_on`
-- [x] `cursor_x`, `cursor_y`
+- [x] `cursor_x`, `cursor_y`, `cursor_flag`, `insert_flag`, `keypad_flag`, `mouse_any_flag`
 - [x] `host`, `host_short`
-- [x] `client_name`, `client_tty`
+- [x] `client_name`, `client_tty`, `client_session`, `client_width`, `client_height`
 - [x] `pane_count`
 
 ### Format Features
@@ -423,12 +423,19 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `#{T:var}` — strftime expansion (bare `%H:%M` etc. in status-left/right)
 - [x] Numeric comparisons: `#{<:a,b}`, `#{>:a,b}`, `#{<=:a,b}`, `#{>=:a,b}`
 
+### Newly Implemented Variables
+- [x] `session_created` — Unix timestamp of session creation
+- [x] `window_layout` — current layout name (even-horizontal/even-vertical)
+- [x] `window_flags` — now includes `*`, `-`, `Z`, `#`, `!` flags
+- [x] `pane_dead` — whether pane process has exited
+- [x] `client_session`, `client_width`, `client_height` — client info
+- [x] `cursor_flag`, `insert_flag`, `keypad_flag`, `mouse_any_flag` — terminal mode flags
+
 ### Missing Variables
-- [ ] `session_created`, `session_activity`, `session_alerts`
-- [ ] `window_layout`, `window_bell_flag`, `window_activity_flag`
-- [ ] `pane_tty`, `pane_start_command`, `pane_dead`
-- [ ] `client_session`, `client_width`, `client_height`, `client_activity`
-- [ ] `cursor_flag`, `insert_flag`, `keypad_flag`, `mouse_any_flag`
+- [ ] `session_activity`, `session_alerts`
+- [ ] `window_bell_flag`, `window_activity_flag`
+- [ ] `pane_tty`, `pane_start_command`
+- [ ] `client_activity`
 
 ---
 

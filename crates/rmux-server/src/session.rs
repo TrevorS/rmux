@@ -28,12 +28,18 @@ pub struct Session {
     pub attached: u32,
     /// Session environment variables (set-environment / show-environment).
     pub environ: HashMap<String, String>,
+    /// Unix timestamp when the session was created.
+    pub created: u64,
 }
 
 impl Session {
     /// Create a new session with the given name.
     #[must_use]
     pub fn new(name: String, cwd: String) -> Self {
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         Self {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             name,
@@ -44,6 +50,7 @@ impl Session {
             options: default_session_options(),
             attached: 0,
             environ: HashMap::new(),
+            created,
         }
     }
 

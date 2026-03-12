@@ -1222,6 +1222,7 @@ impl CommandServer for MockCommandServer {
             if let Some(session) = self.sessions.find_by_id(session_id) {
                 ctx.set("session_name", &*session.name);
                 ctx.set("session_windows", session.windows.len().to_string());
+                ctx.set("session_created", session.created.to_string());
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
                     if let Some(window) = session.windows.get(&widx) {
@@ -1234,6 +1235,7 @@ impl CommandServer for MockCommandServer {
                             ctx.set("pane_width", pane.screen.width().to_string());
                             ctx.set("pane_height", pane.screen.height().to_string());
                             ctx.set("pane_active", "1");
+                            ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
                         }
                     }
                 }
