@@ -241,7 +241,7 @@ impl Server {
         let mut notifications = Vec::new();
         let mut replies: Option<(i32, Vec<u8>)> = None;
         for session in self.sessions.iter_mut() {
-            for window in session.windows.values_mut() {
+            for (&widx, window) in &mut session.windows {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
                     pane.process_input(data);
                     pane.pipe_output(data);
@@ -261,6 +261,25 @@ impl Server {
                             window.name.clone_from(&pane.screen.title);
                         }
                     }
+                    let is_active_window = widx == session.active_window;
+                    // Bell detection: set flag on non-active windows when monitor-bell is on
+                    let has_bell = notifications
+                        .iter()
+                        .any(|n| matches!(n, rmux_core::screen::Notification::Bell));
+                    if has_bell
+                        && !is_active_window
+                        && window.options.get_flag("monitor-bell").unwrap_or(true)
+                    {
+                        window.has_bell = true;
+                    }
+                    // Activity detection: set flag on non-active windows when monitor-activity is on
+                    if !is_active_window
+                        && window.options.get_flag("monitor-activity").unwrap_or(false)
+                    {
+                        window.has_activity = true;
+                    }
+                    // Filter out Bell notifications (handled above, not needed downstream)
+                    notifications.retain(|n| !matches!(n, rmux_core::screen::Notification::Bell));
                     // Mark attached clients for redraw — but defer if
                     // the pane is in synchronized output mode (mode 2026).
                     let in_sync =
@@ -310,8 +329,10 @@ impl Server {
             | Notification::ResetCursorColor
             | Notification::ResetPaletteColor(_)
             | Notification::ResetForegroundColor
-            | Notification::ResetBackgroundColor => {
-                // Color notifications — stored for future use
+            | Notification::ResetBackgroundColor
+            | Notification::Bell => {
+                // Color notifications stored for future use.
+                // Bell handled in handle_pty_output where we have window context.
             }
         }
     }
@@ -507,6 +528,11 @@ impl Server {
             }
             Ok(CommandResult::Exit) => {
                 self.shutdown = true;
+            }
+            Ok(CommandResult::Suspend) => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.send(&Message::Suspend).await.ok();
+                }
             }
             Ok(CommandResult::RunShell(cmd)) => {
                 let output =
@@ -1442,6 +1468,24 @@ impl Server {
     }
 
     /// Log a server message (for show-messages). Caps at message-limit.
+    /// Parse the `default-size` option (e.g. "80x24") into (width, height).
+    ///
+    /// Checks the current command client's session options first, then falls
+    /// back to the global session defaults.
+    fn default_size(&self) -> (u32, u32) {
+        let s = self
+            .client_session_id()
+            .and_then(|sid| self.sessions.find_by_id(sid))
+            .and_then(|session| session.options.get_string("default-size").ok())
+            .unwrap_or("80x24");
+        if let Some((w, h)) = s.split_once('x') {
+            if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                return (w, h);
+            }
+        }
+        (80, 24)
+    }
+
     fn log_message(&mut self, msg: String) {
         let limit = self.options.get_number("message-limit").unwrap_or(1000) as usize;
         self.message_log.push_back(msg);
@@ -1526,6 +1570,12 @@ impl Server {
                 }
                 if session.last_window == Some(idx) {
                     flags |= render::WindowFlags::LAST;
+                }
+                if w.has_bell {
+                    flags |= render::WindowFlags::BELL;
+                }
+                if w.has_activity {
+                    flags |= render::WindowFlags::ACTIVITY;
                 }
                 render::WindowInfo { idx, name: w.name.clone(), flags }
             })
@@ -1649,6 +1699,43 @@ impl Server {
         }
         self.pty_fds.remove(&pane_id);
     }
+
+    /// Set pane-related format variables on the context.
+    fn set_pane_format_vars(
+        ctx: &mut crate::format::FormatContext,
+        pane: &crate::pane::Pane,
+        window_name: &str,
+        session_cwd: &str,
+    ) {
+        ctx.set("pane_id", format!("%{}", pane.id));
+        ctx.set("pane_index", pane.id.to_string());
+        ctx.set("pane_title", &*pane.screen.title);
+        ctx.set("pane_width", pane.screen.width().to_string());
+        ctx.set("pane_height", pane.screen.height().to_string());
+        ctx.set("pane_active", "1");
+        ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
+        ctx.set("pane_current_command", window_name);
+        let path = pane.screen.path.as_deref().unwrap_or(session_cwd);
+        ctx.set("pane_current_path", path);
+        ctx.set("pane_pid", pane.pid.to_string());
+        if pane.pty_fd >= 0 {
+            if let Some(tty) = pty::pty_device_name(pane.pty_fd) {
+                ctx.set("pane_tty", tty);
+            }
+        }
+        ctx.set("cursor_x", pane.screen.cursor.x.to_string());
+        ctx.set("cursor_y", pane.screen.cursor.y.to_string());
+        ctx.set("pane_in_mode", if pane.copy_mode.is_some() { "1" } else { "0" });
+        ctx.set("alternate_on", if pane.screen.alternate.is_some() { "1" } else { "0" });
+        let mode = pane.screen.mode;
+        ctx.set("cursor_flag", if mode.contains(ModeFlags::CURSOR_KEYS) { "1" } else { "0" });
+        ctx.set("insert_flag", if mode.contains(ModeFlags::INSERT) { "1" } else { "0" });
+        ctx.set("keypad_flag", if mode.contains(ModeFlags::KEYPAD) { "1" } else { "0" });
+        ctx.set(
+            "mouse_any_flag",
+            if mode.intersects(ModeFlags::MOUSE_BUTTON | ModeFlags::MOUSE_ANY) { "1" } else { "0" },
+        );
+    }
 }
 
 /// Get the default window name from the user's shell (e.g. "zsh", "bash").
@@ -1733,11 +1820,11 @@ impl CommandServer for Server {
     }
 
     fn client_sx(&self) -> u32 {
-        self.clients.get(&self.command_client).map_or(80, |c| c.sx)
+        self.clients.get(&self.command_client).map_or_else(|| self.default_size().0, |c| c.sx)
     }
 
     fn client_sy(&self) -> u32 {
-        self.clients.get(&self.command_client).map_or(24, |c| c.sy)
+        self.clients.get(&self.command_client).map_or_else(|| self.default_size().1, |c| c.sy)
     }
 
     // --- Session operations ---
@@ -2348,50 +2435,7 @@ impl CommandServer for Server {
                             ctx.set("window_layout", layout_name);
                         }
                         if let Some(pane) = window.active_pane() {
-                            ctx.set("pane_id", format!("%{}", pane.id));
-                            ctx.set("pane_index", pane.id.to_string());
-                            ctx.set("pane_title", &*pane.screen.title);
-                            ctx.set("pane_width", pane.screen.width().to_string());
-                            ctx.set("pane_height", pane.screen.height().to_string());
-                            ctx.set("pane_active", "1");
-                            ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
-                            ctx.set("pane_current_command", &*window.name);
-                            // Use per-pane CWD from OSC 7, fall back to session CWD
-                            let path = pane.screen.path.as_deref().unwrap_or(&session.cwd);
-                            ctx.set("pane_current_path", path);
-                            ctx.set("pane_pid", pane.pid.to_string());
-                            ctx.set("cursor_x", pane.screen.cursor.x.to_string());
-                            ctx.set("cursor_y", pane.screen.cursor.y.to_string());
-                            ctx.set(
-                                "pane_in_mode",
-                                if pane.copy_mode.is_some() { "1" } else { "0" },
-                            );
-                            ctx.set(
-                                "alternate_on",
-                                if pane.screen.alternate.is_some() { "1" } else { "0" },
-                            );
-                            // Mode flags
-                            let mode = pane.screen.mode;
-                            ctx.set(
-                                "cursor_flag",
-                                if mode.contains(ModeFlags::CURSOR_KEYS) { "1" } else { "0" },
-                            );
-                            ctx.set(
-                                "insert_flag",
-                                if mode.contains(ModeFlags::INSERT) { "1" } else { "0" },
-                            );
-                            ctx.set(
-                                "keypad_flag",
-                                if mode.contains(ModeFlags::KEYPAD) { "1" } else { "0" },
-                            );
-                            ctx.set(
-                                "mouse_any_flag",
-                                if mode.intersects(ModeFlags::MOUSE_BUTTON | ModeFlags::MOUSE_ANY) {
-                                    "1"
-                                } else {
-                                    "0"
-                                },
-                            );
+                            Self::set_pane_format_vars(&mut ctx, pane, &window.name, &session.cwd);
                         }
                     }
                 }

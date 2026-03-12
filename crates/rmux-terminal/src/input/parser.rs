@@ -436,7 +436,10 @@ impl InputParser {
     /// Handle C0 control character execution.
     fn handle_execute(&mut self, byte: u8, screen: &mut Screen) {
         match byte {
-            0x07 => {} // BEL - ring bell (handled by client)
+            0x07 => {
+                // BEL - ring bell, notify server for monitor-bell
+                screen.notifications.push_back(Notification::Bell);
+            }
             0x08 => {
                 // BS - backspace
                 if screen.cursor.x > 0 {
@@ -1288,6 +1291,36 @@ mod tests {
         parser.parse(b"\x1b[5;20r", &mut screen);
         assert_eq!(screen.scroll_region.top, 4);
         assert_eq!(screen.scroll_region.bottom, 19);
+    }
+
+    #[test]
+    fn parse_bel_generates_notification() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 1);
+        assert_eq!(screen.notifications[0], Notification::Bell);
+    }
+
+    #[test]
+    fn parse_bel_multiple() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x07\x07\x07", &mut screen);
+        assert_eq!(screen.notifications.len(), 3);
+        assert!(screen.notifications.iter().all(|n| *n == Notification::Bell));
+    }
+
+    #[test]
+    fn parse_bel_in_osc_does_not_generate_bell_notification() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        // BEL as OSC terminator should NOT generate a Bell notification
+        parser.parse(b"\x1b]0;Title\x07", &mut screen);
+        assert!(
+            screen.notifications.iter().all(|n| !matches!(n, Notification::Bell)),
+            "BEL as OSC terminator should not produce Bell notification"
+        );
     }
 
     #[test]

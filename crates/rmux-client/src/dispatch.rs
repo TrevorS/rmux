@@ -65,6 +65,10 @@ pub async fn run_attached(
                                 // Server asked us to detach
                                 break;
                             }
+                            Message::Suspend => {
+                                // Server asked us to suspend — send SIGTSTP to ourselves
+                                nix::sys::signal::raise(nix::sys::signal::Signal::SIGTSTP).ok();
+                            }
                             Message::Exit | Message::Exited => {
                                 break;
                             }

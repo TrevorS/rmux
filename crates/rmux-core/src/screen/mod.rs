@@ -28,6 +28,8 @@ pub enum Notification {
     ResetForegroundColor,
     /// OSC 111: Reset background color.
     ResetBackgroundColor,
+    /// BEL (0x07): Bell rang.
+    Bell,
 }
 
 bitflags! {

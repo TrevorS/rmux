@@ -8,6 +8,7 @@ fuzz_target!(|data: &[u8]| {
         ctx.set("session_name", "main");
         ctx.set("window_index", "3");
         ctx.set("pane_title", "shell");
+        ctx.set("template", "Session: #{session_name}");
         // format_expand should handle any valid UTF-8 template without panicking
         let _ = format_expand(template, &ctx);
     }

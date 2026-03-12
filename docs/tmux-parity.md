@@ -20,7 +20,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `detach-client` / `detach` — detach current client
 - [x] `switch-client` / `switchc` — switch to another session
 - [x] `refresh-client` / `refresh` — force redraw
-- [ ] `suspend-client` / `suspendc` — stub (no SIGTSTP sent)
+- [x] `suspend-client` / `suspendc` — sends SIGTSTP via `Message::Suspend`
 - [x] `list-clients` — list connected clients
 
 ### Windows
@@ -90,7 +90,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `list-commands` / `lscm` — list all commands
 - [x] `display-panes` / `displayp` — show pane info (text, not overlay)
 - [x] `clock-mode` — display ASCII clock
-- [ ] `show-messages` / `showmsgs` — stub (returns empty)
+- [x] `show-messages` / `showmsgs` — display server message log
 - [ ] `show-prompt-history` — stub (returns empty)
 - [ ] `clear-prompt-history` — stub (no-op)
 
@@ -182,7 +182,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Mode 4 — insert/replace mode (IRM via SM/RM)
 - [ ] Mode 1005 — mouse UTF-8 mode
 - [ ] Mode 1015 — mouse urxvt mode
-- [ ] Mode 1007 — alternate scroll mode
+- [x] Mode 1007 — alternate scroll mode
 - [ ] Mode 2 — keyboard action mode (KAM)
 
 ### Standard Modes (SM/RM)
@@ -257,7 +257,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `window-status-format` / `window-status-current-format` — per-window format
 - [ ] `lock-after-time` — auto-lock timeout
 - [ ] `lock-command` — lock screen command
-- [ ] `default-size` — default window size
+- [x] `default-size` — default window size (used when no client attached)
 - [ ] `key-table` — default key table
 - [ ] `silence-action` / `bell-action` / `activity-action` — alert actions
 
@@ -309,7 +309,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Status line style changes within format strings (`#[fg=red]`)
 - [ ] Pane border status line (pane-border-status)
 - [x] Window flags (`*`, `-`, `#`, `!`, `Z`) via `WindowFlags` bitflags
-- [ ] Window activity/bell/silence detection (triggers for `#` and `!` flags)
+- [x] Window activity/bell detection (BEL notification sets `#` flag, output sets `!` flag when `monitor-activity`/`monitor-bell` enabled; cleared on window select)
 
 ---
 
@@ -326,7 +326,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Copy to paste buffer
 - [x] Selection rendering (reverse video)
 - [x] History line access (scrollback)
-- [ ] Rectangle selection
+- [x] Rectangle selection (Ctrl-v toggle, block copy)
 - [x] Jump to character (f/F/t/T)
 - [ ] Go to line (`:` in copy mode)
 - [ ] Mark and swap (`m`/`M-m`)
@@ -419,7 +419,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Truncation: `#{=N:var}` (positive=left, negative=right)
 - [x] String operations: `#{s/pat/rep:var}` (substitution)
 - [x] `#{l:literal}` — literal string
-- [ ] `#{E:var}` — expand twice
+- [x] `#{E:var}` — double expansion (expand variable, then expand result as format)
 - [x] `#{T:var}` — strftime expansion (bare `%H:%M` etc. in status-left/right)
 - [x] Numeric comparisons: `#{<:a,b}`, `#{>:a,b}`, `#{<=:a,b}`, `#{>=:a,b}`
 
@@ -430,11 +430,12 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] `pane_dead` — whether pane process has exited
 - [x] `client_session`, `client_width`, `client_height` — client info
 - [x] `cursor_flag`, `insert_flag`, `keypad_flag`, `mouse_any_flag` — terminal mode flags
+- [x] `pane_tty` — PTY device name
 
 ### Missing Variables
 - [ ] `session_activity`, `session_alerts`
-- [ ] `window_bell_flag`, `window_activity_flag`
-- [ ] `pane_tty`, `pane_start_command`
+- [x] `pane_tty` — PTY device name (via `ptsname`/procfs)
+- [ ] `pane_start_command`
 - [ ] `client_activity`
 
 ---
@@ -456,7 +457,7 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Fuzzing infrastructure (9 targets)
 - [x] Property-based testing (proptest)
 - [ ] Control mode (`tmux -C`)
-- [ ] Socket session naming (`tmux -L name`)
+- [x] Socket session naming (`-L name`)
 - [ ] Multiple server socket support
 - [ ] Terminal info database integration (terminfo/termcap)
-- [ ] Activity/bell/silence monitoring and alerts
+- [x] Activity/bell monitoring (BEL → Bell notification, output → activity flag, monitor-bell/monitor-activity options)

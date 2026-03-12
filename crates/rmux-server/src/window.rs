@@ -29,6 +29,10 @@ pub struct Window {
     pub sy: u32,
     /// Window options.
     pub options: Options,
+    /// Bell alert flag (set when BEL received in a non-active window).
+    pub has_bell: bool,
+    /// Activity alert flag (set when output received in a non-active window with monitor-activity).
+    pub has_activity: bool,
 }
 
 impl Window {
@@ -45,6 +49,8 @@ impl Window {
             sx,
             sy,
             options: default_window_options(),
+            has_bell: false,
+            has_activity: false,
         }
     }
 

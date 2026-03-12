@@ -268,10 +268,10 @@ mod client_tests {
     }
 
     #[test]
-    fn suspend_client_succeeds() {
+    fn suspend_client_returns_suspend() {
         let mut s = MockCommandServer::new();
         let result = exec(&mut s, &["suspend-client"]);
-        assert!(matches!(result.unwrap(), CommandResult::Ok));
+        assert!(matches!(result.unwrap(), CommandResult::Suspend));
     }
 }
 

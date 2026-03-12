@@ -270,6 +270,7 @@ pub fn default_session_options() -> Options {
     opts.set("visual-activity", OptionValue::String("off".into()));
     opts.set("visual-bell", OptionValue::String("off".into()));
     opts.set("visual-silence", OptionValue::String("off".into()));
+    opts.set("default-size", OptionValue::String("80x24".into()));
     opts
 }
 
@@ -499,6 +500,19 @@ mod tests {
         assert!(opts.get_flag("status").unwrap());
         assert!(!opts.get_flag("mouse").unwrap());
         assert!(!opts.get_flag("renumber-windows").unwrap());
+    }
+
+    #[test]
+    fn default_session_has_default_size() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_string("default-size").unwrap(), "80x24");
+    }
+
+    #[test]
+    fn default_window_has_monitor_bell() {
+        let opts = default_window_options();
+        assert!(opts.get_flag("monitor-bell").unwrap());
+        assert!(!opts.get_flag("monitor-activity").unwrap());
     }
 
     #[test]

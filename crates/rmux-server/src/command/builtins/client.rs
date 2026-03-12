@@ -121,7 +121,5 @@ pub fn cmd_suspend_client(
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    // In tmux, this sends SIGTSTP to the client process.
-    // We acknowledge the command but the actual signal would need client-side support.
-    Ok(CommandResult::Ok)
+    Ok(CommandResult::Suspend)
 }

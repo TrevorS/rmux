@@ -83,6 +83,11 @@ impl Session {
         }
         self.last_window = Some(self.active_window);
         self.active_window = idx;
+        // Clear bell/activity flags on the newly selected window
+        if let Some(window) = self.windows.get_mut(&idx) {
+            window.has_bell = false;
+            window.has_activity = false;
+        }
         true
     }
 
@@ -262,6 +267,23 @@ mod tests {
         session.windows.insert(0, Window::new("w0".into(), 80, 24));
         session.active_window = 0;
         assert!(!session.select_window(0));
+    }
+
+    #[test]
+    fn select_window_clears_bell_activity() {
+        use crate::window::Window;
+        let mut session = Session::new("alerts".into(), "/".into());
+        session.windows.insert(0, Window::new("w0".into(), 80, 24));
+        let mut w1 = Window::new("w1".into(), 80, 24);
+        w1.has_bell = true;
+        w1.has_activity = true;
+        session.windows.insert(1, w1);
+        session.active_window = 0;
+
+        assert!(session.select_window(1));
+        let w = session.windows.get(&1).unwrap();
+        assert!(!w.has_bell, "bell should be cleared on select");
+        assert!(!w.has_activity, "activity should be cleared on select");
     }
 
     #[test]

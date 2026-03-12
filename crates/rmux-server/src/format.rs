@@ -164,6 +164,12 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
         return rest.to_string();
     }
 
+    // Double expansion: E:expr — look up variable, then expand result as a format string
+    if let Some(rest) = inner.strip_prefix("E:") {
+        let first = eval_expr(rest, ctx);
+        return format_expand(&first, ctx);
+    }
+
     // Substitution: s/pattern/replacement:expr
     if inner.starts_with("s/") {
         if let Some(result) = expand_substitution(inner, ctx) {
@@ -820,6 +826,30 @@ mod tests {
         assert_eq!(format_expand("#{l:hello world}", &ctx), "hello world");
         // Literal should NOT expand variables
         assert_eq!(format_expand("#{l:#{session_name}}", &ctx), "#{session_name}");
+    }
+
+    #[test]
+    fn double_expansion_e() {
+        let mut ctx = FormatContext::new();
+        ctx.set("template", "Session: #{session_name}");
+        ctx.set("session_name", "work");
+        // E: should expand "template" to its value, then expand that as a format string
+        assert_eq!(format_expand("#{E:template}", &ctx), "Session: work");
+    }
+
+    #[test]
+    fn double_expansion_e_plain() {
+        let mut ctx = FormatContext::new();
+        ctx.set("var", "hello");
+        // If the value has no format strings, E: just returns it
+        assert_eq!(format_expand("#{E:var}", &ctx), "hello");
+    }
+
+    #[test]
+    fn double_expansion_e_missing() {
+        let ctx = FormatContext::new();
+        // Unknown variable: first expansion returns empty, second expansion of empty is empty
+        assert_eq!(format_expand("#{E:unknown}", &ctx), "");
     }
 
     #[test]

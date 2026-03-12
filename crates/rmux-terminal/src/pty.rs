@@ -254,6 +254,38 @@ fn process_name(pid: libc::pid_t) -> Option<String> {
     std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string())
 }
 
+/// Get the PTY device name (e.g. "/dev/ttys042") for a master fd.
+///
+/// Uses `ptsname()` on macOS and `/proc/self/fd` readlink on Linux.
+#[must_use]
+pub fn pty_device_name(master_fd: i32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: ptsname is a POSIX function that returns a pointer to a static
+        // string containing the slave device name. The pointer is valid until the
+        // next call to ptsname. We immediately copy into a String.
+        let ptr = unsafe { libc::ptsname(master_fd) };
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: ptsname returned a valid C string pointer.
+        let cstr = unsafe { std::ffi::CStr::from_ptr(ptr) };
+        cstr.to_str().ok().map(String::from)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, use /proc/self/fd/N to find the slave device
+        std::fs::read_link(format!("/proc/self/fd/{master_fd}"))
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = master_fd;
+        None
+    }
+}
+
 /// Get the default shell from $SHELL or fall back to /bin/sh.
 #[must_use]
 pub fn default_shell() -> String {
@@ -376,6 +408,21 @@ mod tests {
         // PID 0 is kernel on most systems, but might not be accessible
         // Very large PID should not exist
         assert!(process_name(999_999_999).is_none());
+    }
+
+    #[test]
+    fn pty_device_name_valid_pty() {
+        let pty = Pty::open(80, 24).unwrap();
+        let name = pty_device_name(pty.master_fd());
+        assert!(name.is_some(), "should resolve PTY device name");
+        let name = name.unwrap();
+        assert!(name.starts_with("/dev/"), "PTY name should be a /dev path: {name}");
+    }
+
+    #[test]
+    fn pty_device_name_invalid_fd() {
+        assert!(pty_device_name(-1).is_none());
+        assert!(pty_device_name(9999).is_none());
     }
 
     #[test]

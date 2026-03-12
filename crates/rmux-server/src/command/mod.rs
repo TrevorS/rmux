@@ -28,6 +28,8 @@ pub enum CommandResult {
     Exit,
     /// Server should run a shell command asynchronously and return output.
     RunShell(String),
+    /// Client should be suspended (SIGTSTP).
+    Suspend,
 }
 
 /// A registered command handler.
