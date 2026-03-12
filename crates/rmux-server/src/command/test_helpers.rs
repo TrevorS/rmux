@@ -1212,6 +1212,10 @@ impl CommandServer for MockCommandServer {
         self.keybindings.list_bindings()
     }
 
+    fn show_messages(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn build_format_context(&self) -> crate::format::FormatContext {
         let mut ctx = crate::format::FormatContext::new();
         if let Some(session_id) = self.client_session_id() {

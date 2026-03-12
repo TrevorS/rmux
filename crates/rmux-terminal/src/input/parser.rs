@@ -912,6 +912,7 @@ impl InputParser {
                     }
                     continue;
                 }
+                1007 => ModeFlags::ALT_SCROLL,
                 2004 => ModeFlags::BRACKETPASTE,
                 2026 => ModeFlags::SYNC_OUTPUT,
                 _ => continue,
@@ -2240,6 +2241,17 @@ mod tests {
         assert!(screen.mode.contains(ModeFlags::SYNC_OUTPUT));
         parser.parse(b"\x1b[?2026l", &mut screen);
         assert!(!screen.mode.contains(ModeFlags::SYNC_OUTPUT));
+    }
+
+    #[test]
+    fn decset_alternate_scroll() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        parser.parse(b"\x1b[?1007h", &mut screen);
+        assert!(screen.mode.contains(ModeFlags::ALT_SCROLL));
+        parser.parse(b"\x1b[?1007l", &mut screen);
+        assert!(!screen.mode.contains(ModeFlags::ALT_SCROLL));
     }
 
     // ============================================================

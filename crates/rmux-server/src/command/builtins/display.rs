@@ -66,14 +66,19 @@ pub fn cmd_list_keys(
     }
 }
 
-/// show-messages — stub that returns empty output.
+/// show-messages — display server message log.
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_show_messages(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _ = args;
-    Ok(CommandResult::Output(String::new()))
+    let messages = server.show_messages();
+    if messages.is_empty() {
+        Ok(CommandResult::Output(String::new()))
+    } else {
+        Ok(CommandResult::Output(messages.join("\n") + "\n"))
+    }
 }
 
 /// list-clients

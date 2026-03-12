@@ -99,6 +99,8 @@ pub struct Server {
     hooks: crate::hooks::HookStore,
     /// Tick counter for periodic tasks (auto-rename polling).
     tick_count: u32,
+    /// Recent server messages for show-messages.
+    message_log: std::collections::VecDeque<String>,
 }
 
 impl Server {
@@ -125,6 +127,7 @@ impl Server {
             paste_buffers: crate::paste::PasteBufferStore::default(),
             hooks: crate::hooks::HookStore::new(),
             tick_count: 0,
+            message_log: std::collections::VecDeque::new(),
         }
     }
 
@@ -223,6 +226,7 @@ impl Server {
         });
 
         tracing::info!("client {client_id} connected");
+        self.log_message(format!("client {client_id} connected"));
     }
 
     async fn handle_pty_output(&mut self, pane_id: u32, data: &[u8]) {
@@ -529,6 +533,7 @@ impl Server {
                         // For attached clients, log the error but don't disconnect.
                         // tmux shows errors in the status line; we just log for now.
                         tracing::warn!("command error for attached client {client_id}: {e}");
+                        self.log_message(format!("error: {e}"));
                     } else {
                         client.send(&Message::ErrorOutput(err_msg.into_bytes())).await.ok();
                         client.send(&Message::Exit).await.ok();
@@ -704,17 +709,26 @@ impl Server {
                 }
             }
             KEYC_WHEELUP => {
-                if !self.is_active_pane_in_copy_mode(session_id) {
-                    self.enter_copy_mode_for_active_pane(session_id);
+                // Alternate scroll: send arrow keys in alternate screen
+                if self.active_pane_has_alt_scroll(session_id) {
+                    for _ in 0..3 {
+                        self.write_to_active_pane(session_id, b"\x1b[A");
+                    }
+                } else {
+                    if !self.is_active_pane_in_copy_mode(session_id) {
+                        self.enter_copy_mode_for_active_pane(session_id);
+                    }
+                    self.copy_mode_scroll_up(session_id, 3);
+                    self.mark_clients_redraw(session_id);
                 }
-                // Scroll up 3 lines
-                self.copy_mode_scroll_up(session_id, 3);
-                self.mark_clients_redraw(session_id);
             }
             KEYC_WHEELDOWN => {
-                if self.is_active_pane_in_copy_mode(session_id) {
+                if self.active_pane_has_alt_scroll(session_id) {
+                    for _ in 0..3 {
+                        self.write_to_active_pane(session_id, b"\x1b[B");
+                    }
+                } else if self.is_active_pane_in_copy_mode(session_id) {
                     self.copy_mode_scroll_down(session_id, 3);
-                    // If we scrolled back to the bottom, exit copy mode
                     self.maybe_exit_copy_mode_at_bottom(session_id);
                     self.mark_clients_redraw(session_id);
                 }
@@ -987,6 +1001,21 @@ impl Server {
         if let Some(fd) = self.pty_fds.get(&pane.id) {
             let _ = nix::unistd::write(fd, &buf.data);
         }
+    }
+
+    /// Check if the active pane is in alternate screen with alternate scroll enabled.
+    fn active_pane_has_alt_scroll(&self, session_id: u32) -> bool {
+        let Some(session) = self.sessions.find_by_id(session_id) else {
+            return false;
+        };
+        let Some(window) = session.active_window() else {
+            return false;
+        };
+        let Some(pane) = window.active_pane() else {
+            return false;
+        };
+        pane.screen.alternate.is_some()
+            && pane.screen.mode.contains(rmux_core::screen::ModeFlags::ALT_SCROLL)
     }
 
     /// Check if the active pane of a session is in copy mode.
@@ -1370,6 +1399,7 @@ impl Server {
                 }
             }
             tracing::info!("client {client_id} disconnected");
+            self.log_message(format!("client {client_id} disconnected"));
         }
 
         // If no more sessions and no more clients, shut down
@@ -1407,6 +1437,15 @@ impl Server {
                 client.detach();
                 client.send(&Message::Exited).await.ok();
             }
+        }
+    }
+
+    /// Log a server message (for show-messages). Caps at message-limit.
+    fn log_message(&mut self, msg: String) {
+        let limit = self.options.get_number("message-limit").unwrap_or(1000) as usize;
+        self.message_log.push_back(msg);
+        while self.message_log.len() > limit {
+            self.message_log.pop_front();
         }
     }
 
@@ -2265,6 +2304,10 @@ impl CommandServer for Server {
 
     fn list_key_bindings(&self) -> Vec<String> {
         self.keybindings.list_bindings()
+    }
+
+    fn show_messages(&self) -> Vec<String> {
+        self.message_log.iter().cloned().collect()
     }
 
     fn build_format_context(&self) -> crate::format::FormatContext {

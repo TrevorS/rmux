@@ -64,6 +64,9 @@ bitflags! {
         const ORIGIN          = 0x2000;
         /// Synchronized output (DEC private mode 2026).
         const SYNC_OUTPUT     = 0x4000;
+        /// Alternate scroll mode (DEC private mode 1007).
+        /// When set and in alternate screen, scroll wheel sends arrow keys.
+        const ALT_SCROLL      = 0x8000;
     }
 }
 

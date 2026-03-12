@@ -287,6 +287,8 @@ pub trait CommandServer {
     fn list_clients(&self) -> Vec<String>;
     fn list_all_commands(&self) -> Vec<String>;
     fn list_key_bindings(&self) -> Vec<String>;
+    /// Return recent server messages for show-messages.
+    fn show_messages(&self) -> Vec<String>;
     /// Build a format context with current session/window/pane variables.
     fn build_format_context(&self) -> crate::format::FormatContext;
 
