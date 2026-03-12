@@ -227,6 +227,58 @@ test_reattach_after_detach() {
     harness_assert '\[0\]' "Status bar should reappear after reattach"
 }
 
+# --- Pane lifecycle -----------------------------------------------------------
+
+test_pane_exit_closes_split() {
+    harness_start
+    # Split vertically
+    harness_prefix '"'
+    sleep 0.5
+    harness_assert '2 panes' "Should have 2 panes after split"
+    harness_assert '─' "Border should be visible after split"
+
+    # Exit the active (bottom) pane's shell
+    harness_send "exit" Enter
+    sleep 1
+
+    # Pane should be gone: no border, no "(2 panes)" indicator
+    harness_wait_for '\[0\]' 5
+    harness_assert_not '2 panes' "Pane count should disappear after exit"
+    harness_assert_not '─' "Border should disappear after pane exits"
+}
+
+test_pane_exit_preserves_remaining() {
+    harness_start
+    # Put a marker in the first pane
+    harness_send "export PS1='PANE1> '" Enter
+    harness_wait_for 'PANE1>' 5
+
+    # Split and exit the new pane immediately
+    harness_prefix '"'
+    sleep 0.5
+    harness_assert '2 panes' "Should have 2 panes"
+    harness_send "exit" Enter
+    sleep 1
+
+    # The original pane should still be functional
+    harness_wait_for 'PANE1>' 5
+    harness_send "echo STILL_ALIVE" Enter
+    harness_wait_for "STILL_ALIVE" 5
+    harness_assert "STILL_ALIVE" "Original pane should still work after sibling exits"
+}
+
+test_last_pane_exit_closes_window() {
+    harness_start
+    # Create a second window so the session survives
+    harness_prefix c
+    harness_wait_for '1:.*\*' 5
+
+    # Exit the shell in window 1 — should switch back to window 0
+    harness_send "exit" Enter
+    harness_wait_for '0:.*\*' 5
+    harness_assert_not '1:' "Window 1 should be gone after its last pane exits"
+}
+
 # --- Tier 2: Operations -------------------------------------------------------
 
 test_rename_window() {
@@ -383,6 +435,11 @@ run_test test_command_prompt_backspace
 run_test test_non_attached_list_sessions
 run_test test_non_attached_send_keys
 run_test test_reattach_after_detach
+
+# Pane lifecycle
+run_test test_pane_exit_closes_split
+run_test test_pane_exit_preserves_remaining
+run_test test_last_pane_exit_closes_window
 
 # Tier 2: Operations
 run_test test_rename_window
