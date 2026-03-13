@@ -12,11 +12,24 @@ async fn main() {
         )
         .init();
 
-    // Determine socket path
-    let socket_path = std::env::args()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(Server::default_socket_path);
+    // Parse arguments: rmux-server [socket-path] [-f config-file]
+    let args: Vec<String> = std::env::args().collect();
+    let mut socket_path = None;
+    let mut config_file = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "-f" {
+            i += 1;
+            if i < args.len() {
+                config_file = Some(args[i].clone());
+            }
+        } else if socket_path.is_none() {
+            socket_path = Some(std::path::PathBuf::from(&args[i]));
+        }
+        i += 1;
+    }
+
+    let socket_path = socket_path.unwrap_or_else(Server::default_socket_path);
 
     tracing::info!(
         "rmux server {} starting (protocol v{})",
@@ -25,7 +38,7 @@ async fn main() {
     );
 
     let mut server = Server::new(socket_path);
-    if let Err(e) = server.run().await {
+    if let Err(e) = server.run(config_file.as_deref()).await {
         tracing::error!("server error: {e}");
         std::process::exit(1);
     }

@@ -777,6 +777,7 @@ dependencies = [
  "rmux-core",
  "rmux-protocol",
  "rmux-terminal",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

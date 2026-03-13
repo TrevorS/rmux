@@ -275,6 +275,8 @@ test_last_pane_exit_closes_window() {
 
     # Exit the shell in window 1 — should switch back to window 0
     harness_send "exit" Enter
+    sleep 1
+    # Window 1 should be gone, window 0 should be active
     harness_wait_for '0:.*\*' 5
     harness_assert_not '1:' "Window 1 should be gone after its last pane exits"
 }
@@ -336,10 +338,9 @@ test_pane_resize() {
     sleep 0.5
     harness_assert '2 panes' "Should have 2 panes"
 
-    # Verify resize-pane command executes without error (resize is a stub that
-    # marks redraw but doesn't move pane boundaries yet — just verify no crash)
+    # Resize upward — top pane has room to shrink
     local output
-    output=$(harness_rmux resize-pane -t 0:0 -D 5 2>&1) || true
+    output=$(harness_rmux resize-pane -t 0:0 -U 5 2>&1) || true
 
     if echo "${output}" | grep -qi 'error'; then
         _harness_fail "resize-pane should not error: ${output}"
@@ -369,6 +370,59 @@ test_multiple_sessions() {
     fi
     if ! echo "${output}" | grep -qE 'second:.*windows'; then
         _harness_fail "Second session 'second' should appear in list-sessions"
+        return 1
+    fi
+}
+
+test_startup_config_loading() {
+    # Write a config that sets a distinctive server option via the default path.
+    # We place it at ~/.tmux.conf inside the harness so rmux finds it on startup.
+    # To avoid clobbering the real ~/.tmux.conf, we use harness_start which sets
+    # TMPDIR — but HOME is still the real home. Instead, we launch rmux with -f
+    # by writing a wrapper script that passes the flag.
+    local config_file="/tmp/rmux-e2e-startup-config-${HARNESS_PID}.conf"
+    echo 'set-option -g history-limit 54321' > "${config_file}"
+
+    # Create a wrapper script that launches rmux with -f
+    local wrapper="/tmp/rmux-e2e-wrapper-${HARNESS_PID}.sh"
+    cat > "${wrapper}" <<WRAPPER
+#!/usr/bin/env bash
+exec "\$(dirname "\$0")/rmux" -f "${config_file}" "\$@"
+WRAPPER
+    chmod +x "${wrapper}"
+    # Symlink it into the binary dir so harness finds it
+    cp "${wrapper}" "${HARNESS_BINARY_DIR}/rmux-with-config"
+
+    # Use the harness, but override the rmux binary
+    mkdir -p "${HARNESS_SOCKET_DIR}"
+    local uid
+    uid=$(id -u)
+    local rmux_parent="${HARNESS_SOCKET_DIR}/rmux-parent"
+    mkdir -p "${rmux_parent}/rmux-${uid}"
+    local rmux_tmpdir="${rmux_parent}"
+    HARNESS_RMUX_SOCKET="${rmux_parent}/rmux-${uid}/${HARNESS_SOCKET_NAME}"
+
+    tmux new-session -d -s "${HARNESS_TMUX_SESSION}" -x 120 -y 40 \
+        "TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux-with-config; echo '[rmux exited]'; sleep 86400"
+    tmux set-option -t "${HARNESS_TMUX_SESSION}" prefix C-q
+    tmux unbind-key C-b 2>/dev/null || true
+    HARNESS_STARTED=1
+
+    if ! harness_wait_for '\[0\]' 10; then
+        _harness_fail "rmux did not start"
+        rm -f "${config_file}" "${wrapper}" "${HARNESS_BINARY_DIR}/rmux-with-config"
+        return 1
+    fi
+
+    # Verify the -f config was applied at server level
+    local output
+    output=$(harness_rmux show-options -g history-limit 2>&1) || true
+    echo "show-options output: ${output}"
+
+    rm -f "${config_file}" "${wrapper}" "${HARNESS_BINARY_DIR}/rmux-with-config"
+
+    if ! echo "${output}" | grep -q '54321'; then
+        _harness_fail "startup config not applied: history-limit should be 54321, got: ${output}"
         return 1
     fi
 }
@@ -430,6 +484,10 @@ test_paste_buffer() {
 
 test_swap_window() {
     harness_start
+    # Disable auto-rename at session level so manual names stick after swap
+    harness_rmux set-option automatic-rename off
+    sleep 0.3
+
     # Rename window 0 so we can track it
     harness_rmux rename-window -t 0:0 first
     harness_wait_for '0:first' 5
@@ -496,10 +554,9 @@ test_choose_tree_navigate_and_select() {
     harness_prefix s
     harness_wait_for 'choose-tree' 5
 
-    # Navigate down and press Enter to switch
-    harness_send j
-    sleep 0.2
-    harness_send j
+    # Collapse all sessions first (Left on each), then navigate to "target"
+    # Simpler: use Left to collapse session 0, then j lands on "target"
+    harness_send Left
     sleep 0.2
     harness_send j
     sleep 0.2
@@ -570,6 +627,7 @@ run_test test_automatic_rename_disabled
 run_test test_rename_window
 run_test test_pane_resize
 run_test test_multiple_sessions
+run_test test_startup_config_loading
 run_test test_source_file
 
 # Tier 3: Advanced

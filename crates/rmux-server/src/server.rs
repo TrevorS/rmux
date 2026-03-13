@@ -166,8 +166,65 @@ impl Server {
         PathBuf::from(format!("{tmpdir}/rmux-{uid}/default"))
     }
 
+    /// Load a configuration file, executing all commands it contains.
+    /// Errors from individual commands are logged but don't stop the server.
+    pub fn load_config(&mut self, path: &str) {
+        match crate::config::load_config_file(path) {
+            Ok(commands) => {
+                tracing::info!("loading config: {path}");
+                let errors = self.execute_config_commands(commands);
+                for err in errors {
+                    tracing::warn!("config error: {err}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("could not load config {path}: {e}");
+            }
+        }
+    }
+
+    /// Load the default configuration file (tmux-compatible paths).
+    ///
+    /// Checks in order (first found wins):
+    /// 1. `~/.tmux.conf`
+    /// 2. `$XDG_CONFIG_HOME/tmux/tmux.conf` (defaults to `~/.config/tmux/tmux.conf`)
+    pub fn load_default_config(&mut self) {
+        let Ok(home) = std::env::var("HOME") else { return };
+        let xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        if let Some(path) = Self::find_default_config(&home, xdg.as_deref()) {
+            self.load_config(&path);
+        } else {
+            tracing::info!("no default config file found");
+        }
+    }
+
+    /// Find the default config file path without loading it.
+    fn find_default_config(home: &str, xdg_config_home: Option<&str>) -> Option<String> {
+        let candidates = [
+            format!("{home}/.tmux.conf"),
+            xdg_config_home.map_or_else(
+                || format!("{home}/.config/tmux/tmux.conf"),
+                |xdg| format!("{xdg}/tmux/tmux.conf"),
+            ),
+        ];
+
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return Some(path.clone());
+            }
+        }
+        None
+    }
+
     /// Run the server event loop.
-    pub async fn run(&mut self) -> Result<(), ServerError> {
+    pub async fn run(&mut self, config_file: Option<&str>) -> Result<(), ServerError> {
+        // Load configuration before anything else
+        if let Some(path) = config_file {
+            self.load_config(path);
+        } else {
+            self.load_default_config();
+        }
+
         // Ensure parent directory exists
         if let Some(parent) = self.socket_path.parent() {
             std::fs::create_dir_all(parent).map_err(ServerError::Bind)?;
@@ -4509,5 +4566,119 @@ mod tests {
         // 0x7E (~) is the last printable ASCII char
         let result = format_control_output(0, b"~");
         assert_eq!(result, "%output %0 ~\n");
+    }
+
+    // ============================================================
+    // Config loading
+    // ============================================================
+
+    #[test]
+    fn load_config_applies_commands() {
+        let tmp = "/tmp/rmux_test_load_config.conf";
+        std::fs::write(tmp, "set-option -g history-limit 7777\n").unwrap();
+
+        let mut server = Server::new(PathBuf::from("/tmp/rmux-test-dummy/default"));
+        server.load_config(tmp);
+
+        let val = server.options.get_number("history-limit").unwrap();
+        assert_eq!(val, 7777, "load_config should apply set-option commands");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn load_config_nonexistent_does_not_panic() {
+        let mut server = Server::new(PathBuf::from("/tmp/rmux-test-dummy/default"));
+        server.load_config("/tmp/rmux_nonexistent_config_12345.conf");
+    }
+
+    #[test]
+    fn load_config_with_errors_continues() {
+        let tmp = "/tmp/rmux_test_load_config_errors.conf";
+        std::fs::write(tmp, "bogus-command foo\nset-option -g history-limit 3333\n").unwrap();
+
+        let mut server = Server::new(PathBuf::from("/tmp/rmux-test-dummy/default"));
+        server.load_config(tmp);
+
+        let val = server.options.get_number("history-limit").unwrap();
+        assert_eq!(val, 3333, "valid commands should apply even when others fail");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn find_default_config_prefers_tmux_conf() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+
+        // Create both ~/.tmux.conf and ~/.config/tmux/tmux.conf
+        std::fs::write(dir.path().join(".tmux.conf"), "").unwrap();
+        let config_dir = dir.path().join(".config/tmux");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("tmux.conf"), "").unwrap();
+
+        let result = Server::find_default_config(home, None);
+        assert_eq!(result, Some(format!("{home}/.tmux.conf")), "~/.tmux.conf should take priority");
+    }
+
+    #[test]
+    fn find_default_config_falls_back_to_xdg_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+
+        // Only ~/.config/tmux/tmux.conf exists (no ~/.tmux.conf)
+        let config_dir = dir.path().join(".config/tmux");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("tmux.conf"), "").unwrap();
+
+        let result = Server::find_default_config(home, None);
+        assert_eq!(
+            result,
+            Some(format!("{home}/.config/tmux/tmux.conf")),
+            "should fall back to ~/.config/tmux/tmux.conf"
+        );
+    }
+
+    #[test]
+    fn find_default_config_uses_xdg_config_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+        let xdg_dir = dir.path().join("custom-xdg/tmux");
+        std::fs::create_dir_all(&xdg_dir).unwrap();
+        std::fs::write(xdg_dir.join("tmux.conf"), "").unwrap();
+
+        let xdg = dir.path().join("custom-xdg");
+        let result = Server::find_default_config(home, Some(xdg.to_str().unwrap()));
+        assert_eq!(
+            result,
+            Some(format!("{}/tmux/tmux.conf", xdg.display())),
+            "should use $XDG_CONFIG_HOME/tmux/tmux.conf"
+        );
+    }
+
+    #[test]
+    fn find_default_config_returns_none_when_no_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+
+        let result = Server::find_default_config(home, None);
+        assert_eq!(result, None, "should return None when no config files exist");
+    }
+
+    #[test]
+    fn load_config_with_bind_key() {
+        let tmp = "/tmp/rmux_test_load_config_bind.conf";
+        std::fs::write(tmp, "bind-key z kill-session\n").unwrap();
+
+        let mut server = Server::new(PathBuf::from("/tmp/rmux-test-dummy/default"));
+        server.load_config(tmp);
+
+        let bindings = server.keybindings.list_bindings();
+        assert!(
+            bindings.iter().any(|b| b.contains('z') && b.contains("kill-session")),
+            "bind-key from config should be applied"
+        );
+
+        std::fs::remove_file(tmp).ok();
     }
 }

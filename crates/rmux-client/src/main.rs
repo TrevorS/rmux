@@ -60,8 +60,10 @@ fn main() {
         .expect("failed to create tokio runtime");
 
     let control_mode = opts.control_mode;
+    let config_file = opts.config_file.and_then(|p| p.to_str().map(String::from));
     let exit_code = rt.block_on(async {
-        run_client(&path, &command_args, opts.no_start_server, control_mode).await
+        run_client(&path, &command_args, opts.no_start_server, control_mode, config_file.as_deref())
+            .await
     });
 
     match exit_code {
@@ -78,6 +80,7 @@ async fn run_client(
     command_args: &[&str],
     no_start_server: bool,
     control_mode: bool,
+    config_file: Option<&str>,
 ) -> Result<i32, ClientError> {
     // Check if we need to start the server
     let needs_server = !no_start_server
@@ -88,7 +91,7 @@ async fn run_client(
         Ok(s) => s,
         Err(_) if needs_server => {
             // Start the server
-            start_server(socket_path).map_err(ClientError::ServerStart)?;
+            start_server(socket_path, config_file).map_err(ClientError::ServerStart)?;
 
             // Retry with backoff — server needs time to bind the socket
             let mut connected = None;
@@ -147,7 +150,10 @@ async fn run_client(
 }
 
 /// Start the server as a background process.
-fn start_server(socket_path: &std::path::Path) -> Result<(), std::io::Error> {
+fn start_server(
+    socket_path: &std::path::Path,
+    config_file: Option<&str>,
+) -> Result<(), std::io::Error> {
     let server_bin = env::current_exe()?
         .parent()
         .map(|p| p.join("rmux-server"))
@@ -162,9 +168,12 @@ fn start_server(socket_path: &std::path::Path) -> Result<(), std::io::Error> {
         .to_str()
         .ok_or_else(|| std::io::Error::other("socket path contains invalid UTF-8"))?;
 
-    std::process::Command::new(server_bin)
-        .arg(socket_str)
-        .stdin(std::process::Stdio::null())
+    let mut cmd = std::process::Command::new(server_bin);
+    cmd.arg(socket_str);
+    if let Some(config) = config_file {
+        cmd.args(["-f", config]);
+    }
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
