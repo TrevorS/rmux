@@ -111,6 +111,89 @@ fn button_to_keycode(cb: u32, is_release: bool) -> KeyCode {
     }
 }
 
+/// Parse a UTF-8 mouse sequence (mode 1005): `ESC[M` + button + UTF-8 x + UTF-8 y.
+///
+/// Like X10 but coordinates are encoded as UTF-8 characters (allowing values > 223).
+/// The input `data` should start *after* `ESC[M` (the button and coordinate bytes).
+fn parse_utf8_mouse(data: &[u8]) -> Option<ParsedMouse> {
+    if data.is_empty() {
+        return None;
+    }
+    let cb = data[0].wrapping_sub(32) as u32;
+    let (x_char, x_len) = decode_utf8_char(&data[1..])?;
+    let (y_char, y_len) = decode_utf8_char(&data[1 + x_len..])?;
+
+    let x = x_char.saturating_sub(33);
+    let y = y_char.saturating_sub(33);
+    let key = button_to_keycode(cb, false);
+
+    Some(ParsedMouse { key, x, y, consumed: 1 + x_len + y_len })
+}
+
+/// Decode a single UTF-8 character, returning (codepoint as u32, bytes consumed).
+fn decode_utf8_char(data: &[u8]) -> Option<(u32, usize)> {
+    if data.is_empty() {
+        return None;
+    }
+    let b0 = data[0];
+    if b0 < 0x80 {
+        Some((u32::from(b0), 1))
+    } else if b0 & 0xE0 == 0xC0 {
+        if data.len() < 2 {
+            return None;
+        }
+        let cp = (u32::from(b0 & 0x1F) << 6) | u32::from(data[1] & 0x3F);
+        Some((cp, 2))
+    } else if b0 & 0xF0 == 0xE0 {
+        if data.len() < 3 {
+            return None;
+        }
+        let cp = (u32::from(b0 & 0x0F) << 12)
+            | (u32::from(data[1] & 0x3F) << 6)
+            | u32::from(data[2] & 0x3F);
+        Some((cp, 3))
+    } else {
+        None // 4-byte sequences not used in mouse protocol
+    }
+}
+
+/// Parse a urxvt mouse sequence (mode 1015): `Ps;Px;PyM`.
+///
+/// Like SGR but without `<` prefix. Ps is button+32, coordinates are 1-based.
+/// Only `M` as final byte (no `m` for release — uses X10-style button=3 for release).
+/// The input `data` should start *after* `ESC[` (the decimal parameters and final byte).
+fn parse_urxvt_mouse(data: &[u8]) -> Option<ParsedMouse> {
+    // Find the final byte 'M'
+    let mut end = 0;
+    while end < data.len() {
+        if data[end] == b'M' {
+            break;
+        }
+        if !data[end].is_ascii_digit() && data[end] != b';' {
+            return None;
+        }
+        end += 1;
+    }
+    if end >= data.len() {
+        return None;
+    }
+
+    let params_str = std::str::from_utf8(&data[..end]).ok()?;
+    let parts: Vec<&str> = params_str.split(';').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let raw_button: u32 = parts[0].parse().ok()?;
+    let cb = raw_button.wrapping_sub(32); // urxvt sends cb+32
+    let x: u32 = parts[1].parse::<u32>().ok()?.saturating_sub(1); // 1-based
+    let y: u32 = parts[2].parse::<u32>().ok()?.saturating_sub(1);
+
+    let key = button_to_keycode(cb, false);
+
+    Some(ParsedMouse { key, x, y, consumed: end + 1 })
+}
+
 /// Try to parse a mouse sequence from data that starts after `ESC[`.
 ///
 /// Returns `Some((key, x, y, consumed))` where consumed is bytes after `ESC[`.
@@ -138,6 +221,20 @@ pub fn try_parse_mouse_csi(data: &[u8]) -> Option<ParsedMouse> {
         }
         _ => None,
     }
+}
+
+/// Try to parse a mouse sequence using UTF-8 encoding (mode 1005).
+///
+/// The input `data` should start after `ESC[M` (button + UTF-8 coords).
+pub fn try_parse_mouse_utf8(data: &[u8]) -> Option<ParsedMouse> {
+    parse_utf8_mouse(data)
+}
+
+/// Try to parse a urxvt mouse sequence (mode 1015) from data after `ESC[`.
+///
+/// The format is `Ps;Px;PyM` where Ps is button+32 and coords are 1-based.
+pub fn try_parse_mouse_urxvt(data: &[u8]) -> Option<ParsedMouse> {
+    parse_urxvt_mouse(data)
 }
 
 /// Encode a mouse event as SGR protocol bytes (for forwarding to PTY).
@@ -384,6 +481,189 @@ mod tests {
         assert!(parse_x10_mouse(&[32, 43]).is_none());
     }
 
+    // ============================================================
+    // UTF-8 mouse (mode 1005) tests
+    // ============================================================
+
+    #[test]
+    fn utf8_mouse_basic_click() {
+        // Button 1 press at (10, 5): cb=0+32=32, x=10+33=43, y=5+33=38
+        // All ASCII, same as X10
+        let data = [32u8, 43, 38];
+        let result = parse_utf8_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+        assert_eq!(result.consumed, 3);
+    }
+
+    #[test]
+    fn utf8_mouse_large_x() {
+        // x=200, so x+33=233 -> UTF-8: 0xC3 0xA9 (2 bytes)
+        // Button 1 press, y=5 (y+33=38, single byte)
+        let x_val: u32 = 200 + 33; // 233
+        let x_bytes = [(0xC0 | (x_val >> 6)) as u8, (0x80 | (x_val & 0x3F)) as u8];
+        let data = [32u8, x_bytes[0], x_bytes[1], 38]; // button, x(2 bytes), y(1 byte)
+        let result = parse_utf8_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 200);
+        assert_eq!(result.y, 5);
+        assert_eq!(result.consumed, 4);
+    }
+
+    #[test]
+    fn utf8_mouse_large_xy() {
+        // x=300, y=150
+        let x_val: u32 = 300 + 33; // 333
+        let y_val: u32 = 150 + 33; // 183
+        let x_bytes = [(0xC0 | (x_val >> 6)) as u8, (0x80 | (x_val & 0x3F)) as u8];
+        let y_bytes = [(0xC0 | (y_val >> 6)) as u8, (0x80 | (y_val & 0x3F)) as u8];
+        let data = [32u8, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1]];
+        let result = parse_utf8_mouse(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 300);
+        assert_eq!(result.y, 150);
+        assert_eq!(result.consumed, 5);
+    }
+
+    #[test]
+    fn utf8_mouse_empty() {
+        assert!(parse_utf8_mouse(&[]).is_none());
+    }
+
+    #[test]
+    fn utf8_mouse_incomplete() {
+        // Button byte only, no coordinates
+        assert!(parse_utf8_mouse(&[32]).is_none());
+        // Button + one coord, missing second
+        assert!(parse_utf8_mouse(&[32, 43]).is_none());
+    }
+
+    #[test]
+    fn utf8_mouse_public_api() {
+        let data = [32u8, 43, 38];
+        let result = try_parse_mouse_utf8(&data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+    }
+
+    // ============================================================
+    // urxvt mouse (mode 1015) tests
+    // ============================================================
+
+    #[test]
+    fn urxvt_mouse_click() {
+        // Button 1 press: cb=0, sent as 0+32=32; x=11 (1-based), y=6 (1-based)
+        let data = b"32;11;6M";
+        let result = parse_urxvt_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+        assert_eq!(result.consumed, 8);
+    }
+
+    #[test]
+    fn urxvt_mouse_button2() {
+        // Button 2: cb=1, sent as 33
+        let data = b"33;5;10M";
+        let result = parse_urxvt_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN2);
+        assert_eq!(result.x, 4);
+        assert_eq!(result.y, 9);
+    }
+
+    #[test]
+    fn urxvt_mouse_release() {
+        // Release in urxvt: cb=3 (X10-style), sent as 35
+        let data = b"35;11;6M";
+        let result = parse_urxvt_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEUP1);
+    }
+
+    #[test]
+    fn urxvt_mouse_wheel_up() {
+        // Wheel up: cb=64, sent as 96
+        let data = b"96;11;6M";
+        let result = parse_urxvt_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_WHEELUP);
+    }
+
+    #[test]
+    fn urxvt_mouse_large_coords() {
+        // Large coordinates (> 223, beyond X10 range)
+        let data = b"32;500;300M";
+        let result = parse_urxvt_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 499);
+        assert_eq!(result.y, 299);
+    }
+
+    #[test]
+    fn urxvt_mouse_drag() {
+        // Drag button 1: cb=32, sent as 64
+        let data = b"64;15;20M";
+        let result = parse_urxvt_mouse(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDRAG1);
+    }
+
+    #[test]
+    fn urxvt_mouse_incomplete() {
+        assert!(parse_urxvt_mouse(b"32;11;").is_none());
+        assert!(parse_urxvt_mouse(b"").is_none());
+    }
+
+    #[test]
+    fn urxvt_mouse_invalid_char() {
+        assert!(parse_urxvt_mouse(b"32;11;6X").is_none());
+    }
+
+    #[test]
+    fn urxvt_mouse_public_api() {
+        let data = b"32;11;6M";
+        let result = try_parse_mouse_urxvt(data).unwrap();
+        assert_eq!(result.key, KEYC_MOUSEDOWN1);
+        assert_eq!(result.x, 10);
+        assert_eq!(result.y, 5);
+    }
+
+    // ============================================================
+    // decode_utf8_char tests
+    // ============================================================
+
+    #[test]
+    fn decode_utf8_ascii() {
+        let (cp, len) = decode_utf8_char(&[0x41]).unwrap();
+        assert_eq!(cp, 0x41);
+        assert_eq!(len, 1);
+    }
+
+    #[test]
+    fn decode_utf8_two_byte() {
+        // U+00E9 = 0xC3 0xA9
+        let (cp, len) = decode_utf8_char(&[0xC3, 0xA9]).unwrap();
+        assert_eq!(cp, 0xE9);
+        assert_eq!(len, 2);
+    }
+
+    #[test]
+    fn decode_utf8_three_byte() {
+        // U+0800 = 0xE0 0xA0 0x80
+        let (cp, len) = decode_utf8_char(&[0xE0, 0xA0, 0x80]).unwrap();
+        assert_eq!(cp, 0x800);
+        assert_eq!(len, 3);
+    }
+
+    #[test]
+    fn decode_utf8_empty() {
+        assert!(decode_utf8_char(&[]).is_none());
+    }
+
+    #[test]
+    fn decode_utf8_incomplete_two_byte() {
+        assert!(decode_utf8_char(&[0xC3]).is_none());
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
@@ -402,6 +682,21 @@ mod tests {
             #[test]
             fn parse_sgr_never_panics(data in proptest::collection::vec(any::<u8>(), 0..64)) {
                 let _ = parse_sgr_mouse(&data);
+            }
+
+            #[test]
+            fn parse_utf8_mouse_never_panics(data in proptest::collection::vec(any::<u8>(), 0..64)) {
+                let _ = parse_utf8_mouse(&data);
+            }
+
+            #[test]
+            fn parse_urxvt_mouse_never_panics(data in proptest::collection::vec(any::<u8>(), 0..64)) {
+                let _ = parse_urxvt_mouse(&data);
+            }
+
+            #[test]
+            fn decode_utf8_char_never_panics(data in proptest::collection::vec(any::<u8>(), 0..8)) {
+                let _ = decode_utf8_char(&data);
             }
 
             #[test]

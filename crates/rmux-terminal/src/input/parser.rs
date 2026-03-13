@@ -773,6 +773,20 @@ impl InputParser {
             (b'p', Some(b'!')) => {
                 screen.soft_reset();
             }
+            // CSI s — Save cursor position (ANSI alias for DECSC)
+            (b's', None) if self.params.values().is_empty() => {
+                screen.save_cursor();
+            }
+            // CSI u — Restore cursor position (ANSI alias for DECRC)
+            (b'u', None) if self.params.values().is_empty() => {
+                screen.restore_cursor();
+            }
+            // DECSCA — Set Character Attribute (CSI Ps " q)
+            // Ps=0 or Ps=2: DECSCA off (characters are erasable)
+            // Ps=1: DECSCA on (characters are not erasable)
+            // We acknowledge the sequence but don't enforce selective erase
+            // since tmux itself ignores it in practice.
+            (b'q', Some(b'"')) => {}
             _ => {} // Unhandled CSI sequences
         }
     }
@@ -903,7 +917,9 @@ impl InputParser {
                 1002 => ModeFlags::MOUSE_BUTTON,
                 1003 => ModeFlags::MOUSE_ANY,
                 1004 => ModeFlags::FOCUSON,
+                1005 => ModeFlags::MOUSE_UTF8,
                 1006 => ModeFlags::MOUSE_SGR,
+                1015 => ModeFlags::MOUSE_URXVT,
                 1049 => {
                     // Alternate screen with saved cursor
                     if set {
@@ -936,6 +952,7 @@ impl InputParser {
                 continue;
             }
             let flag = match p {
+                2 => ModeFlags::KAM,
                 4 => ModeFlags::INSERT,
                 _ => continue,
             };
@@ -2350,6 +2367,103 @@ mod tests {
             let cell = screen.grid.get_cell(i, 0);
             assert_eq!(cell.data.as_str(), Some("A"));
         }
+    }
+
+    // ============================================================
+    // CSI s/u — save/restore cursor (ANSI aliases)
+    // ============================================================
+
+    #[test]
+    fn csi_s_u_save_restore_cursor() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 15;
+        screen.cursor.y = 7;
+        parser.parse(b"\x1b[s", &mut screen); // CSI s = save
+        screen.cursor.x = 0;
+        screen.cursor.y = 0;
+        parser.parse(b"\x1b[u", &mut screen); // CSI u = restore
+        assert_eq!(screen.cursor.x, 15);
+        assert_eq!(screen.cursor.y, 7);
+    }
+
+    #[test]
+    fn csi_s_u_matches_esc_7_8() {
+        // CSI s/u and ESC 7/8 should be interchangeable
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 20;
+        screen.cursor.y = 3;
+        parser.parse(b"\x1b[s", &mut screen); // Save with CSI s
+        screen.cursor.x = 0;
+        screen.cursor.y = 0;
+        parser.parse(b"\x1b8", &mut screen); // Restore with ESC 8
+        assert_eq!(screen.cursor.x, 20);
+        assert_eq!(screen.cursor.y, 3);
+    }
+
+    // ============================================================
+    // DECSCA — selective character erase attribute (no-op)
+    // ============================================================
+
+    #[test]
+    fn decsca_does_not_corrupt_state() {
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        screen.cursor.x = 5;
+        screen.cursor.y = 3;
+        let style_before = screen.cursor.style;
+        // DECSCA on (Ps=1), DECSCA off (Ps=0), DECSCA off (Ps=2)
+        parser.parse(b"\x1b[1\"q", &mut screen);
+        parser.parse(b"\x1b[0\"q", &mut screen);
+        parser.parse(b"\x1b[2\"q", &mut screen);
+        assert_eq!(screen.cursor.x, 5);
+        assert_eq!(screen.cursor.y, 3);
+        assert_eq!(screen.cursor.style, style_before);
+    }
+
+    // ============================================================
+    // Mode 1005/1015 — mouse UTF-8 and urxvt mode flags
+    // ============================================================
+
+    #[test]
+    fn decset_mode_1005_mouse_utf8() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        assert!(!screen.mode.contains(ModeFlags::MOUSE_UTF8));
+        parser.parse(b"\x1b[?1005h", &mut screen); // DECSET 1005
+        assert!(screen.mode.contains(ModeFlags::MOUSE_UTF8));
+        parser.parse(b"\x1b[?1005l", &mut screen); // DECRST 1005
+        assert!(!screen.mode.contains(ModeFlags::MOUSE_UTF8));
+    }
+
+    #[test]
+    fn decset_mode_1015_mouse_urxvt() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        assert!(!screen.mode.contains(ModeFlags::MOUSE_URXVT));
+        parser.parse(b"\x1b[?1015h", &mut screen); // DECSET 1015
+        assert!(screen.mode.contains(ModeFlags::MOUSE_URXVT));
+        parser.parse(b"\x1b[?1015l", &mut screen); // DECRST 1015
+        assert!(!screen.mode.contains(ModeFlags::MOUSE_URXVT));
+    }
+
+    // ============================================================
+    // Mode 2 — KAM (keyboard action mode)
+    // ============================================================
+
+    #[test]
+    fn sm_mode_2_kam() {
+        use rmux_core::screen::ModeFlags;
+        let mut screen = make_screen();
+        let mut parser = InputParser::new();
+        assert!(!screen.mode.contains(ModeFlags::KAM));
+        parser.parse(b"\x1b[2h", &mut screen); // SM 2 = set KAM
+        assert!(screen.mode.contains(ModeFlags::KAM));
+        parser.parse(b"\x1b[2l", &mut screen); // RM 2 = reset KAM
+        assert!(!screen.mode.contains(ModeFlags::KAM));
     }
 
     mod prop_tests {

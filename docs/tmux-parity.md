@@ -149,8 +149,8 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] DA (`c`) — primary device attributes (VT220)
 - [x] DA2 (`> c`) — secondary device attributes
 - [x] DSR/CPR (`n`) — device status / cursor position report
-- [ ] DECSC/DECRC via CSI — (handled via ESC 7/8 instead)
-- [ ] DECSCA — selective character erase attribute
+- [x] DECSC/DECRC via CSI — CSI s/u as ANSI aliases for ESC 7/8
+- [x] DECSCA — selective character erase attribute (acknowledged, no-op)
 - [x] DECSTR — soft terminal reset (CSI ! p)
 
 ### ESC Sequences
@@ -180,10 +180,10 @@ Legend: ✅ = implemented, 🔧 = partial/stub, ❌ = missing
 - [x] Mode 7 — auto-wrap mode (DECAWM)
 - [x] Mode 1 — cursor keys mode (DECCKM)
 - [x] Mode 4 — insert/replace mode (IRM via SM/RM)
-- [ ] Mode 1005 — mouse UTF-8 mode
-- [ ] Mode 1015 — mouse urxvt mode
+- [x] Mode 1005 — mouse UTF-8 mode
+- [x] Mode 1015 — mouse urxvt mode
 - [x] Mode 1007 — alternate scroll mode
-- [ ] Mode 2 — keyboard action mode (KAM)
+- [x] Mode 2 — keyboard action mode (KAM)
 
 ### Standard Modes (SM/RM)
 - [x] Mode 4 — IRM (insert/replace mode)

@@ -69,6 +69,15 @@ bitflags! {
         /// Alternate scroll mode (DEC private mode 1007).
         /// When set and in alternate screen, scroll wheel sends arrow keys.
         const ALT_SCROLL      = 0x8000;
+        /// Mouse UTF-8 mode (mode 1005).
+        /// Coordinates encoded as UTF-8 characters instead of raw bytes.
+        const MOUSE_UTF8      = 0x0001_0000;
+        /// Mouse urxvt mode (mode 1015).
+        /// Coordinates sent as decimal parameters: ESC[Ps;Px;PyM.
+        const MOUSE_URXVT     = 0x0002_0000;
+        /// Keyboard action mode (KAM, mode 2).
+        /// When set, keyboard input is locked/ignored.
+        const KAM             = 0x0004_0000;
     }
 }
 
