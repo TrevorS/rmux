@@ -775,6 +775,73 @@ test_source_file_line_continuation() {
     rm -f "${tmp}"
 }
 
+# --- P2: Source file features -------------------------------------------------
+
+test_source_file_format_flag() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_source_f.conf"
+    echo 'set -g @sourced_f "yes"' > "${tmp}"
+
+    # Set path in a user option, then source via -F
+    harness_rmux set-option -g '@src_path' "${tmp}"
+    sleep 0.2
+    harness_rmux source-file -F '#{@src_path}'
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g '@sourced_f' 2>&1) || true
+    if ! echo "${output}" | grep -q 'yes'; then
+        _harness_fail "source -F should expand format string path, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
+test_source_file_quiet_flag() {
+    harness_start
+    # -q should suppress errors for missing files
+    harness_rmux source-file -q '/tmp/rmux_e2e_nonexistent_12345.conf'
+    sleep 0.2
+    # If we get here without error, the test passes
+}
+
+test_source_file_current_file() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_current_file.conf"
+    echo 'set -gF @loaded_from "#{current_file}"' > "${tmp}"
+
+    harness_rmux source-file "${tmp}"
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g '@loaded_from' 2>&1) || true
+    if ! echo "${output}" | grep -q 'rmux_e2e_current_file.conf'; then
+        _harness_fail "current_file should be set during source, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
+test_source_file_dirname_current_file() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_dirname_cf.conf"
+    echo 'set -gF @dir "#{d:current_file}"' > "${tmp}"
+
+    harness_rmux source-file "${tmp}"
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g '@dir' 2>&1) || true
+    if ! echo "${output}" | grep -q 'tmp'; then
+        _harness_fail "#{d:current_file} should return dirname, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
 # --- Main ---------------------------------------------------------------------
 
 echo "=== rmux E2E Test Suite ==="
@@ -837,6 +904,12 @@ run_test test_source_file_if_directive
 run_test test_source_file_hidden_var_expansion
 run_test test_source_file_elif_else
 run_test test_source_file_line_continuation
+
+# P2: Source file features
+run_test test_source_file_format_flag
+run_test test_source_file_quiet_flag
+run_test test_source_file_current_file
+run_test test_source_file_dirname_current_file
 
 # Overlay tests
 run_test test_choose_tree_open_close

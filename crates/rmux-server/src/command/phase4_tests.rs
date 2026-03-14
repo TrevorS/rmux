@@ -531,6 +531,70 @@ set -ogq @catppuccin_${MODULE_NAME}_icon \"${SHOW_ICON}\"
 
         std::fs::remove_file(tmp).ok();
     }
+
+    #[test]
+    fn source_file_format_flag() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Write a config file, then source it using -F with a format-expanded path
+        let tmp = "/tmp/rmux_test_source_f.conf";
+        std::fs::write(tmp, "set -g @sourced_via_f yes\n").unwrap();
+
+        // Set a user option that the -F expansion can reference
+        exec(&mut s, &["set", "-g", "@test_path", tmp]).unwrap();
+
+        // source-file -F "#{@test_path}"
+        exec(&mut s, &["source-file", "-F", "#{@test_path}"]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@sourced_via_f"]));
+        assert!(output.contains("yes"), "source -F failed: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_quiet_flag() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // -q should suppress file-not-found errors
+        let result = exec(&mut s, &["source-file", "-q", "/tmp/rmux_nonexistent_12345.conf"]);
+        assert!(result.is_ok(), "source-file -q should not error on missing file");
+    }
+
+    #[test]
+    fn source_file_sets_current_file() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Write a config that reads current_file via format expansion
+        let tmp = "/tmp/rmux_test_current_file.conf";
+        std::fs::write(tmp, "set -gF @loaded_from \"#{current_file}\"\n").unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@loaded_from"]));
+        // Should contain the canonical path to our temp file
+        assert!(output.contains("rmux_test_current_file.conf"), "current_file not set: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_dirname_current_file() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Write a config that captures #{d:current_file}
+        let tmp = "/tmp/rmux_test_dirname.conf";
+        std::fs::write(tmp, "set -gF @dir \"#{d:current_file}\"\n").unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@dir"]));
+        // dirname of /tmp/rmux_test_dirname.conf is /tmp (or /private/tmp on macOS)
+        assert!(output.contains("tmp"), "dirname failed: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
 }
 
 // ============================================================

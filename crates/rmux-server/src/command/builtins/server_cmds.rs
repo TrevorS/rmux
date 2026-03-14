@@ -154,20 +154,51 @@ pub fn cmd_unbind_key(
     Ok(CommandResult::Ok)
 }
 
-/// source-file path
+/// source-file [-F] [-q] path
 pub fn cmd_source_file(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let format_flag = has_flag(args, "F");
+    let quiet_flag = has_flag(args, "q");
     let positional = positional_args(args, &[]);
     if positional.is_empty() {
         return Err(ServerError::Command("source-file: missing path".into()));
     }
-    let path = positional[0];
+
+    // Resolve the path (optionally format-expanding it)
+    let path = if format_flag {
+        let fmt_ctx = server.build_format_context();
+        crate::format::format_expand(positional[0], &fmt_ctx)
+    } else {
+        positional[0].to_string()
+    };
+
     let mut ctx = server.build_config_context();
-    let commands = crate::config::load_config_file_with_context(path, &mut ctx)
-        .map_err(|e| ServerError::Command(format!("source-file: {e}")))?;
+    // Set current_file so #{current_file} and #{d:current_file} work during sourcing
+    let abs_path = std::path::Path::new(&path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(&path));
+    ctx.hidden_vars.insert("current_file".to_string(), abs_path.to_string_lossy().into_owned());
+
+    let commands = match crate::config::load_config_file_with_context(&path, &mut ctx) {
+        Ok(cmds) => cmds,
+        Err(e) => {
+            if quiet_flag {
+                return Ok(CommandResult::Ok);
+            }
+            return Err(ServerError::Command(format!("source-file: {e}")));
+        }
+    };
+
+    // Set current_file as a format variable for commands executed from this file
+    let _ = server.set_server_option("current_file", &abs_path.to_string_lossy());
+
     let errors = server.execute_config_commands(commands);
+
+    // Clear current_file after sourcing
+    let _ = server.unset_server_option("current_file");
+
     if errors.is_empty() {
         Ok(CommandResult::Ok)
     } else {

@@ -80,13 +80,13 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 
 - [x] Basic file loading and command execution **[CONF]**
 - [x] Error reporting (non-fatal, continues on error)
-- [ ] `-F` flag — format-expand the file path **[CONF]**
-- [ ] `-q` flag — suppress "file not found" errors
+- [x] `-F` flag — format-expand the file path **[CONF]**
+- [x] `-q` flag — suppress "file not found" errors
 - [ ] `-n` flag — parse only, don't execute
 - [ ] `-v` flag — verbose, show each command
 - [ ] Glob patterns (`source-file ~/.config/tmux/conf.d/*.conf`)
 - [ ] Depth limiting (tmux: 50 levels max)
-- [ ] `current_file` variable set during source (for `#{d:current_file}`) **[CONF]**
+- [x] `current_file` variable set during source (for `#{d:current_file}`) **[CONF]**
 
 ---
 
@@ -102,8 +102,8 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] `#{E:expr}` — double expansion (expand value, then expand result) **[CONF]**
 - [x] `#{T:expr}` — strftime expansion
 - [x] `#{l:text}` — literal (no expansion)
-- [ ] `#{d:variable}` — dirname (directory of path) **[CONF]**
-- [ ] `#{b:variable}` — basename (filename of path)
+- [x] `#{d:variable}` — dirname (directory of path) **[CONF]**
+- [x] `#{b:variable}` — basename (filename of path)
 - [ ] `#{q:expr}` — shell quoting
 - [ ] `#{n:expr}` — string length
 - [ ] `#{w:expr}` — display width
@@ -150,7 +150,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 ## 5. Format Variables
 
 ### Special Variables
-- [ ] `current_file` — path of config file being sourced **[CONF]**
+- [x] `current_file` — path of config file being sourced **[CONF]**
 - [ ] `version` — tmux/rmux version string **[CONF]**
 - [x] `host` / `host_short` — hostname
 - [ ] `pid` — server process ID
@@ -222,7 +222,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] All `set-option` flags needed by catppuccin (`-ogqF`, `-agF`, `-wgF`, `-ug`)
 - [x] Conditional directives (`%if`/`%elif`/`%else`/`%endif`)
 - [ ] Format expansion in `source-file -F` paths
-- [ ] `#{d:current_file}` for relative path resolution in plugins
+- [x] `#{d:current_file}` for relative path resolution in plugins
 - [x] `#{@user_option}` format references
 - [x] `${VAR}` interpolation in option names
 
@@ -251,9 +251,9 @@ Sets theme colors with `set -ogq @thm_bg "#1e1e2e"`. Requires:
 
 ### Phase 4: catppuccin_tmux.conf (main config)
 Heavy use of advanced features. Requires:
-- [ ] `source -F "#{d:current_file}/themes/..."` — format-expanded source path
-- [ ] `#{d:current_file}` — directory of current config file
-- [ ] `#{@catppuccin_flavor}` — user option in format strings
+- [x] `source -F "#{d:current_file}/themes/..."` — format-expanded source path
+- [x] `#{d:current_file}` — directory of current config file
+- [x] `#{@catppuccin_flavor}` — user option in format strings
 - [x] `%if "#{==:#{@option},value}"` — conditional directives
 - [x] `%elif`, `%else`, `%endif`
 - [x] `%hidden VAR="value"` — hidden variables
@@ -269,7 +269,7 @@ Heavy use of advanced features. Requires:
 Builds the `@catppuccin_status_session` format string. Requires:
 - [x] `%hidden MODULE_NAME="session"` — hidden variable
 - [x] `${MODULE_NAME}` interpolation in option names
-- [ ] `source -F "#{d:current_file}/../utils/..."` — relative path resolution
+- [x] `source -F "#{d:current_file}/../utils/..."` — relative path resolution
 - [x] `set -ogq` / `set -gF` / `set -agF` as above
 - [ ] `#{?client_prefix,...}` — client_prefix variable
 
@@ -303,10 +303,10 @@ Ordered by what unblocks the most functionality:
 9. ~~`%hidden` variable assignment~~
 10. ~~`${VAR}` interpolation in option names and values~~
 
-### P2 — Source file features (unblocks catppuccin path resolution)
-11. `source -F` flag (format-expand file path)
-12. `current_file` variable tracking during source
-13. `#{d:path}` dirname modifier
+### P2 — Source file features (unblocks catppuccin path resolution) ✅ DONE
+11. ~~`source -F` flag (format-expand file path)~~
+12. ~~`current_file` variable tracking during source~~
+13. ~~`#{d:path}` dirname modifier~~
 14. ~~Line continuation (backslash at end of line)~~
 
 ### P3 — Format variables (unblocks catppuccin conditionals)

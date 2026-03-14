@@ -1412,6 +1412,10 @@ impl CommandServer for MockCommandServer {
                 }
             }
         }
+        // current_file — path of config file being sourced (if any)
+        if let Ok(cf) = self.options.get_string("current_file") {
+            ctx.set("current_file", cf);
+        }
         // Collect @user options for #{@option} format expansion
         let mut user_opts: HashMap<String, String> = HashMap::new();
         for (k, v) in self.options.local_iter() {

@@ -194,6 +194,22 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
         return format_expand(&first, ctx);
     }
 
+    // Dirname: d:variable — directory component of a path
+    if let Some(rest) = inner.strip_prefix("d:") {
+        let val = eval_expr(rest, ctx);
+        return std::path::Path::new(&val)
+            .parent()
+            .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
+    }
+
+    // Basename: b:variable — filename component of a path
+    if let Some(rest) = inner.strip_prefix("b:") {
+        let val = eval_expr(rest, ctx);
+        return std::path::Path::new(&val)
+            .file_name()
+            .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+    }
+
     // Substitution: s/pattern/replacement:expr
     if inner.starts_with("s/") {
         if let Some(result) = expand_substitution(inner, ctx) {
@@ -1197,6 +1213,72 @@ mod tests {
             _ => None,
         });
         assert_eq!(format_expand("#{s/-/_:#{@name}}", &ctx), "hello_world");
+    }
+
+    // --- dirname / basename modifier tests ---
+
+    #[test]
+    fn dirname_simple() {
+        let mut ctx = FormatContext::new();
+        ctx.set("current_file", "/home/user/.config/tmux/plugins/catppuccin/catppuccin.conf");
+        assert_eq!(
+            format_expand("#{d:current_file}", &ctx),
+            "/home/user/.config/tmux/plugins/catppuccin"
+        );
+    }
+
+    #[test]
+    fn dirname_root() {
+        let mut ctx = FormatContext::new();
+        ctx.set("path", "/file.txt");
+        assert_eq!(format_expand("#{d:path}", &ctx), "/");
+    }
+
+    #[test]
+    fn dirname_no_parent() {
+        let mut ctx = FormatContext::new();
+        ctx.set("path", "file.txt");
+        assert_eq!(format_expand("#{d:path}", &ctx), "");
+    }
+
+    #[test]
+    fn dirname_empty_var() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{d:nonexistent}", &ctx), "");
+    }
+
+    #[test]
+    fn basename_simple() {
+        let mut ctx = FormatContext::new();
+        ctx.set("current_file", "/home/user/.config/tmux/catppuccin.conf");
+        assert_eq!(format_expand("#{b:current_file}", &ctx), "catppuccin.conf");
+    }
+
+    #[test]
+    fn basename_no_dir() {
+        let mut ctx = FormatContext::new();
+        ctx.set("path", "file.txt");
+        assert_eq!(format_expand("#{b:path}", &ctx), "file.txt");
+    }
+
+    #[test]
+    fn dirname_in_source_f_pattern() {
+        // Catppuccin pattern: source -F "#{d:current_file}/themes/mocha.conf"
+        let mut ctx = FormatContext::new();
+        ctx.set("current_file", "/opt/plugins/catppuccin/catppuccin_tmux.conf");
+        assert_eq!(
+            format_expand("#{d:current_file}/themes/mocha.conf", &ctx),
+            "/opt/plugins/catppuccin/themes/mocha.conf"
+        );
+    }
+
+    #[test]
+    fn dirname_nested_expansion() {
+        // #{d:current_file} inside a larger format string
+        let mut ctx = FormatContext::new();
+        ctx.set("current_file", "/a/b/c.conf");
+        ctx.set("flavor", "mocha");
+        assert_eq!(format_expand("#{d:current_file}/#{flavor}.conf", &ctx), "/a/b/mocha.conf");
     }
 
     mod prop_tests {
