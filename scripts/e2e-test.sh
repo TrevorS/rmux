@@ -586,6 +586,107 @@ test_display_menu_key_shortcut() {
     harness_assert '1:.*\*' "New window should be created via menu key shortcut"
 }
 
+# --- set-option flags ---------------------------------------------------------
+
+test_set_option_quiet() {
+    harness_start
+    # -gq should not error even with missing value
+    local output
+    output=$(harness_rmux set-option -gq missing-key 2>&1) || true
+    if echo "${output}" | grep -qi 'error'; then
+        _harness_fail "set-option -gq should suppress errors, got: ${output}"
+        return 1
+    fi
+}
+
+test_set_option_only_if_unset() {
+    harness_start
+    # Set a user option
+    harness_rmux set-option -g '@test_opt' 'original'
+    sleep 0.2
+    # -ogq should not overwrite
+    harness_rmux set-option -ogq '@test_opt' 'changed'
+    sleep 0.2
+
+    local output
+    output=$(harness_rmux show-options -g '@test_opt' 2>&1) || true
+    if ! echo "${output}" | grep -q 'original'; then
+        _harness_fail "-ogq should not overwrite existing option, got: ${output}"
+        return 1
+    fi
+}
+
+test_set_option_append() {
+    harness_start
+    harness_rmux set-option -g '@append_test' 'hello'
+    sleep 0.2
+    harness_rmux set-option -ag '@append_test' ' world'
+    sleep 0.2
+
+    local output
+    output=$(harness_rmux show-options -g '@append_test' 2>&1) || true
+    if ! echo "${output}" | grep -q 'hello world'; then
+        _harness_fail "-ag should append to existing value, got: ${output}"
+        return 1
+    fi
+}
+
+test_set_option_unset() {
+    harness_start
+    harness_rmux set-option -g '@unset_test' 'temp'
+    sleep 0.2
+    harness_rmux set-option -ug '@unset_test'
+    sleep 0.2
+
+    local output
+    output=$(harness_rmux show-options -g '@unset_test' 2>&1) || true
+    if echo "${output}" | grep -q 'temp'; then
+        _harness_fail "-ug should remove the option, got: ${output}"
+        return 1
+    fi
+}
+
+test_set_option_format_expand() {
+    harness_start
+    harness_rmux set-option -g '@thm_color' '#ff0000'
+    sleep 0.2
+    harness_rmux set-option -gF '@expanded' 'color=#{@thm_color}'
+    sleep 0.2
+
+    local output
+    output=$(harness_rmux show-options -g '@expanded' 2>&1) || true
+    if ! echo "${output}" | grep -q 'color=#ff0000'; then
+        _harness_fail "-gF should expand format strings, got: ${output}"
+        return 1
+    fi
+}
+
+test_set_option_catppuccin_ogq_pattern() {
+    harness_start
+    # Simulate catppuccin: set defaults with -ogq, then user overrides before
+    harness_rmux set-option -g '@catppuccin_flavor' 'latte'
+    sleep 0.2
+    # Plugin tries to set default — should not overwrite
+    harness_rmux set-option -ogq '@catppuccin_flavor' 'mocha'
+    sleep 0.2
+
+    local output
+    output=$(harness_rmux show-options -g '@catppuccin_flavor' 2>&1) || true
+    if ! echo "${output}" | grep -q 'latte'; then
+        _harness_fail "User's choice 'latte' should be preserved, got: ${output}"
+        return 1
+    fi
+
+    # But a new option should get the default
+    harness_rmux set-option -ogq '@catppuccin_window_text' '#W'
+    sleep 0.2
+    output=$(harness_rmux show-options -g '@catppuccin_window_text' 2>&1) || true
+    if ! echo "${output}" | grep -q '#W'; then
+        _harness_fail "New option should get default via -ogq, got: ${output}"
+        return 1
+    fi
+}
+
 # --- Main ---------------------------------------------------------------------
 
 echo "=== rmux E2E Test Suite ==="
@@ -634,6 +735,14 @@ run_test test_source_file
 run_test test_set_option
 run_test test_paste_buffer
 run_test test_swap_window
+
+# set-option flags (P0)
+run_test test_set_option_quiet
+run_test test_set_option_only_if_unset
+run_test test_set_option_append
+run_test test_set_option_unset
+run_test test_set_option_format_expand
+run_test test_set_option_catppuccin_ogq_pattern
 
 # Overlay tests
 run_test test_choose_tree_open_close

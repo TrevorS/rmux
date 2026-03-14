@@ -6,15 +6,20 @@
 use nix::libc;
 use std::collections::HashMap;
 
+/// Callback type for looking up `@user_option` values from the options store.
+pub type OptionLookup = Box<dyn Fn(&str) -> Option<String>>;
+
 /// Context for format string expansion.
 pub struct FormatContext {
     vars: HashMap<String, String>,
+    /// Optional callback for looking up `@`-prefixed user options.
+    option_lookup: Option<OptionLookup>,
 }
 
 impl FormatContext {
     /// Create a new empty format context.
     pub fn new() -> Self {
-        Self { vars: HashMap::new() }
+        Self { vars: HashMap::new(), option_lookup: None }
     }
 
     /// Set a format variable.
@@ -23,8 +28,27 @@ impl FormatContext {
     }
 
     /// Get a format variable value.
+    /// Also handles `@user_option` lookups via the option callback.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.vars.get(key).map(String::as_str)
+    }
+
+    /// Look up a variable, falling back to `@`-prefixed option lookup.
+    pub fn lookup(&self, key: &str) -> Option<String> {
+        if let Some(v) = self.vars.get(key) {
+            return Some(v.clone());
+        }
+        if key.starts_with('@') {
+            if let Some(cb) = &self.option_lookup {
+                return cb(key);
+            }
+        }
+        None
+    }
+
+    /// Set the option lookup callback for `@`-prefixed user options.
+    pub fn set_option_lookup(&mut self, f: impl Fn(&str) -> Option<String> + 'static) {
+        self.option_lookup = Some(Box::new(f));
     }
 }
 
@@ -212,8 +236,8 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
         // Had nested expansions — return the expanded result
         expanded
     } else {
-        // Plain variable name
-        ctx.get(inner).unwrap_or("").to_string()
+        // Plain variable name — use lookup which also handles @user_options
+        ctx.lookup(inner).unwrap_or_default()
     }
 }
 
@@ -237,11 +261,7 @@ fn split_at_comma(s: &str) -> Option<(&str, &str)> {
 /// Evaluate an expression: if it contains `#`, expand it as a format string;
 /// otherwise treat it as a bare variable name and look it up.
 fn eval_expr(expr: &str, ctx: &FormatContext) -> String {
-    if expr.contains('#') {
-        format_expand(expr, ctx)
-    } else {
-        ctx.get(expr).unwrap_or("").to_string()
-    }
+    if expr.contains('#') { format_expand(expr, ctx) } else { ctx.lookup(expr).unwrap_or_default() }
 }
 
 /// Expand a conditional: `cond,true_branch,false_branch`
@@ -301,8 +321,7 @@ fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
     let n: i32 = n_str.parse().ok()?;
     // Try variable lookup first (tmux treats the expr as a variable name),
     // then fall back to template expansion for nested #{} expressions.
-    let expanded =
-        ctx.get(expr).map_or_else(|| format_expand(expr, ctx), std::string::ToString::to_string);
+    let expanded = ctx.lookup(expr).unwrap_or_else(|| format_expand(expr, ctx));
 
     let char_count = expanded.chars().count();
     let abs_n = n.unsigned_abs() as usize;
@@ -1086,6 +1105,100 @@ mod tests {
         assert_eq!(result, "end%");
     }
 
+    // --- @user_option lookup tests ---
+
+    #[test]
+    fn user_option_simple_lookup() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|key| match key {
+            "@thm_bg" => Some("#1e1e2e".to_string()),
+            _ => None,
+        });
+        assert_eq!(format_expand("#{@thm_bg}", &ctx), "#1e1e2e");
+    }
+
+    #[test]
+    fn user_option_missing_returns_empty() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|_| None);
+        assert_eq!(format_expand("#{@unknown}", &ctx), "");
+    }
+
+    #[test]
+    fn user_option_in_conditional() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|key| match key {
+            "@catppuccin_flavor" => Some("mocha".to_string()),
+            _ => None,
+        });
+        let result = format_expand("#{?#{==:#{@catppuccin_flavor},mocha},dark,light}", &ctx);
+        assert_eq!(result, "dark");
+    }
+
+    #[test]
+    fn user_option_in_double_expansion() {
+        let mut ctx = FormatContext::new();
+        ctx.set("session_name", "work");
+        ctx.set_option_lookup(|key| match key {
+            "@catppuccin_status_session" => Some("S: #{session_name}".to_string()),
+            _ => None,
+        });
+        // E: should first resolve @catppuccin_status_session, then expand the result
+        let result = format_expand("#{E:@catppuccin_status_session}", &ctx);
+        assert_eq!(result, "S: work");
+    }
+
+    #[test]
+    fn user_option_in_truncation() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|key| match key {
+            "@long_value" => Some("abcdefghij".to_string()),
+            _ => None,
+        });
+        assert_eq!(format_expand("#{=5:@long_value}", &ctx), "abcde");
+    }
+
+    #[test]
+    fn user_option_precedence_over_vars() {
+        // If both a context var and an option lookup exist, context var wins
+        let mut ctx = FormatContext::new();
+        ctx.set("@foo", "from_context");
+        ctx.set_option_lookup(|key| match key {
+            "@foo" => Some("from_options".to_string()),
+            _ => None,
+        });
+        // Context var should take precedence
+        assert_eq!(format_expand("#{@foo}", &ctx), "from_context");
+    }
+
+    #[test]
+    fn user_option_without_callback() {
+        // No option_lookup set — @-prefixed vars just return empty
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{@anything}", &ctx), "");
+    }
+
+    #[test]
+    fn user_option_nested_in_comparison() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|key| match key {
+            "@version" => Some("3.4".to_string()),
+            _ => None,
+        });
+        assert_eq!(format_expand("#{>=:#{@version},3.4}", &ctx), "1");
+        assert_eq!(format_expand("#{>=:#{@version},3.5}", &ctx), "0");
+    }
+
+    #[test]
+    fn user_option_in_substitution() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|key| match key {
+            "@name" => Some("hello-world".to_string()),
+            _ => None,
+        });
+        assert_eq!(format_expand("#{s/-/_:#{@name}}", &ctx), "hello_world");
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;
@@ -1114,6 +1227,30 @@ mod tests {
                 let template = format!("#{{{key}}}");
                 let result = format_expand(&template, &ctx);
                 prop_assert_eq!(result, value);
+            }
+
+            #[test]
+            fn user_option_lookup_always_expands(
+                suffix in "[a-z_]{1,20}",
+                value in "[a-zA-Z0-9]{0,50}"
+            ) {
+                let key = format!("@{suffix}");
+                let expected = value.clone();
+                let key_clone = key.clone();
+                let mut ctx = FormatContext::new();
+                ctx.set_option_lookup(move |k| {
+                    if k == key_clone { Some(expected.clone()) } else { None }
+                });
+                let template = format!("#{{{key}}}");
+                let result = format_expand(&template, &ctx);
+                prop_assert_eq!(result, value);
+            }
+
+            #[test]
+            fn expand_never_panics_with_option_lookup(template in "\\PC{0,200}") {
+                let mut ctx = FormatContext::new();
+                ctx.set_option_lookup(|_| Some("test_value".to_string()));
+                let _ = format_expand(&template, &ctx);
             }
 
             #[test]

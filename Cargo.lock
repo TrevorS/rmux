@@ -725,7 +725,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rmux-client"
-version = "0.1.0"
+version = "3.6.0"
 dependencies = [
  "bytes",
  "nix",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "rmux-core"
-version = "0.1.0"
+version = "3.6.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "rmux-protocol"
-version = "0.1.0"
+version = "3.6.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "rmux-server"
-version = "0.1.0"
+version = "3.6.0"
 dependencies = [
  "base64",
  "bitflags",
@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "rmux-terminal"
-version = "0.1.0"
+version = "3.6.0"
 dependencies = [
  "bitflags",
  "bytes",

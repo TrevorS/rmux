@@ -28,6 +28,9 @@ fn main() {
 
     let opts = match parse_args(&args) {
         Ok(ParseResult::Version) => {
+            // Plugins (TPM, etc.) parse `tmux -V` and extract digits for
+            // version checks. Our version tracks the tmux release we're
+            // ported from so plugins see compatible digits (e.g. "36").
             println!("rmux {}", env!("CARGO_PKG_VERSION"));
             process::exit(0);
         }
@@ -41,9 +44,13 @@ fn main() {
     // Remaining args are the command
     let command_args: Vec<&str> = args[opts.command_start..].iter().map(String::as_str).collect();
 
-    // Resolve socket path
+    // Resolve socket path: -S flag > $TMUX env var > default
     let path = if let Some(p) = opts.socket_path {
         p
+    } else if let Ok(tmux_env) = env::var("TMUX") {
+        // $TMUX format: "socket_path,pid,session_id" — extract socket path
+        let socket = tmux_env.split(',').next().unwrap_or(&tmux_env);
+        PathBuf::from(socket)
     } else {
         let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let uid = nix::unistd::getuid();

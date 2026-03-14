@@ -189,8 +189,21 @@ pub trait CommandServer {
     fn get_server_option(&self, key: &str) -> Result<String, ServerError>;
     /// Set a server-level option.
     fn set_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError>;
+    /// Unset a server-level option (revert to default).
+    fn unset_server_option(&mut self, key: &str) -> Result<(), ServerError>;
+    /// Append to a server-level string option.
+    fn append_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError>;
     /// Set a session-level option.
     fn set_session_option(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError>;
+    /// Unset a session-level option.
+    fn unset_session_option(&mut self, session_id: u32, key: &str) -> Result<(), ServerError>;
+    /// Append to a session-level string option.
+    fn append_session_option(
         &mut self,
         session_id: u32,
         key: &str,
@@ -204,6 +217,27 @@ pub trait CommandServer {
         key: &str,
         value: &str,
     ) -> Result<(), ServerError>;
+    /// Unset a window-level option.
+    fn unset_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+    ) -> Result<(), ServerError>;
+    /// Append to a window-level string option.
+    fn append_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError>;
+    /// Check if a server-level option exists.
+    fn has_server_option(&self, key: &str) -> bool;
+    /// Check if a session-level option exists (local, not inherited).
+    fn has_session_option(&self, session_id: u32, key: &str) -> bool;
+    /// Check if a window-level option exists (local, not inherited).
+    fn has_window_option(&self, session_id: u32, window_idx: u32, key: &str) -> bool;
     /// Show all options for a given scope. Returns "key value" lines.
     fn show_options(&self, scope: &str, target_id: Option<u32>) -> Vec<String>;
 
@@ -352,17 +386,17 @@ pub trait CommandServer {
     fn switch_client(&mut self, session_id: u32) -> Result<(), ServerError>;
 
     // --- Environment ---
-    /// Set a session environment variable.
+    /// Set an environment variable. `None` session_id means global (server-level).
     fn set_environment(
         &mut self,
-        session_id: u32,
+        session_id: Option<u32>,
         key: &str,
         value: &str,
     ) -> Result<(), ServerError>;
-    /// Unset (remove) a session environment variable.
-    fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError>;
-    /// Show session environment variables. Returns "KEY=VALUE" lines.
-    fn show_environment(&self, session_id: u32) -> Vec<String>;
+    /// Unset (remove) an environment variable. `None` session_id means global.
+    fn unset_environment(&mut self, session_id: Option<u32>, key: &str) -> Result<(), ServerError>;
+    /// Show environment variables. `None` session_id means global. Returns "KEY=VALUE" lines.
+    fn show_environment(&self, session_id: Option<u32>) -> Vec<String>;
 
     // --- Buffer file I/O ---
     /// Save the named (or top) buffer to a file.
@@ -460,8 +494,22 @@ pub fn get_option<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 /// Check if a flag is present in arguments.
+/// Supports both exact flags (`-g`) and combined single-char flags (`-gF` contains `-g`).
 pub fn has_flag(args: &[String], flag: &str) -> bool {
-    args.iter().any(|a| a == flag)
+    // flag is like "-g", so the char is flag[1..]
+    let flag_char = flag.strip_prefix('-').unwrap_or(flag);
+    args.iter().any(|a| {
+        if a == flag {
+            return true;
+        }
+        // Check combined flags: "-gF" contains both "-g" and "-F"
+        if let Some(chars) = a.strip_prefix('-') {
+            if !chars.is_empty() && chars.chars().all(|c| c.is_ascii_alphabetic()) {
+                return chars.contains(flag_char);
+            }
+        }
+        false
+    })
 }
 
 /// Collect positional arguments (those that aren't flags or flag values).

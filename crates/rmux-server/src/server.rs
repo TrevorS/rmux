@@ -127,6 +127,18 @@ pub struct Server {
     prompt_history: Vec<String>,
     /// Queued control mode notifications to send on next tick.
     control_notifications: Vec<(u32, String)>,
+    /// Global (server-level) environment variables.
+    global_environ: HashMap<String, String>,
+    /// Pending config commands waiting to be executed (startup config loading).
+    pending_config: std::collections::VecDeque<Vec<String>>,
+    /// Active shell job from `run-shell` during config loading.
+    pending_shell_job: Option<tokio::process::Child>,
+    /// Directory with `tmux` -> rmux symlink for run-shell compatibility.
+    /// Plugins (TPM etc.) call `tmux` commands — this shim redirects to rmux.
+    shim_dir: Option<PathBuf>,
+    /// Client commands deferred until config loading completes.
+    /// Session-creating commands (new-session) must wait so they inherit config options.
+    deferred_commands: Vec<(u64, Vec<String>)>,
 }
 
 impl Server {
@@ -156,6 +168,11 @@ impl Server {
             message_log: std::collections::VecDeque::new(),
             prompt_history: Vec::new(),
             control_notifications: Vec::new(),
+            global_environ: HashMap::new(),
+            pending_config: std::collections::VecDeque::new(),
+            pending_shell_job: None,
+            shim_dir: None,
+            deferred_commands: Vec::new(),
         }
     }
 
@@ -218,13 +235,6 @@ impl Server {
 
     /// Run the server event loop.
     pub async fn run(&mut self, config_file: Option<&str>) -> Result<(), ServerError> {
-        // Load configuration before anything else
-        if let Some(path) = config_file {
-            self.load_config(path);
-        } else {
-            self.load_default_config();
-        }
-
         // Ensure parent directory exists
         if let Some(parent) = self.socket_path.parent() {
             std::fs::create_dir_all(parent).map_err(ServerError::Bind)?;
@@ -233,9 +243,20 @@ impl Server {
         // Remove stale socket
         let _ = std::fs::remove_file(&self.socket_path);
 
+        // Bind socket BEFORE loading config — run-shell scripts (like TPM) need to
+        // connect back to the server while executing, just like tmux.
         let listener = UnixListener::bind(&self.socket_path).map_err(ServerError::Bind)?;
 
         tracing::info!("server listening on {:?}", self.socket_path);
+
+        // Create tmux shim so plugins calling `tmux` resolve to rmux.
+        self.setup_tmux_shim();
+
+        // Queue config commands for processing inside the event loop.
+        // This matches tmux's architecture: config commands execute within the
+        // event loop so that run-shell can fork processes that connect back to
+        // the server (e.g., TPM plugins calling `tmux set -g ...`).
+        self.queue_config(config_file);
 
         let mut redraw_interval = tokio::time::interval(
             tokio::time::Duration::from_millis(16), // ~60fps
@@ -266,6 +287,35 @@ impl Server {
                     self.handle_client_event(client_id, event).await;
                 }
 
+                // Process pending config commands (one per iteration, like tmux's cmdq).
+                // Only runs when no shell job is blocking.
+                () = std::future::ready(()), if !self.pending_config.is_empty() && self.pending_shell_job.is_none() => {
+                    self.process_next_config_command();
+                    // Config just finished — flush deferred client commands
+                    if !self.config_loading() {
+                        self.flush_deferred_commands().await;
+                    }
+                }
+
+                // Wait for active run-shell job to complete before resuming config.
+                // While waiting, the event loop keeps running — new connections from
+                // TPM plugin scripts are accepted and handled normally.
+                status = async { self.pending_shell_job.as_mut().unwrap().wait().await }, if self.pending_shell_job.is_some() => {
+                    match status {
+                        Ok(exit) => {
+                            if !exit.success() {
+                                tracing::debug!("run-shell exited with {exit}");
+                            }
+                        }
+                        Err(e) => tracing::warn!("run-shell wait error: {e}"),
+                    }
+                    self.pending_shell_job = None;
+                    // Shell job was the last config step — flush deferred commands
+                    if !self.config_loading() {
+                        self.flush_deferred_commands().await;
+                    }
+                }
+
                 // Periodic redraw
                 _ = redraw_interval.tick() => {
                     // Poll foreground process for auto-rename every ~500ms (30 ticks at 60fps)
@@ -292,8 +342,145 @@ impl Server {
 
         // Clean up
         let _ = std::fs::remove_file(&self.socket_path);
+        if let Some(shim) = &self.shim_dir {
+            let _ = std::fs::remove_dir_all(shim);
+        }
         tracing::info!("server shutting down");
         Ok(())
+    }
+
+    /// Queue config file commands for processing in the event loop.
+    fn queue_config(&mut self, config_file: Option<&str>) {
+        let commands = if let Some(path) = config_file {
+            match crate::config::load_config_file(path) {
+                Ok(cmds) => {
+                    tracing::info!("loading config: {path}");
+                    cmds
+                }
+                Err(e) => {
+                    tracing::warn!("could not load config {path}: {e}");
+                    return;
+                }
+            }
+        } else {
+            let Ok(home) = std::env::var("HOME") else { return };
+            let xdg = std::env::var("XDG_CONFIG_HOME").ok();
+            let Some(path) = Self::find_default_config(&home, xdg.as_deref()) else {
+                tracing::info!("no default config file found");
+                return;
+            };
+            match crate::config::load_config_file(&path) {
+                Ok(cmds) => {
+                    tracing::info!("loading config: {path}");
+                    cmds
+                }
+                Err(e) => {
+                    tracing::warn!("could not load config {path}: {e}");
+                    return;
+                }
+            }
+        };
+
+        self.pending_config = commands.into();
+    }
+
+    /// Process the next pending config command.
+    fn process_next_config_command(&mut self) {
+        let Some(argv) = self.pending_config.pop_front() else {
+            return;
+        };
+
+        match crate::command::execute_command(&argv, self) {
+            Ok(CommandResult::RunShell(cmd)) => {
+                tracing::debug!("config run-shell: {cmd}");
+                // Expand ~ in command (tmux does this via format_single)
+                let expanded = if cmd.starts_with('~') {
+                    if let Ok(home) = std::env::var("HOME") {
+                        cmd.replacen('~', &home, 1)
+                    } else {
+                        cmd
+                    }
+                } else {
+                    cmd
+                };
+                match self.shell_command(&expanded).spawn() {
+                    Ok(child) => {
+                        self.pending_shell_job = Some(child);
+                    }
+                    Err(e) => {
+                        tracing::warn!("config run-shell spawn error: {e}");
+                    }
+                }
+            }
+            Ok(_) => {
+                // Other results (Attach, Detach, Overlay, etc.) are silently
+                // ignored during config loading, matching tmux behavior.
+            }
+            Err(e) => {
+                tracing::debug!("config command failed: {argv:?} -> {e}");
+                tracing::warn!("config error: {e}");
+            }
+        }
+    }
+
+    /// Create a shim directory with a `tmux` symlink pointing to the rmux client binary.
+    /// This allows plugins (TPM, etc.) that call `tmux` to transparently use rmux.
+    fn setup_tmux_shim(&mut self) {
+        // Find the rmux client binary next to rmux-server.
+        let rmux_bin = match std::env::current_exe() {
+            Ok(server_path) => {
+                let dir = server_path.parent().unwrap_or(std::path::Path::new("."));
+                let client = dir.join("rmux");
+                if client.exists() {
+                    client
+                } else {
+                    // Fallback: maybe we ARE rmux (single binary)
+                    server_path
+                }
+            }
+            Err(e) => {
+                tracing::debug!("could not determine rmux binary path: {e}");
+                return;
+            }
+        };
+
+        let uid = nix::unistd::getuid();
+        let shim_dir = PathBuf::from(format!(
+            "{}/rmux-{uid}/shim",
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into())
+        ));
+
+        if let Err(e) = std::fs::create_dir_all(&shim_dir) {
+            tracing::debug!("could not create shim dir: {e}");
+            return;
+        }
+
+        let tmux_shim = shim_dir.join("tmux");
+        // Remove stale symlink
+        let _ = std::fs::remove_file(&tmux_shim);
+        if let Err(e) = std::os::unix::fs::symlink(&rmux_bin, &tmux_shim) {
+            tracing::debug!("could not create tmux shim symlink: {e}");
+            return;
+        }
+
+        tracing::debug!("tmux shim: {} -> {}", tmux_shim.display(), rmux_bin.display());
+        self.shim_dir = Some(shim_dir);
+    }
+
+    /// Build a shell command with the right environment for run-shell.
+    /// Sets TMUX (socket path) and prepends the shim dir to PATH so that
+    /// `tmux` commands in scripts resolve to rmux.
+    fn shell_command(&self, cmd: &str) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg(cmd);
+        command.env("TMUX", format!("{},0,0", self.socket_path.display()));
+
+        if let Some(shim) = &self.shim_dir {
+            let path = std::env::var("PATH").unwrap_or_default();
+            command.env("PATH", format!("{}:{path}", shim.display()));
+        }
+
+        command
     }
 
     fn handle_new_client(&mut self, stream: UnixStream) {
@@ -643,8 +830,39 @@ impl Server {
         }
     }
 
+    /// Returns true if config is still being loaded (pending commands or active shell job).
+    fn config_loading(&self) -> bool {
+        !self.pending_config.is_empty() || self.pending_shell_job.is_some()
+    }
+
+    /// Returns true if a command creates or attaches to sessions and should
+    /// be deferred until config loading is complete.
+    fn is_session_command(argv: &[String]) -> bool {
+        matches!(
+            argv.first().map(String::as_str),
+            Some("new-session" | "new" | "attach-session" | "attach" | "a")
+        )
+    }
+
+    /// Process all commands that were deferred while config was loading.
+    async fn flush_deferred_commands(&mut self) {
+        let commands = std::mem::take(&mut self.deferred_commands);
+        for (client_id, argv) in commands {
+            tracing::info!("executing deferred command from client {client_id}: {argv:?}");
+            self.handle_command(client_id, &argv).await;
+        }
+    }
+
     async fn handle_command(&mut self, client_id: u64, argv: &[String]) {
         if argv.is_empty() {
+            return;
+        }
+
+        // Defer session-creating commands until config loading is done,
+        // so sessions inherit configured options (prefix, status bar, etc.).
+        if self.config_loading() && Self::is_session_command(argv) {
+            tracing::debug!("deferring command until config loaded: {argv:?}");
+            self.deferred_commands.push((client_id, argv.to_vec()));
             return;
         }
 
@@ -655,7 +873,14 @@ impl Server {
 
         // Execute command
         let result = command::execute_command(argv, self);
+        self.dispatch_command_result(client_id, result).await;
+    }
 
+    async fn dispatch_command_result(
+        &mut self,
+        client_id: u64,
+        result: Result<CommandResult, ServerError>,
+    ) {
         match result {
             Ok(CommandResult::Ok) => {
                 // Send exit to non-attached clients
@@ -719,15 +944,14 @@ impl Server {
                 self.spawn_popup(client_id, config);
             }
             Ok(CommandResult::RunShell(cmd)) => {
-                let output =
-                    match tokio::process::Command::new("sh").arg("-c").arg(&cmd).output().await {
-                        Ok(out) => {
-                            let mut result = out.stdout;
-                            result.extend_from_slice(&out.stderr);
-                            String::from_utf8_lossy(&result).into_owned()
-                        }
-                        Err(e) => format!("run-shell: {e}\n"),
-                    };
+                let output = match self.shell_command(&cmd).output().await {
+                    Ok(out) => {
+                        let mut result = out.stdout;
+                        result.extend_from_slice(&out.stderr);
+                        String::from_utf8_lossy(&result).into_owned()
+                    }
+                    Err(e) => format!("run-shell: {e}\n"),
+                };
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     if !output.is_empty() {
                         client.send(&Message::OutputData(output.into_bytes())).await.ok();
@@ -1908,8 +2132,10 @@ impl Server {
             self.log_message(format!("client {client_id} disconnected"));
         }
 
-        // If no more sessions and no more clients, shut down
-        if self.clients.is_empty() && self.sessions.is_empty() {
+        // If no more sessions and no more clients, shut down.
+        // Don't exit while config is still loading (run-shell may spawn clients
+        // that connect and disconnect before any session is created).
+        if self.clients.is_empty() && self.sessions.is_empty() && !self.config_loading() {
             self.shutdown = true;
         }
     }
@@ -2532,6 +2758,10 @@ impl CommandServer for Server {
     ) -> Result<u32, ServerError> {
         let session = self.sessions.create(name.to_string(), cwd.to_string());
         let session_id = session.id;
+
+        // Inherit global options so session reads (status-style, base-index, etc.)
+        // fall back to server-level options set by config.
+        session.options = rmux_core::options::Options::with_parent(self.options.clone());
 
         // Create initial window with one pane
         // Reserve 1 row for status line
@@ -3183,6 +3413,26 @@ impl CommandServer for Server {
             }
             ctx.set("host", h);
         }
+        // Collect @user options for #{@option} format expansion
+        let mut user_opts: HashMap<String, String> = HashMap::new();
+        for (k, v) in self.options.local_iter() {
+            if k.starts_with('@') {
+                user_opts.insert(k.to_string(), format_option_value(v));
+            }
+        }
+        // Also include session-level @options
+        if let Some(session_id) = self.client_session_id() {
+            if let Some(session) = self.sessions.find_by_id(session_id) {
+                for (k, v) in session.options.local_iter() {
+                    if k.starts_with('@') {
+                        user_opts.insert(k.to_string(), format_option_value(v));
+                    }
+                }
+            }
+        }
+        if !user_opts.is_empty() {
+            ctx.set_option_lookup(move |key| user_opts.get(key).cloned());
+        }
         ctx
     }
 
@@ -3321,6 +3571,18 @@ impl CommandServer for Server {
         Ok(())
     }
 
+    fn unset_server_option(&mut self, key: &str) -> Result<(), ServerError> {
+        self.options.unset(key);
+        Ok(())
+    }
+
+    fn append_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
+        let current = self.options.get(key).map(format_option_value).unwrap_or_default();
+        let new_value = format!("{current}{value}");
+        self.options.set(key, parse_option_value(&new_value));
+        Ok(())
+    }
+
     fn set_session_option(
         &mut self,
         session_id: u32,
@@ -3333,6 +3595,31 @@ impl CommandServer for Server {
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let val = parse_option_value(value);
         session.options.set(key, val);
+        Ok(())
+    }
+
+    fn unset_session_option(&mut self, session_id: u32, key: &str) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        session.options.unset(key);
+        Ok(())
+    }
+
+    fn append_session_option(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let current = session.options.get(key).map(format_option_value).unwrap_or_default();
+        let new_value = format!("{current}{value}");
+        session.options.set(key, parse_option_value(&new_value));
         Ok(())
     }
 
@@ -3354,6 +3641,59 @@ impl CommandServer for Server {
         let val = parse_option_value(value);
         window.options.set(key, val);
         Ok(())
+    }
+
+    fn unset_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        window.options.unset(key);
+        Ok(())
+    }
+
+    fn append_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        let current = window.options.get(key).map(format_option_value).unwrap_or_default();
+        let new_value = format!("{current}{value}");
+        window.options.set(key, parse_option_value(&new_value));
+        Ok(())
+    }
+
+    fn has_server_option(&self, key: &str) -> bool {
+        self.options.get(key).is_some()
+    }
+
+    fn has_session_option(&self, session_id: u32, key: &str) -> bool {
+        self.sessions.find_by_id(session_id).is_some_and(|s| s.options.is_local(key))
+    }
+
+    fn has_window_option(&self, session_id: u32, window_idx: u32, key: &str) -> bool {
+        self.sessions
+            .find_by_id(session_id)
+            .is_some_and(|s| s.windows.get(&window_idx).is_some_and(|w| w.options.is_local(key)))
     }
 
     fn show_options(&self, scope: &str, target_id: Option<u32>) -> Vec<String> {
@@ -3426,6 +3766,7 @@ impl CommandServer for Server {
         let mut errors = Vec::new();
         for argv in commands {
             if let Err(e) = crate::command::execute_command(&argv, self) {
+                tracing::debug!("config command failed: {argv:?} -> {e}");
                 errors.push(format!("{e}"));
             }
         }
@@ -4242,35 +4583,50 @@ impl CommandServer for Server {
 
     fn set_environment(
         &mut self,
-        session_id: u32,
+        session_id: Option<u32>,
         key: &str,
         value: &str,
     ) -> Result<(), ServerError> {
-        let session = self
-            .sessions
-            .find_by_id_mut(session_id)
-            .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        session.environ.insert(key.to_string(), value.to_string());
+        if let Some(sid) = session_id {
+            let session = self
+                .sessions
+                .find_by_id_mut(sid)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            session.environ.insert(key.to_string(), value.to_string());
+        } else {
+            self.global_environ.insert(key.to_string(), value.to_string());
+        }
         Ok(())
     }
 
-    fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError> {
-        let session = self
-            .sessions
-            .find_by_id_mut(session_id)
-            .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        session.environ.remove(key);
+    fn unset_environment(&mut self, session_id: Option<u32>, key: &str) -> Result<(), ServerError> {
+        if let Some(sid) = session_id {
+            let session = self
+                .sessions
+                .find_by_id_mut(sid)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            session.environ.remove(key);
+        } else {
+            self.global_environ.remove(key);
+        }
         Ok(())
     }
 
-    fn show_environment(&self, session_id: u32) -> Vec<String> {
-        if let Some(session) = self.sessions.find_by_id(session_id) {
+    fn show_environment(&self, session_id: Option<u32>) -> Vec<String> {
+        if let Some(sid) = session_id {
+            if let Some(session) = self.sessions.find_by_id(sid) {
+                let mut env: Vec<String> =
+                    session.environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                env.sort();
+                env
+            } else {
+                Vec::new()
+            }
+        } else {
             let mut env: Vec<String> =
-                session.environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                self.global_environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
             env.sort();
             env
-        } else {
-            Vec::new()
         }
     }
 

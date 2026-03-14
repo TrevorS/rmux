@@ -32,20 +32,28 @@ pub fn parse_config_lines(content: &str) -> Vec<Vec<String>> {
     commands
 }
 
-/// Split a line on unquoted semicolons.
+/// Split a line on unquoted, unescaped semicolons.
 fn split_on_semicolons(line: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
     let bytes = line.as_bytes();
     let mut i = 0;
-    let mut in_quote = false;
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
 
     while i < bytes.len() {
         match bytes[i] {
-            b'"' if i == 0 || bytes[i - 1] != b'\\' => {
-                in_quote = !in_quote;
+            b'"' if !in_single_quote && (i == 0 || bytes[i - 1] != b'\\') => {
+                in_double_quote = !in_double_quote;
             }
-            b';' if !in_quote => {
+            b'\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+            }
+            b'\\' if !in_single_quote && !in_double_quote => {
+                // Skip escaped character (handles \;)
+                i += 1;
+            }
+            b';' if !in_double_quote && !in_single_quote => {
                 parts.push(&line[start..i]);
                 start = i + 1;
             }
@@ -70,6 +78,7 @@ pub fn tokenize_command(input: &str) -> Vec<String> {
     let mut chars = input.chars().peekable();
     let mut in_double_quote = false;
     let mut in_single_quote = false;
+    let mut has_quotes = false; // Track if current token had quotes (preserves empty strings)
 
     while let Some(&ch) = chars.peek() {
         match ch {
@@ -80,10 +89,12 @@ pub fn tokenize_command(input: &str) -> Vec<String> {
             '"' if !in_single_quote => {
                 chars.next();
                 in_double_quote = !in_double_quote;
+                has_quotes = true;
             }
             '\'' if !in_double_quote => {
                 chars.next();
                 in_single_quote = !in_single_quote;
+                has_quotes = true;
             }
             '\\' if in_double_quote => {
                 chars.next();
@@ -120,8 +131,9 @@ pub fn tokenize_command(input: &str) -> Vec<String> {
             }
             ' ' | '\t' if !in_double_quote && !in_single_quote => {
                 chars.next();
-                if !current.is_empty() {
+                if !current.is_empty() || has_quotes {
                     args.push(std::mem::take(&mut current));
+                    has_quotes = false;
                 }
             }
             _ => {
@@ -131,7 +143,7 @@ pub fn tokenize_command(input: &str) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() {
+    if !current.is_empty() || has_quotes {
         args.push(current);
     }
 
@@ -229,12 +241,11 @@ mod tests {
 
     #[test]
     fn empty_quoted_string() {
-        // The tokenizer skips empty tokens, so "" produces no arg.
-        // This documents the current behavior.
+        // Empty quoted strings are preserved as empty string arguments (tmux compat).
         let input = r#"set -g foo """#;
         let cmds = parse_config_lines(input);
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0], vec!["set", "-g", "foo"]);
+        assert_eq!(cmds[0], vec!["set", "-g", "foo", ""]);
     }
 
     #[test]
@@ -266,6 +277,23 @@ mod tests {
         let cmds = parse_config_lines(input);
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0], vec!["set", "-g", "foo", "hello", "world", "it's"]);
+    }
+
+    #[test]
+    fn escaped_semicolon_not_split() {
+        // \; in tmux means "next command bound to same key", not a command separator
+        let input = r#"bind r source-file foo \; display "Reloaded!""#;
+        let cmds = parse_config_lines(input);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0], vec!["bind", "r", "source-file", "foo", ";", "display", "Reloaded!"]);
+    }
+
+    #[test]
+    fn empty_single_quoted_string() {
+        let input = "set -g foo ''";
+        let cmds = parse_config_lines(input);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0], vec!["set", "-g", "foo", ""]);
     }
 
     mod prop_tests {

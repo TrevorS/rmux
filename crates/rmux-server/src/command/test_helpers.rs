@@ -42,6 +42,8 @@ pub struct MockCommandServer {
     pub hooks: crate::hooks::HookStore,
     /// Prompt history.
     pub prompt_history: Vec<String>,
+    /// Global environment variables.
+    pub global_environ: HashMap<String, String>,
 }
 
 impl MockCommandServer {
@@ -62,6 +64,7 @@ impl MockCommandServer {
             copy_mode_entered: false,
             hooks: crate::hooks::HookStore::new(),
             prompt_history: Vec::new(),
+            global_environ: HashMap::new(),
         }
     }
 
@@ -589,6 +592,18 @@ impl CommandServer for MockCommandServer {
         Ok(())
     }
 
+    fn unset_server_option(&mut self, key: &str) -> Result<(), ServerError> {
+        self.options.unset(key);
+        Ok(())
+    }
+
+    fn append_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
+        let current = self.options.get(key).map(format_option_value).unwrap_or_default();
+        let new_value = format!("{current}{value}");
+        self.options.set(key, parse_option_value(&new_value));
+        Ok(())
+    }
+
     fn set_session_option(
         &mut self,
         session_id: u32,
@@ -601,6 +616,31 @@ impl CommandServer for MockCommandServer {
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let val = parse_option_value(value);
         session.options.set(key, val);
+        Ok(())
+    }
+
+    fn unset_session_option(&mut self, session_id: u32, key: &str) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        session.options.unset(key);
+        Ok(())
+    }
+
+    fn append_session_option(
+        &mut self,
+        session_id: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let current = session.options.get(key).map(format_option_value).unwrap_or_default();
+        let new_value = format!("{current}{value}");
+        session.options.set(key, parse_option_value(&new_value));
         Ok(())
     }
 
@@ -622,6 +662,59 @@ impl CommandServer for MockCommandServer {
         let val = parse_option_value(value);
         window.options.set(key, val);
         Ok(())
+    }
+
+    fn unset_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        window.options.unset(key);
+        Ok(())
+    }
+
+    fn append_window_option(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        key: &str,
+        value: &str,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        let current = window.options.get(key).map(format_option_value).unwrap_or_default();
+        let new_value = format!("{current}{value}");
+        window.options.set(key, parse_option_value(&new_value));
+        Ok(())
+    }
+
+    fn has_server_option(&self, key: &str) -> bool {
+        self.options.get(key).is_some()
+    }
+
+    fn has_session_option(&self, session_id: u32, key: &str) -> bool {
+        self.sessions.find_by_id(session_id).is_some_and(|s| s.options.is_local(key))
+    }
+
+    fn has_window_option(&self, session_id: u32, window_idx: u32, key: &str) -> bool {
+        self.sessions
+            .find_by_id(session_id)
+            .is_some_and(|s| s.windows.get(&window_idx).is_some_and(|w| w.options.is_local(key)))
     }
 
     fn show_options(&self, scope: &str, target_id: Option<u32>) -> Vec<String> {
@@ -1287,6 +1380,25 @@ impl CommandServer for MockCommandServer {
                 }
             }
         }
+        // Collect @user options for #{@option} format expansion
+        let mut user_opts: HashMap<String, String> = HashMap::new();
+        for (k, v) in self.options.local_iter() {
+            if k.starts_with('@') {
+                user_opts.insert(k.to_string(), format_option_value(v));
+            }
+        }
+        if let Some(session_id) = self.client_session_id() {
+            if let Some(session) = self.sessions.find_by_id(session_id) {
+                for (k, v) in session.options.local_iter() {
+                    if k.starts_with('@') {
+                        user_opts.insert(k.to_string(), format_option_value(v));
+                    }
+                }
+            }
+        }
+        if !user_opts.is_empty() {
+            ctx.set_option_lookup(move |key| user_opts.get(key).cloned());
+        }
         ctx
     }
 
@@ -1356,35 +1468,50 @@ impl CommandServer for MockCommandServer {
 
     fn set_environment(
         &mut self,
-        session_id: u32,
+        session_id: Option<u32>,
         key: &str,
         value: &str,
     ) -> Result<(), ServerError> {
-        let session = self
-            .sessions
-            .find_by_id_mut(session_id)
-            .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        session.environ.insert(key.to_string(), value.to_string());
+        if let Some(sid) = session_id {
+            let session = self
+                .sessions
+                .find_by_id_mut(sid)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            session.environ.insert(key.to_string(), value.to_string());
+        } else {
+            self.global_environ.insert(key.to_string(), value.to_string());
+        }
         Ok(())
     }
 
-    fn unset_environment(&mut self, session_id: u32, key: &str) -> Result<(), ServerError> {
-        let session = self
-            .sessions
-            .find_by_id_mut(session_id)
-            .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        session.environ.remove(key);
+    fn unset_environment(&mut self, session_id: Option<u32>, key: &str) -> Result<(), ServerError> {
+        if let Some(sid) = session_id {
+            let session = self
+                .sessions
+                .find_by_id_mut(sid)
+                .ok_or_else(|| ServerError::Command("session not found".into()))?;
+            session.environ.remove(key);
+        } else {
+            self.global_environ.remove(key);
+        }
         Ok(())
     }
 
-    fn show_environment(&self, session_id: u32) -> Vec<String> {
-        if let Some(session) = self.sessions.find_by_id(session_id) {
+    fn show_environment(&self, session_id: Option<u32>) -> Vec<String> {
+        if let Some(sid) = session_id {
+            if let Some(session) = self.sessions.find_by_id(sid) {
+                let mut env: Vec<String> =
+                    session.environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                env.sort();
+                env
+            } else {
+                Vec::new()
+            }
+        } else {
             let mut env: Vec<String> =
-                session.environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                self.global_environ.iter().map(|(k, v)| format!("{k}={v}")).collect();
             env.sort();
             env
-        } else {
-            Vec::new()
         }
     }
 

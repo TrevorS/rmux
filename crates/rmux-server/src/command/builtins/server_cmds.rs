@@ -108,17 +108,34 @@ pub fn cmd_bind_key(
         if has_flag(args, "-n") { "root" } else { get_option(args, "-T").unwrap_or("prefix") };
     let repeatable = has_flag(args, "-r");
 
-    let positional = positional_args(args, &["-T"]);
-    if positional.is_empty() {
+    // Custom arg parsing: after consuming flags, the first remaining arg is the key
+    // (even if it's "-" or another flag-like string), followed by command + args.
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-r" || arg == "-n" {
+            i += 1;
+        } else if arg == "-T" {
+            i += 2; // skip -T and its value
+        } else if arg.starts_with('-') && arg.len() > 1 && arg.as_bytes()[1] != b'-' {
+            // Combined flags like "-rn" — skip
+            i += 1;
+        } else {
+            break;
+        }
+    }
+
+    if i >= args.len() {
         return Err(ServerError::Command("bind-key: missing key".into()));
     }
+    let key_name = &args[i];
+    i += 1;
 
-    let key_name = positional[0];
-    if positional.len() < 2 {
+    // Remaining args are the command and its arguments
+    if i >= args.len() {
         return Err(ServerError::Command("bind-key: missing command".into()));
     }
-
-    let argv: Vec<String> = positional[1..].iter().map(|s| (*s).to_string()).collect();
+    let argv: Vec<String> = args[i..].to_vec();
     server.add_key_binding(table, key_name, argv, repeatable)?;
     Ok(CommandResult::Ok)
 }

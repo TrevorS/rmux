@@ -8,8 +8,9 @@ pub fn cmd_set_environment(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let global = has_flag(args, "-g");
     let unset = has_flag(args, "-u");
-    let session_id = resolve_env_session(args, server)?;
+    let session_id = if global { None } else { Some(resolve_env_session(args, server)?) };
 
     let positionals = positional_args(args, &["-t"]);
     if positionals.is_empty() {
@@ -36,7 +37,8 @@ pub fn cmd_show_environment(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let session_id = resolve_env_session(args, server)?;
+    let global = has_flag(args, "-g");
+    let session_id = if global { None } else { Some(resolve_env_session(args, server)?) };
     let positionals = positional_args(args, &["-t"]);
 
     let env_lines = server.show_environment(session_id);
