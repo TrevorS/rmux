@@ -154,7 +154,7 @@ pub fn cmd_capture_pane(
     Ok(CommandResult::Output(content))
 }
 
-/// resize-pane [-U|-D|-L|-R] [-t target-pane] [amount]
+/// resize-pane [-U|-D|-L|-R|-Z] [-t target-pane] [amount]
 pub fn cmd_resize_pane(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -162,13 +162,19 @@ pub fn cmd_resize_pane(
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     let pane_id = resolve_pane_id(args, server, session_id, window_idx)?;
 
-    let direction = if has_flag(args, "-U") {
+    // -Z toggles zoom
+    if has_flag(args, "Z") {
+        server.toggle_zoom(session_id, window_idx, pane_id)?;
+        return Ok(CommandResult::Ok);
+    }
+
+    let direction = if has_flag(args, "U") {
         Some(Direction::Up)
-    } else if has_flag(args, "-D") {
+    } else if has_flag(args, "D") {
         Some(Direction::Down)
-    } else if has_flag(args, "-L") {
+    } else if has_flag(args, "L") {
         Some(Direction::Left)
-    } else if has_flag(args, "-R") {
+    } else if has_flag(args, "R") {
         Some(Direction::Right)
     } else {
         None

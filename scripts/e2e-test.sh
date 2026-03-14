@@ -41,6 +41,13 @@ test_session_starts() {
     harness_assert '0:.*\*' "Status bar should show window 0 as active (*)"
 }
 
+test_status_bar_program_name() {
+    harness_start
+    # The status bar should show the shell name (zsh/bash/fish/sh) in the window entry
+    sleep 1
+    harness_assert '0:(zsh|bash|fish|sh)\*' "Status bar should show shell program name (e.g. 0:zsh*)"
+}
+
 test_shell_command() {
     harness_start
     harness_send "echo RMUX_TEST_OUTPUT" Enter
@@ -222,7 +229,7 @@ test_reattach_after_detach() {
     rmux_tmpdir="$(dirname "$(dirname "${HARNESS_RMUX_SOCKET}")")"
 
     # Reattach by running rmux again inside the tmux pane
-    harness_send "TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux" Enter
+    harness_send "unset TMUX; TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux" Enter
     harness_wait_for '\[0\]' 10
     harness_assert '\[0\]' "Status bar should reappear after reattach"
 }
@@ -281,6 +288,43 @@ test_last_pane_exit_closes_window() {
     harness_assert_not '1:' "Window 1 should be gone after its last pane exits"
 }
 
+# --- Process cleanup ----------------------------------------------------------
+
+test_child_process_cleanup() {
+    harness_start
+    # Get the PID of the shell running inside rmux's pane.
+    # Use tmux send-keys with split tokens so $$ expands in the inner shell, not here.
+    tmux send-keys -t "${HARNESS_TMUX_SESSION}" "echo MYPID=" '$' '$' Enter
+    harness_wait_for 'MYPID=' 5
+    local capture
+    capture=$(harness_capture)
+    local child_pid
+    child_pid=$(echo "${capture}" | grep 'MYPID=' | grep -v echo | tail -1 | sed 's/.*MYPID=//')
+
+    if [[ -z "${child_pid}" || "${child_pid}" == "0" ]]; then
+        _harness_fail "Could not capture child PID"
+        return 1
+    fi
+
+    # Verify the child process is running
+    if ! kill -0 "${child_pid}" 2>/dev/null; then
+        _harness_fail "Child process ${child_pid} should be running"
+        return 1
+    fi
+
+    # Kill rmux via kill-server (graceful shutdown)
+    harness_rmux kill-server 2>/dev/null || true
+    sleep 2
+
+    # The child process should be gone (SIGHUP'd by rmux on shutdown)
+    if kill -0 "${child_pid}" 2>/dev/null; then
+        # Clean up the orphan so it doesn't leak PTYs
+        kill -9 "${child_pid}" 2>/dev/null || true
+        _harness_fail "Child process ${child_pid} should have been killed on rmux shutdown"
+        return 1
+    fi
+}
+
 # --- Status bar & auto-rename -------------------------------------------------
 
 test_status_bar_strftime() {
@@ -300,12 +344,12 @@ test_automatic_rename() {
     sleep 0.5
     # Run cat (blocks forever), window name should change to "cat"
     harness_send "cat" Enter
-    sleep 1
+    harness_wait_for '0:cat' 5
     harness_assert '0:cat' "Window name should auto-rename to 'cat'"
 
     # Kill cat, name should revert to shell
     harness_send "" "C-c"
-    sleep 1
+    sleep 2
     harness_assert_not '0:cat' "Window name should revert after cat exits"
 }
 
@@ -403,7 +447,7 @@ WRAPPER
     HARNESS_RMUX_SOCKET="${rmux_parent}/rmux-${uid}/${HARNESS_SOCKET_NAME}"
 
     tmux new-session -d -s "${HARNESS_TMUX_SESSION}" -x 120 -y 40 \
-        "TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux-with-config; echo '[rmux exited]'; sleep 86400"
+        "unset TMUX; TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux-with-config; echo '[rmux exited]'; sleep 86400"
     tmux set-option -t "${HARNESS_TMUX_SESSION}" prefix C-q
     tmux unbind-key C-b 2>/dev/null || true
     HARNESS_STARTED=1
@@ -548,18 +592,18 @@ test_choose_tree_navigate_and_select() {
     harness_start
     # Create a second session
     harness_rmux new-session -d -s "target"
-    sleep 0.3
+    sleep 0.5
 
     # Open choose-tree
     harness_prefix s
     harness_wait_for 'choose-tree' 5
 
-    # Collapse all sessions first (Left on each), then navigate to "target"
-    # Simpler: use Left to collapse session 0, then j lands on "target"
-    harness_send Left
-    sleep 0.2
-    harness_send j
-    sleep 0.2
+    # Use filter (/) to search for "target" — avoids depending on session order
+    harness_send /
+    sleep 0.3
+    harness_send "target" Enter
+    sleep 0.3
+    # Select the filtered result
     harness_send Enter
     sleep 0.5
 
@@ -852,6 +896,7 @@ harness_build
 
 # Smoke tests
 run_test test_session_starts
+run_test test_status_bar_program_name
 run_test test_shell_command
 run_test test_new_window
 run_test test_window_switching
@@ -910,6 +955,9 @@ run_test test_source_file_format_flag
 run_test test_source_file_quiet_flag
 run_test test_source_file_current_file
 run_test test_source_file_dirname_current_file
+
+# Process cleanup
+run_test test_child_process_cleanup
 
 # Overlay tests
 run_test test_choose_tree_open_close

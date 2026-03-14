@@ -54,14 +54,16 @@ pub fn parse_key(data: &[u8]) -> Option<(KeyCode, usize)> {
         // ESC sequences
         0x1B => parse_escape(data),
         // C0 controls
-        0x00 => Some((keyc_build(b' '.into(), KeyModifiers::CTRL), 1)),
+        0x00 => Some((keyc_build(KEYC_SPACE, KeyModifiers::CTRL), 1)),
         0x01..=0x1A => {
             let base = (data[0] - 1 + b'a') as u64;
             Some((keyc_build(base, KeyModifiers::CTRL), 1))
         }
         0x7F => Some((KEYC_BACKSPACE, 1)),
+        // Space gets its own constant to match string_to_key("Space")
+        0x20 => Some((KEYC_SPACE, 1)),
         // Plain ASCII
-        0x20..=0x7E => Some((data[0] as KeyCode, 1)),
+        0x21..=0x7E => Some((data[0] as KeyCode, 1)),
         // UTF-8 start bytes
         0xC0..=0xDF => parse_utf8(data, 2),
         0xE0..=0xEF => parse_utf8(data, 3),
@@ -78,8 +80,10 @@ fn parse_escape(data: &[u8]) -> Option<(KeyCode, usize)> {
     match data[1] {
         b'[' => parse_csi_key(&data[2..]).map(|(k, n)| (k, n + 2)),
         b'O' => parse_ss3_key(&data[2..]).map(|(k, n)| (k, n + 2)),
+        // Alt+Space
+        0x20 => Some((keyc_build(KEYC_SPACE, KeyModifiers::META), 2)),
         // Alt+key
-        0x20..=0x7E => Some((keyc_build(data[1] as KeyCode, KeyModifiers::META), 2)),
+        0x21..=0x7E => Some((keyc_build(data[1] as KeyCode, KeyModifiers::META), 2)),
         _ => Some((KEYC_ESCAPE, 1)),
     }
 }
@@ -513,7 +517,8 @@ mod tests {
             #[test]
             fn ascii_roundtrip(ch in 0x20u8..0x7f) {
                 let result = parse_key(&[ch]).unwrap();
-                prop_assert_eq!(result.0, ch as KeyCode);
+                let expected = if ch == 0x20 { KEYC_SPACE } else { ch as KeyCode };
+                prop_assert_eq!(result.0, expected);
                 prop_assert_eq!(result.1, 1);
             }
 

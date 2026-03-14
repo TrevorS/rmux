@@ -139,6 +139,8 @@ pub struct Server {
     /// Client commands deferred until config loading completes.
     /// Session-creating commands (new-session) must wait so they inherit config options.
     deferred_commands: Vec<(u64, Vec<String>)>,
+    /// Hidden variables from `%hidden` directives, propagated across nested source-file calls.
+    config_hidden_vars: HashMap<String, String>,
 }
 
 impl Server {
@@ -173,6 +175,7 @@ impl Server {
             pending_shell_job: None,
             shim_dir: None,
             deferred_commands: Vec::new(),
+            config_hidden_vars: HashMap::new(),
         }
     }
 
@@ -263,6 +266,13 @@ impl Server {
         );
         redraw_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Install signal handlers so we can clean up children on SIGHUP/SIGTERM.
+        let mut sig_hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .map_err(ServerError::Bind)?;
+        let mut sig_term =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(ServerError::Bind)?;
+
         while !self.shutdown {
             tokio::select! {
                 // Accept new client connections
@@ -337,10 +347,23 @@ impl Server {
                     self.flush_control_notifications().await;
                     self.render_clients().await;
                 }
+
+                // Graceful shutdown on SIGHUP (e.g., tmux killing our PTY)
+                _ = sig_hup.recv() => {
+                    tracing::info!("received SIGHUP, shutting down");
+                    self.shutdown = true;
+                }
+
+                // Graceful shutdown on SIGTERM
+                _ = sig_term.recv() => {
+                    tracing::info!("received SIGTERM, shutting down");
+                    self.shutdown = true;
+                }
             }
         }
 
-        // Clean up
+        // Clean up: kill all child processes before exiting
+        self.kill_all_children();
         let _ = std::fs::remove_file(&self.socket_path);
         if let Some(shim) = &self.shim_dir {
             let _ = std::fs::remove_dir_all(shim);
@@ -394,16 +417,7 @@ impl Server {
         match crate::command::execute_command(&argv, self) {
             Ok(CommandResult::RunShell(cmd)) => {
                 tracing::debug!("config run-shell: {cmd}");
-                // Expand ~ in command (tmux does this via format_single)
-                let expanded = if cmd.starts_with('~') {
-                    if let Ok(home) = std::env::var("HOME") {
-                        cmd.replacen('~', &home, 1)
-                    } else {
-                        cmd
-                    }
-                } else {
-                    cmd
-                };
+                let expanded = crate::config::expand_tilde(&cmd);
                 match self.shell_command(&expanded).spawn() {
                     Ok(child) => {
                         self.pending_shell_job = Some(child);
@@ -514,6 +528,7 @@ impl Server {
         self.log_message(format!("client {client_id} connected"));
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn handle_pty_output(&mut self, pane_id: u32, data: &[u8]) {
         if data.is_empty() {
             // EOF sentinel: the pane's process exited.
@@ -530,6 +545,7 @@ impl Server {
         let mut replies: Option<(i32, Vec<u8>)> = None;
         let mut alert_messages: Vec<(u32, String)> = Vec::new();
         let mut pane_session_id: Option<u32> = None;
+
         for session in self.sessions.iter_mut() {
             for (&widx, window) in &mut session.windows {
                 if let Some(pane) = window.panes.get_mut(&pane_id) {
@@ -540,17 +556,9 @@ impl Server {
                     if !reply_data.is_empty() && pane.pty_fd >= 0 {
                         replies = Some((pane.pty_fd, reply_data));
                     }
-                    // Automatic window rename: if active pane title changed, update window name
-                    if pane.id == window.active_pane
-                        && !pane.screen.title.is_empty()
-                        && pane.screen.title != window.name
-                    {
-                        let auto_rename =
-                            session.options.get_flag("automatic-rename").unwrap_or(true);
-                        if auto_rename {
-                            window.name.clone_from(&pane.screen.title);
-                        }
-                    }
+                    // Note: automatic-rename is handled by update_window_names() which
+                    // polls the foreground process name periodically (matching tmux).
+                    // OSC 0/2 title changes only affect pane_title (#T), not window_name (#W).
                     let is_active_window = widx == session.active_window;
                     // Bell detection: set flag on non-active windows when monitor-bell is on
                     let has_bell = notifications
@@ -2236,8 +2244,9 @@ impl Server {
 
     /// Poll PTY foreground processes and update window names for auto-rename.
     fn update_window_names(&mut self) {
+        let global_auto = self.options.get_flag("automatic-rename").unwrap_or(true);
         for session in self.sessions.iter_mut() {
-            let auto_rename = session.options.get_flag("automatic-rename").unwrap_or(true);
+            let auto_rename = session.options.get_flag("automatic-rename").unwrap_or(global_auto);
             if !auto_rename {
                 continue;
             }
@@ -2338,12 +2347,48 @@ impl Server {
                 if w.has_activity {
                     flags |= render::WindowFlags::ACTIVITY;
                 }
-                render::WindowInfo { idx, name: w.name.clone(), flags }
+                // Gather active pane info for format expansion
+                let active_pane = w.panes.get(&w.active_pane);
+                let pane_current_command = active_pane
+                    .map(|p| {
+                        if p.pty_fd >= 0 {
+                            pty::foreground_process_name(p.pty_fd).unwrap_or_else(|| w.name.clone())
+                        } else {
+                            w.name.clone()
+                        }
+                    })
+                    .unwrap_or_default();
+                let pane_current_path = active_pane
+                    .and_then(|p| p.screen.path.clone())
+                    .unwrap_or_else(|| session.cwd.clone());
+                let pane_title = active_pane.map(|p| p.screen.title.clone()).unwrap_or_default();
+                let pane_id = active_pane.map_or(0, |p| p.id);
+                render::WindowInfo {
+                    idx,
+                    name: w.name.clone(),
+                    flags,
+                    pane_current_command,
+                    pane_current_path,
+                    pane_title,
+                    pane_id,
+                    pane_count: w.pane_count(),
+                    window_id: w.id,
+                }
             })
             .collect();
         window_list.sort_by_key(|w| w.idx);
 
-        let status_config = Self::build_status_config(session, window);
+        let status_config = self.build_status_config(session, window);
+
+        // Collect @-prefixed user options for format expansion in the status line.
+        // Merge server-level and session-level options (session overrides server).
+        let user_options: std::collections::HashMap<String, String> = self
+            .options
+            .local_iter()
+            .chain(session.options.local_iter())
+            .filter(|(k, _)| k.starts_with('@'))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
 
         render::render_window(
             window,
@@ -2354,71 +2399,66 @@ impl Server {
             prompt,
             Some(&status_config),
             overlay,
+            Some(&user_options),
         )
     }
 
-    /// Build `StatusConfig` from session and window options.
+    /// Build `StatusConfig` from session and window options, falling back to server options.
     fn build_status_config(
+        &self,
         session: &crate::session::Session,
-
         window: &crate::window::Window,
     ) -> render::StatusConfig {
-        let status_style = rmux_core::style::parse_style(
-            session.options.get_string("status-style").unwrap_or("bg=green,fg=black"),
-        );
+        // Helper: check session options first, then server (global) options.
+        let opt_str = |key: &str, default: &str| -> String {
+            session
+                .options
+                .get_string(key)
+                .or_else(|_| self.options.get_string(key))
+                .unwrap_or(default)
+                .to_string()
+        };
+        let opt_flag = |key: &str, default: bool| -> bool {
+            session.options.get_flag(key).or_else(|_| self.options.get_flag(key)).unwrap_or(default)
+        };
+        let opt_num = |key: &str, default: i64| -> i64 {
+            session
+                .options
+                .get_number(key)
+                .or_else(|_| self.options.get_number(key))
+                .unwrap_or(default)
+        };
+        let opt_style = |key: &str, default: &str| -> rmux_core::style::Style {
+            let s = session
+                .options
+                .get_string(key)
+                .or_else(|_| self.options.get_string(key))
+                .unwrap_or(default);
+            rmux_core::style::parse_style(s)
+        };
+
         render::StatusConfig {
-            left: session
-                .options
-                .get_string("status-left")
-                .unwrap_or("[#{session_name}] ")
-                .to_string(),
-            right: session.options.get_string("status-right").unwrap_or("").to_string(),
-            window_status_format: session
-                .options
-                .get_string("window-status-format")
-                .unwrap_or("#I:#W#F")
-                .to_string(),
-            window_status_current_format: session
-                .options
-                .get_string("window-status-current-format")
-                .unwrap_or("#I:#W#F")
-                .to_string(),
-            status_style,
+            left: opt_str("status-left", "[#{session_name}] "),
+            right: opt_str("status-right", ""),
+            window_status_format: opt_str("window-status-format", "#I:#W#F"),
+            window_status_current_format: opt_str("window-status-current-format", "#I:#W#F"),
+            status_style: opt_style("status-style", "bg=green,fg=black"),
             pane_border_style: rmux_core::style::parse_style(
                 window.options.get_string("pane-border-style").unwrap_or("default"),
             ),
             pane_active_border_style: rmux_core::style::parse_style(
                 window.options.get_string("pane-active-border-style").unwrap_or("fg=green"),
             ),
-            status_position_top: session.options.get_string("status-position").unwrap_or("bottom")
-                == "top",
-            status_enabled: session.options.get_flag("status").unwrap_or(true),
-            status_justify: session
-                .options
-                .get_string("status-justify")
-                .unwrap_or("left")
-                .to_string(),
-            status_left_length: session.options.get_number("status-left-length").unwrap_or(10)
-                as usize,
-            status_right_length: session.options.get_number("status-right-length").unwrap_or(40)
-                as usize,
-            window_status_separator: session
-                .options
-                .get_string("window-status-separator")
-                .unwrap_or(" ")
-                .to_string(),
-            window_status_style: rmux_core::style::parse_style(
-                session.options.get_string("window-status-style").unwrap_or("default"),
-            ),
-            window_status_current_style: rmux_core::style::parse_style(
-                session.options.get_string("window-status-current-style").unwrap_or("default"),
-            ),
-            set_titles: session.options.get_flag("set-titles").unwrap_or(false),
-            set_titles_string: session
-                .options
-                .get_string("set-titles-string")
-                .unwrap_or("#S:#I:#W")
-                .to_string(),
+            status_position_top: opt_str("status-position", "bottom") == "top",
+            status_enabled: opt_flag("status", true),
+            status_justify: opt_str("status-justify", "left"),
+            status_left_length: opt_num("status-left-length", 10) as usize,
+            status_right_length: opt_num("status-right-length", 40) as usize,
+            window_status_separator: opt_str("window-status-separator", " "),
+            window_status_style: opt_style("window-status-style", "default"),
+            window_status_current_style: opt_style("window-status-current-style", "default"),
+            set_titles: opt_flag("set-titles", false),
+            set_titles_string: opt_str("set-titles-string", "#S:#I:#W"),
             pane_border_status: window
                 .options
                 .get_string("pane-border-status")
@@ -2615,7 +2655,43 @@ impl Server {
         if let Some(task) = self.pty_tasks.remove(&pane_id) {
             task.abort();
         }
+        // Kill the child process (SIGHUP, like tmux does on pane close).
+        // Must happen before dropping the OwnedFd so the signal arrives
+        // while the process still has a controlling terminal.
+        let pid = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.values())
+            .flat_map(|w| w.panes.values())
+            .find(|p| p.id == pane_id)
+            .map(|p| p.pid);
+        if let Some(pid) = pid.filter(|&p| p > 0) {
+            if let Ok(pid_i32) = i32::try_from(pid) {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid_i32),
+                    nix::sys::signal::Signal::SIGHUP,
+                );
+            }
+        }
         self.pty_fds.remove(&pane_id);
+    }
+
+    /// Send SIGHUP to all child processes on server shutdown.
+    fn kill_all_children(&self) {
+        for session in self.sessions.iter() {
+            for window in session.windows.values() {
+                for pane in window.panes.values() {
+                    if pane.pid > 0 {
+                        if let Ok(pid_i32) = i32::try_from(pane.pid) {
+                            let _ = nix::sys::signal::kill(
+                                nix::unistd::Pid::from_raw(pid_i32),
+                                nix::sys::signal::Signal::SIGHUP,
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Set pane-related format variables on the context.
@@ -2632,7 +2708,12 @@ impl Server {
         ctx.set("pane_height", pane.screen.height().to_string());
         ctx.set("pane_active", "1");
         ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
-        ctx.set("pane_current_command", window_name);
+        let current_cmd = if pane.pty_fd >= 0 {
+            pty::foreground_process_name(pane.pty_fd).unwrap_or_else(|| window_name.to_string())
+        } else {
+            window_name.to_string()
+        };
+        ctx.set("pane_current_command", current_cmd);
         let path = pane.screen.path.as_deref().unwrap_or(session_cwd);
         ctx.set("pane_current_path", path);
         ctx.set("pane_pid", pane.pid.to_string());
@@ -2685,10 +2766,7 @@ async fn pty_read_task(raw_fd: i32, pane_id: u32, tx: mpsc::Sender<(u32, Vec<u8>
         };
 
         match guard.try_io(|inner: &AsyncFd<RawFdRef>| {
-            let raw = inner.as_raw_fd();
-            // SAFETY: fd is valid (kept alive by pty_fds HashMap), buf is valid.
-            let n = unsafe { nix::libc::read(raw, buf.as_mut_ptr().cast(), buf.len()) };
-            if n < 0 { Err(std::io::Error::last_os_error()) } else { Ok(n as usize) }
+            nix::unistd::read(inner.as_fd(), &mut buf).map_err(std::io::Error::from)
         }) {
             Ok(Ok(0)) => break, // EOF - process exited
             Ok(Ok(n)) => {
@@ -3102,6 +3180,8 @@ impl CommandServer for Server {
 
             window.panes.insert(new_pane_id, new_pane);
             window.active_pane = new_pane_id;
+            // Splitting cancels zoom (tmux behavior)
+            window.zoomed_pane = None;
 
             (new_pane_id, new_sx, new_sy, window.sy)
         };
@@ -3158,6 +3238,11 @@ impl CommandServer for Server {
         let window = session.windows.get_mut(&window_idx).unwrap();
 
         window.panes.remove(&pane_id);
+
+        // Clear zoom if the zoomed pane was killed
+        if window.zoomed_pane == Some(pane_id) {
+            window.zoomed_pane = None;
+        }
 
         // Update active pane if needed
         if window.active_pane == pane_id {
@@ -3337,8 +3422,11 @@ impl CommandServer for Server {
         self.message_log.iter().cloned().collect()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn build_format_context(&self) -> crate::format::FormatContext {
         let mut ctx = crate::format::FormatContext::new();
+        // version — rmux version string (tracks tmux for plugin compat)
+        ctx.set("version", env!("CARGO_PKG_VERSION"));
         if let Some(session_id) = self.client_session_id() {
             if let Some(session) = self.sessions.find_by_id(session_id) {
                 ctx.set("session_name", &*session.name);
@@ -3372,11 +3460,23 @@ impl CommandServer for Server {
                         wflags |= render::WindowFlags::LAST;
                     }
                     ctx.set("window_flags", wflags.to_flag_string());
+                    // window_last_flag
+                    ctx.set(
+                        "window_last_flag",
+                        if session.last_window == Some(widx) { "1" } else { "0" },
+                    );
                     if let Some(window) = session.windows.get(&widx) {
                         ctx.set("window_name", &*window.name);
                         ctx.set("window_id", format!("@{}", window.id));
                         ctx.set("window_panes", window.pane_count().to_string());
                         ctx.set("window_active", "1");
+                        ctx.set(
+                            "window_zoomed_flag",
+                            if window.zoomed_pane.is_some() { "1" } else { "0" },
+                        );
+                        // pane_synchronized
+                        let sync = window.options.get_flag("synchronize-panes").unwrap_or(false);
+                        ctx.set("pane_synchronized", if sync { "1" } else { "0" });
                         // Window layout name
                         if let Some(layout) = &window.layout {
                             let layout_name = match layout.cell_type {
@@ -3397,6 +3497,7 @@ impl CommandServer for Server {
         let client_id = self.command_client;
         ctx.set("client_name", format!("client-{client_id}"));
         ctx.set("client_tty", "/dev/tty");
+        ctx.set("client_prefix", if self.keybindings.in_prefix() { "1" } else { "0" });
         if let Some(client) = self.clients.get(&client_id) {
             ctx.set("client_width", client.sx.to_string());
             ctx.set("client_height", client.sy.to_string());
@@ -3571,8 +3672,15 @@ impl CommandServer for Server {
     }
 
     fn set_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
-        let val = parse_option_value(value);
-        self.options.set(key, val);
+        self.options.set(key, parse_option_value_for_key(key, value));
+        // Update the prefix key in the keybindings when the option changes
+        if key == "prefix" || key == "prefix2" {
+            if let Some(keycode) = crate::keybind::string_to_key(value) {
+                if key == "prefix" {
+                    self.keybindings.set_prefix(keycode);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -3584,7 +3692,7 @@ impl CommandServer for Server {
     fn append_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
         let current = self.options.get(key).map(format_option_value).unwrap_or_default();
         let new_value = format!("{current}{value}");
-        self.options.set(key, parse_option_value(&new_value));
+        self.options.set(key, parse_option_value_for_key(key, &new_value));
         Ok(())
     }
 
@@ -3598,8 +3706,7 @@ impl CommandServer for Server {
             .sessions
             .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let val = parse_option_value(value);
-        session.options.set(key, val);
+        session.options.set(key, parse_option_value_for_key(key, value));
         Ok(())
     }
 
@@ -3624,7 +3731,7 @@ impl CommandServer for Server {
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let current = session.options.get(key).map(format_option_value).unwrap_or_default();
         let new_value = format!("{current}{value}");
-        session.options.set(key, parse_option_value(&new_value));
+        session.options.set(key, parse_option_value_for_key(key, &new_value));
         Ok(())
     }
 
@@ -3643,8 +3750,7 @@ impl CommandServer for Server {
             .windows
             .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
-        let val = parse_option_value(value);
-        window.options.set(key, val);
+        window.options.set(key, parse_option_value_for_key(key, value));
         Ok(())
     }
 
@@ -3683,7 +3789,7 @@ impl CommandServer for Server {
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         let current = window.options.get(key).map(format_option_value).unwrap_or_default();
         let new_value = format!("{current}{value}");
-        window.options.set(key, parse_option_value(&new_value));
+        window.options.set(key, parse_option_value_for_key(key, &new_value));
         Ok(())
     }
 
@@ -3785,6 +3891,10 @@ impl CommandServer for Server {
                 }
             }
         }
+        // Seed with persisted hidden vars from parent source-file calls
+        for (k, v) in &self.config_hidden_vars {
+            ctx.hidden_vars.insert(k.clone(), v.clone());
+        }
         ctx.set_format_expand(move |expr| {
             let mut fctx = crate::format::FormatContext::new();
             if !user_opts.is_empty() {
@@ -3794,6 +3904,14 @@ impl CommandServer for Server {
             crate::format::format_expand(expr, &fctx)
         });
         ctx
+    }
+
+    fn get_config_hidden_vars(&self) -> HashMap<String, String> {
+        self.config_hidden_vars.clone()
+    }
+
+    fn set_config_hidden_vars(&mut self, vars: HashMap<String, String>) {
+        self.config_hidden_vars = vars;
     }
 
     fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String> {
@@ -3953,6 +4071,34 @@ impl CommandServer for Server {
             }
         }
 
+        Ok(())
+    }
+
+    fn toggle_zoom(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+
+        if window.zoomed_pane == Some(pane_id) {
+            // Unzoom: restore normal layout
+            window.zoomed_pane = None;
+        } else {
+            // Zoom: set the zoomed pane
+            if !window.panes.contains_key(&pane_id) {
+                return Err(ServerError::Command(format!("pane not found: {pane_id}")));
+            }
+            window.zoomed_pane = Some(pane_id);
+        }
         Ok(())
     }
 
@@ -4841,6 +4987,16 @@ fn parse_option_value(value: &str) -> OptionValue {
                 OptionValue::String(value.to_string())
             }
         }
+    }
+}
+
+/// Parse an option value, skipping type coercion for @-prefixed user options.
+/// tmux only interprets types (Flag, Number) for built-in options.
+fn parse_option_value_for_key(key: &str, value: &str) -> OptionValue {
+    if key.starts_with('@') {
+        OptionValue::String(value.to_string())
+    } else {
+        parse_option_value(value)
     }
 }
 

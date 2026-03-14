@@ -8,6 +8,7 @@ use crate::window::Window;
 use rmux_core::layout::{LayoutCell, LayoutType};
 use rmux_core::style::{Attrs, Color, Style};
 use rmux_terminal::output::writer::TermWriter;
+use std::collections::HashMap;
 
 use bitflags::bitflags;
 
@@ -60,6 +61,18 @@ pub struct WindowInfo {
     pub idx: u32,
     pub name: String,
     pub flags: WindowFlags,
+    /// Foreground process name of the active pane (for `#{pane_current_command}`).
+    pub pane_current_command: String,
+    /// Current working directory of the active pane (for `#{pane_current_path}`).
+    pub pane_current_path: String,
+    /// Title of the active pane (for `#{pane_title}`).
+    pub pane_title: String,
+    /// Pane ID of the active pane (for `#{pane_id}`).
+    pub pane_id: u32,
+    /// Number of panes in the window (for `#{window_panes}`).
+    pub pane_count: usize,
+    /// Window ID (for `#{window_id}`).
+    pub window_id: u32,
 }
 
 /// Status line and border configuration from options.
@@ -100,7 +113,7 @@ pub struct StatusConfig {
 /// Render a window's contents to raw terminal output bytes.
 ///
 /// Returns the bytes that should be written to the client's terminal.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
 pub fn render_window(
     window: &Window,
     session_name: &str,
@@ -110,6 +123,7 @@ pub fn render_window(
     prompt: Option<&str>,
     status_config: Option<&StatusConfig>,
     overlay: Option<&crate::overlay::OverlayState>,
+    user_options: Option<&HashMap<String, String>>,
 ) -> Vec<u8> {
     let mut writer = TermWriter::new(sx as usize * sy as usize * 4);
     let show_status = status_config.is_none_or(|c| c.status_enabled);
@@ -118,7 +132,9 @@ pub fn render_window(
     let pane_y_offset = u32::from(status_top);
     let pane_area_height = if show_status { sy.saturating_sub(1) } else { sy };
 
-    // Set xterm window title if enabled
+    // Set xterm window title.
+    // If set-titles is on, use the configured format string.
+    // Otherwise use the active pane's title or the window name as fallback.
     if let Some(cfg) = status_config {
         if cfg.set_titles {
             let ctx = build_status_context(session_name, window, window_list);
@@ -126,6 +142,17 @@ pub fn render_window(
             writer.write_raw(b"\x1b]2;");
             writer.write_raw(title.as_bytes());
             writer.write_raw(b"\x1b\\");
+        } else {
+            let title = window
+                .active_pane()
+                .map(|p| &p.screen.title)
+                .filter(|t| !t.is_empty())
+                .map_or_else(|| window.name.as_str(), String::as_str);
+            if !title.is_empty() {
+                writer.write_raw(b"\x1b]2;");
+                writer.write_raw(title.as_bytes());
+                writer.write_raw(b"\x1b\\");
+            }
         }
     }
 
@@ -134,7 +161,14 @@ pub fn render_window(
     writer.reset_state();
     writer.write_raw(b"\x1b[0m");
 
-    if window.pane_count() <= 1 {
+    if let Some(zoomed_id) = window.zoomed_pane {
+        // Zoomed: render only the zoomed pane at full window size
+        if let Some(pane) = window.panes.get(&zoomed_id) {
+            render_pane_at(&mut writer, pane, 0, pane_y_offset, sx, pane_area_height);
+        } else {
+            writer.clear_screen();
+        }
+    } else if window.pane_count() <= 1 {
         // Single pane: render directly
         if let Some(pane) = window.active_pane() {
             render_pane_at(&mut writer, pane, 0, pane_y_offset, sx, pane_area_height);
@@ -159,6 +193,7 @@ pub fn render_window(
                 sx,
                 status_row,
                 status_config,
+                user_options,
             );
         }
     }
@@ -408,6 +443,7 @@ fn is_pane_in_subtree(cell: &LayoutCell, pane_id: u32) -> bool {
 }
 
 /// Render the status line at the bottom.
+#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
 fn render_status_line(
     writer: &mut TermWriter,
     session_name: &str,
@@ -416,6 +452,7 @@ fn render_status_line(
     width: u32,
     y: u32,
     status_config: Option<&StatusConfig>,
+    user_options: Option<&HashMap<String, String>>,
 ) {
     use std::fmt::Write;
 
@@ -428,7 +465,17 @@ fn render_status_line(
     writer.set_style(&status_style);
 
     // Build format context for variable expansion
-    let ctx = build_status_context(session_name, window, window_list);
+    let mut ctx = build_status_context(session_name, window, window_list);
+    // Shared option lookup for all format contexts (main + per-window)
+    let opts_map: Option<HashMap<String, String>> = user_options.cloned();
+    let make_lookup = || -> Option<crate::format::OptionLookup> {
+        opts_map
+            .clone()
+            .map(|m| Box::new(move |key: &str| m.get(key).cloned()) as crate::format::OptionLookup)
+    };
+    if let Some(lookup) = make_lookup() {
+        ctx.set_option_lookup(lookup);
+    }
 
     // Expand status-left (format variables + strftime)
     let left = if let Some(cfg) = status_config {
@@ -442,13 +489,8 @@ fn render_status_line(
     let mut center_parts: Vec<(String, bool)> = Vec::new();
     for winfo in window_list {
         let (text, is_active) = if let Some(cfg) = status_config {
-            let mut wctx = FormatContext::new();
-            wctx.set("window_index", winfo.idx.to_string());
-            wctx.set("window_name", &winfo.name);
-            wctx.set("window_flags", winfo.flags.to_flag_string());
+            let wctx = build_window_format_context(winfo, session_name, &make_lookup);
             let is_active = winfo.flags.contains(WindowFlags::ACTIVE);
-            wctx.set("window_active", if is_active { "1" } else { "0" });
-            wctx.set("session_name", session_name);
             let fmt = if is_active {
                 &cfg.window_status_current_format
             } else {
@@ -479,8 +521,6 @@ fn render_status_line(
             write!(suffix, " [Copy mode - {}/{hs}]", cm.oy).ok();
         }
     }
-    let center_len = center_joined.len() + suffix.len();
-
     // Expand status-right (format variables + strftime)
     let right = if let Some(cfg) = status_config {
         strftime_expand(&format_expand(&cfg.right, &ctx))
@@ -488,30 +528,34 @@ fn render_status_line(
         String::new()
     };
 
-    // Truncate left/right to configured max lengths
+    // Truncate left/right to configured max lengths (visible characters only)
     let (left, right) = if let Some(cfg) = status_config {
-        let l: String = left.chars().take(cfg.status_left_length).collect();
-        let r: String = right.chars().take(cfg.status_right_length).collect();
-        (l, r)
+        (
+            truncate_styled(&left, cfg.status_left_length),
+            truncate_styled(&right, cfg.status_right_length),
+        )
     } else {
         (left, right)
     };
 
-    writer.write_raw(left.as_bytes());
+    write_styled_text(writer, &left, &status_style);
+    let left_vis = visible_len(&left);
+    let right_vis = visible_len(&right);
+    let center_vis = visible_len(&center_joined) + suffix.len();
     write_justified_center(
         writer,
         &center_parts,
         &suffix,
         separator,
         width as usize,
-        left.len(),
-        right.len(),
-        center_len,
+        left_vis,
+        right_vis,
+        center_vis,
         status_config,
         &status_style,
     );
     writer.set_style(&status_style);
-    writer.write_raw(right.as_bytes());
+    write_styled_text(writer, &right, &status_style);
     writer.set_style(&Style::DEFAULT);
 }
 
@@ -562,6 +606,100 @@ fn write_padding(writer: &mut TermWriter, n: usize) {
     }
 }
 
+/// Write format-expanded text, interpreting `#[style]` blocks as ANSI style
+/// changes and writing everything else as literal text.
+///
+/// After all text is written, the style is restored to `base_style`.
+fn write_styled_text(writer: &mut TermWriter, text: &str, base_style: &Style) {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == b'#' && i + 1 < len && bytes[i + 1] == b'[' {
+            // Parse #[...] style directive
+            let start = i + 2;
+            if let Some(end_offset) = text[start..].find(']') {
+                let end = start + end_offset;
+                let style_str = &text[start..end];
+                if style_str == "default" {
+                    writer.set_style(base_style);
+                } else {
+                    let style = rmux_core::style::parse_style(style_str);
+                    writer.set_style(&style);
+                }
+                i = end + 1;
+            } else {
+                writer.write_raw(&bytes[i..=i]);
+                i += 1;
+            }
+        } else {
+            // Find the next `#[` or end of string
+            let next = text[i..].find("#[").map_or(len, |p| i + p);
+            writer.write_raw(&bytes[i..next]);
+            i = next;
+        }
+    }
+}
+
+/// Calculate the visible length of text after stripping `#[...]` style directives.
+fn visible_len(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut count = 0;
+
+    while i < len {
+        if bytes[i] == b'#' && i + 1 < len && bytes[i + 1] == b'[' {
+            let start = i + 2;
+            if let Some(end_offset) = text[start..].find(']') {
+                i = start + end_offset + 1;
+            } else {
+                count += 1;
+                i += 1;
+            }
+        } else {
+            // Count UTF-8 characters, not bytes
+            let b = bytes[i];
+            if !(0x80..0xC0).contains(&b) {
+                count += 1;
+            }
+            i += 1;
+        }
+    }
+    count
+}
+
+/// Truncate a styled string (containing `#[...]` blocks) to at most `max` visible characters.
+/// Style directives are preserved in full; only visible text is counted.
+fn truncate_styled(text: &str, max: usize) -> String {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut vis = 0;
+
+    while i < len && vis < max {
+        if bytes[i] == b'#' && i + 1 < len && bytes[i + 1] == b'[' {
+            // Skip style block entirely (doesn't count as visible)
+            let start = i + 2;
+            if let Some(end_offset) = text[start..].find(']') {
+                i = start + end_offset + 1;
+            } else {
+                vis += 1;
+                i += 1;
+            }
+        } else {
+            let b = bytes[i];
+            // Count UTF-8 lead bytes as visible characters
+            if !(0x80..0xC0).contains(&b) {
+                vis += 1;
+            }
+            i += 1;
+        }
+    }
+    text[..i].to_string()
+}
+
 /// Write window entries to the status line with per-entry styles.
 fn write_window_entries(
     writer: &mut TermWriter,
@@ -585,11 +723,36 @@ fn write_window_entries(
                 writer.set_style(entry_style);
             }
         }
-        writer.write_raw(text.as_bytes());
+        write_styled_text(writer, text, status_style);
         if status_config.is_some() {
             writer.set_style(status_style);
         }
     }
+}
+
+/// Build a `FormatContext` for a single window entry in the status line.
+fn build_window_format_context(
+    winfo: &WindowInfo,
+    session_name: &str,
+    make_lookup: &dyn Fn() -> Option<crate::format::OptionLookup>,
+) -> FormatContext {
+    let mut wctx = FormatContext::new();
+    if let Some(lookup) = make_lookup() {
+        wctx.set_option_lookup(lookup);
+    }
+    wctx.set("window_index", winfo.idx.to_string());
+    wctx.set("window_name", &winfo.name);
+    wctx.set("window_flags", winfo.flags.to_flag_string());
+    wctx.set("window_active", if winfo.flags.contains(WindowFlags::ACTIVE) { "1" } else { "0" });
+    wctx.set("session_name", session_name);
+    wctx.set("window_id", format!("@{}", winfo.window_id));
+    wctx.set("window_panes", winfo.pane_count.to_string());
+    wctx.set("pane_current_command", &winfo.pane_current_command);
+    wctx.set("pane_current_path", &winfo.pane_current_path);
+    wctx.set("pane_title", &winfo.pane_title);
+    wctx.set("pane_id", format!("%{}", winfo.pane_id));
+    wctx.set("pane_index", winfo.pane_id.to_string());
+    wctx
 }
 
 /// Build a `FormatContext` for status line expansion.
@@ -607,7 +770,11 @@ fn build_status_context(
         ctx.set("window_index", active.idx.to_string());
     }
 
-    // Pane info
+    // Pane info from the active window's WindowInfo (has pre-resolved foreground process)
+    if let Some(active_winfo) = window_list.iter().find(|w| w.flags.contains(WindowFlags::ACTIVE)) {
+        ctx.set("pane_current_command", &active_winfo.pane_current_command);
+        ctx.set("pane_current_path", &active_winfo.pane_current_path);
+    }
     if let Some(pane) = window.active_pane() {
         ctx.set("pane_index", pane.id.to_string());
         ctx.set("pane_id", format!("%{}", pane.id));
@@ -924,7 +1091,12 @@ mod tests {
     use rmux_core::layout::layout_even_horizontal;
 
     fn single_window_list(idx: u32, name: &str) -> Vec<WindowInfo> {
-        vec![WindowInfo { idx, name: name.to_string(), flags: WindowFlags::ACTIVE }]
+        vec![WindowInfo {
+            idx,
+            name: name.to_string(),
+            flags: WindowFlags::ACTIVE,
+            ..Default::default()
+        }]
     }
 
     #[test]
@@ -936,7 +1108,7 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None, None);
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, None, None);
         assert!(!output.is_empty());
     }
 
@@ -961,7 +1133,7 @@ mod tests {
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 24, &wl, None, None, None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, None, None, None);
         // Should contain the vertical border character (│ = 0xe2 0x94 0x82 in UTF-8)
         assert!(output.windows(3).any(|w| w == [0xe2, 0x94, 0x82]));
     }
@@ -975,7 +1147,7 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "test");
-        let output = render_window(&window, "main", 80, 24, &wl, None, None, None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, None, None, None);
         // Should contain "test" (the window name) in the status line
         assert!(output.windows(4).any(|w| w == b"test"));
     }
@@ -984,7 +1156,7 @@ mod tests {
     fn render_empty_window() {
         let window = Window::new("empty".into(), 80, 24);
         let wl = single_window_list(0, "empty");
-        let output = render_window(&window, "sess", 80, 25, &wl, None, None, None);
+        let output = render_window(&window, "sess", 80, 25, &wl, None, None, None, None);
         // Even with no panes, the status line should produce output
         assert!(!output.is_empty());
     }
@@ -1008,7 +1180,7 @@ mod tests {
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
         let wl = single_window_list(0, "multi");
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None, None);
         assert!(output.windows(5).any(|w| w == b"Hello"));
         assert!(output.windows(5).any(|w| w == b"World"));
     }
@@ -1023,7 +1195,7 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = single_window_list(0, "cp");
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None, None);
         assert!(output.windows(9).any(|w| w == b"Copy mode"));
     }
 
@@ -1044,7 +1216,7 @@ mod tests {
         window.layout = Some(layout_even_horizontal(80, 23, &[pid1, pid2]));
 
         let wl = single_window_list(0, "cnt");
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None, None);
         assert!(output.windows(7).any(|w| w == b"2 panes"));
     }
 
@@ -1057,11 +1229,26 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = vec![
-            WindowInfo { idx: 0, name: "bash".to_string(), flags: WindowFlags::ACTIVE },
-            WindowInfo { idx: 1, name: "vim".to_string(), flags: WindowFlags::LAST },
-            WindowInfo { idx: 2, name: "logs".to_string(), flags: WindowFlags::empty() },
+            WindowInfo {
+                idx: 0,
+                name: "bash".to_string(),
+                flags: WindowFlags::ACTIVE,
+                ..Default::default()
+            },
+            WindowInfo {
+                idx: 1,
+                name: "vim".to_string(),
+                flags: WindowFlags::LAST,
+                ..Default::default()
+            },
+            WindowInfo {
+                idx: 2,
+                name: "logs".to_string(),
+                flags: WindowFlags::empty(),
+                ..Default::default()
+            },
         ];
-        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None);
+        let output = render_window(&window, "sess", 80, 24, &wl, None, None, None, None);
         // Should contain all window names
         assert!(output.windows(6).any(|w| w == b"0:bash"));
         assert!(output.windows(5).any(|w| w == b"1:vim"));
@@ -1107,7 +1294,7 @@ mod tests {
             pane_border_status: "off".to_string(),
             pane_border_format: "#{pane_index}".to_string(),
         };
-        let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg), None);
+        let output = render_window(&window, "dev", 80, 24, &wl, None, Some(&cfg), None, None);
         // Status line should contain expanded session name
         assert!(output.windows(5).any(|w| w == b"[dev]"));
         // And the right side
@@ -1122,7 +1309,13 @@ mod tests {
         window.active_pane = pid;
         window.panes.insert(pid, pane);
 
-        let wl = vec![WindowInfo { idx: 3, name: "vim".to_string(), flags: WindowFlags::ACTIVE }];
+        let wl = vec![WindowInfo {
+            idx: 3,
+            name: "vim".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_current_command: "vim".to_string(),
+            ..Default::default()
+        }];
         let ctx = build_status_context("work", &window, &wl);
         assert_eq!(ctx.get("session_name"), Some("work"));
         assert_eq!(ctx.get("window_name"), Some("vim"));
@@ -1139,8 +1332,20 @@ mod tests {
         window.panes.insert(pid, pane);
 
         let wl = vec![
-            WindowInfo { idx: 0, name: "bash".to_string(), flags: WindowFlags::ACTIVE },
-            WindowInfo { idx: 1, name: "vim".to_string(), flags: WindowFlags::empty() },
+            WindowInfo {
+                idx: 0,
+                name: "bash".to_string(),
+                flags: WindowFlags::ACTIVE,
+                pane_current_command: "bash".to_string(),
+                ..Default::default()
+            },
+            WindowInfo {
+                idx: 1,
+                name: "vim".to_string(),
+                flags: WindowFlags::empty(),
+                pane_current_command: "vim".to_string(),
+                ..Default::default()
+            },
         ];
         let cfg = StatusConfig {
             left: "[#S] ".to_string(),
@@ -1163,7 +1368,7 @@ mod tests {
             pane_border_status: "off".to_string(),
             pane_border_format: "#{pane_index}".to_string(),
         };
-        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None, None);
         // Active window uses current format
         assert!(output.windows(8).any(|w| w == b"[0]bash*"));
         // Inactive window uses normal format (no *)
@@ -1252,7 +1457,7 @@ mod tests {
 
         let cfg = test_status_config();
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None, None);
         // Should not contain pane index as a label
         // The output is raw terminal bytes; with pane_border_status=off, no label is rendered
         assert!(!output.is_empty());
@@ -1283,7 +1488,7 @@ mod tests {
         cfg.pane_border_status = "bottom".to_string();
         cfg.pane_border_format = "PANE#{pane_index}".to_string();
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None);
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None, None);
         // The label should contain the pane id rendered as "PANE<id>"
         let label = format!("PANE{pid1}");
         assert!(
@@ -1332,7 +1537,7 @@ mod tests {
         });
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay), None);
         // Title should be present
         assert!(output.windows(11).any(|w| w == b"choose-tree"));
         // Items should be present
@@ -1371,7 +1576,7 @@ mod tests {
         });
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay), None);
         // Menu title
         assert!(output.windows(6).any(|w| w == b"Window"));
         // Menu items
@@ -1428,7 +1633,7 @@ mod tests {
         });
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay), None);
         // Expanded indicator ▾ (U+25BE) for sess-0
         let expanded = "\u{25BE}".as_bytes();
         assert!(
@@ -1494,7 +1699,7 @@ mod tests {
         });
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay), None);
         // Header should show filter info
         assert!(output.windows(4).any(|w| w == b"/eta"), "header should show filter string");
         // Only "beta" matches the filter
@@ -1530,7 +1735,7 @@ mod tests {
         });
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay));
+        let output = render_window(&window, "main", 80, 25, &wl, None, None, Some(&overlay), None);
         // Header should show active filter input
         assert!(
             output.windows(10).any(|w| w == b"filter: ab"),
@@ -1572,12 +1777,225 @@ mod tests {
         });
 
         let wl = single_window_list(0, "0");
-        let output = render_window(&window, "main", 40, 7, &wl, None, None, Some(&overlay));
+        let output = render_window(&window, "main", 40, 7, &wl, None, None, Some(&overlay), None);
         // Items before scroll_offset (item-00, item-01, item-02) should NOT be visible
         assert!(!output.windows(7).any(|w| w == b"item-00"), "item-00 should be scrolled away");
         // Item at scroll_offset (item-03) SHOULD be visible
         assert!(output.windows(7).any(|w| w == b"item-03"), "item-03 should be visible");
         // Count indicator in header
         assert!(output.windows(5).any(|w| w == b"10/10"), "header should show total count");
+    }
+
+    // ============================================================
+    // Per-window format context (pane_current_command, etc.)
+    // ============================================================
+
+    #[test]
+    fn pane_current_command_in_window_status_format() {
+        let mut window = Window::new("bash".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "bash".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_current_command: "vim".to_string(),
+            ..Default::default()
+        }];
+        let mut cfg = test_status_config();
+        cfg.window_status_current_format = "#I:#{pane_current_command}#F".to_string();
+        let output = render_window(&window, "main", 80, 24, &wl, None, Some(&cfg), None, None);
+        // Should contain "0:vim*" — pane_current_command expanded, not window_name
+        assert!(
+            output.windows(6).any(|w| w == b"0:vim*"),
+            "status bar should show pane_current_command (vim), got: {:?}",
+            String::from_utf8_lossy(&output)
+        );
+    }
+
+    #[test]
+    fn pane_current_command_differs_from_window_name() {
+        let mut window = Window::new("mywin".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "mywin".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_current_command: "nvim".to_string(),
+            ..Default::default()
+        }];
+        let mut cfg = test_status_config();
+        // Format uses both: window_name and pane_current_command
+        cfg.window_status_current_format = "#W|#{pane_current_command}".to_string();
+        let output = render_window(&window, "s", 80, 24, &wl, None, Some(&cfg), None, None);
+        assert!(
+            output.windows(10).any(|w| w == b"mywin|nvim"),
+            "should show both window_name and pane_current_command"
+        );
+    }
+
+    #[test]
+    fn pane_current_path_in_window_status_format() {
+        let mut window = Window::new("zsh".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "zsh".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_current_command: "zsh".to_string(),
+            pane_current_path: "/home/user/projects".to_string(),
+            ..Default::default()
+        }];
+        let mut cfg = test_status_config();
+        cfg.window_status_current_format = "#{pane_current_path}".to_string();
+        let output = render_window(&window, "s", 80, 24, &wl, None, Some(&cfg), None, None);
+        assert!(
+            output.windows(19).any(|w| w == b"/home/user/projects"),
+            "should show pane_current_path in status"
+        );
+    }
+
+    #[test]
+    fn window_panes_count_in_format() {
+        let mut window = Window::new("zsh".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "zsh".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_count: 3,
+            ..Default::default()
+        }];
+        let mut cfg = test_status_config();
+        cfg.window_status_current_format = "#I:#W(#{window_panes})".to_string();
+        let output = render_window(&window, "s", 80, 24, &wl, None, Some(&cfg), None, None);
+        assert!(output.windows(8).any(|w| w == b"0:zsh(3)"), "should show pane count in status");
+    }
+
+    #[test]
+    fn multi_window_each_has_own_pane_command() {
+        let mut window = Window::new("bash".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![
+            WindowInfo {
+                idx: 0,
+                name: "bash".to_string(),
+                flags: WindowFlags::ACTIVE,
+                pane_current_command: "htop".to_string(),
+                ..Default::default()
+            },
+            WindowInfo {
+                idx: 1,
+                name: "code".to_string(),
+                flags: WindowFlags::empty(),
+                pane_current_command: "nvim".to_string(),
+                ..Default::default()
+            },
+        ];
+        let mut cfg = test_status_config();
+        cfg.window_status_format = "#I:#{pane_current_command}#F".to_string();
+        cfg.window_status_current_format = "#I:#{pane_current_command}#F".to_string();
+        let output = render_window(&window, "s", 80, 24, &wl, None, Some(&cfg), None, None);
+        assert!(
+            output.windows(7).any(|w| w == b"0:htop*"),
+            "active window should show its own pane_current_command"
+        );
+        assert!(
+            output.windows(6).any(|w| w == b"1:nvim"),
+            "inactive window should show its own pane_current_command"
+        );
+    }
+
+    #[test]
+    fn build_status_context_includes_pane_current_command() {
+        let mut window = Window::new("bash".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "bash".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_current_command: "python3".to_string(),
+            pane_current_path: "/tmp".to_string(),
+            ..Default::default()
+        }];
+        let ctx = build_status_context("work", &window, &wl);
+        assert_eq!(ctx.get("pane_current_command"), Some("python3"));
+        assert_eq!(ctx.get("pane_current_path"), Some("/tmp"));
+    }
+
+    #[test]
+    fn status_right_with_pane_current_command() {
+        let mut window = Window::new("zsh".into(), 80, 23);
+        let pane = Pane::new(80, 23, 0);
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "zsh".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_current_command: "cargo".to_string(),
+            ..Default::default()
+        }];
+        let mut cfg = test_status_config();
+        cfg.right = "#{pane_current_command}".to_string();
+        cfg.status_right_length = 40;
+        let output = render_window(&window, "s", 80, 24, &wl, None, Some(&cfg), None, None);
+        assert!(
+            output.windows(5).any(|w| w == b"cargo"),
+            "status-right should expand pane_current_command"
+        );
+    }
+
+    #[test]
+    fn pane_title_and_window_name_are_independent() {
+        // #T = pane_title, #W = window_name — they must expand independently
+        let mut window = Window::new("zsh".into(), 80, 23);
+        let mut pane = Pane::new(80, 23, 0);
+        pane.screen.title = "my-hostname".to_string();
+        let pid = pane.id;
+        window.active_pane = pid;
+        window.panes.insert(pid, pane);
+
+        let wl = vec![WindowInfo {
+            idx: 0,
+            name: "zsh".to_string(),
+            flags: WindowFlags::ACTIVE,
+            pane_title: "my-hostname".to_string(),
+            ..Default::default()
+        }];
+        // Use a format that shows both #W and #T
+        let mut cfg = test_status_config();
+        cfg.window_status_current_format = "#W|#T".to_string();
+        let output = render_window(&window, "s", 80, 24, &wl, None, Some(&cfg), None, None);
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            output_str.contains("zsh|my-hostname"),
+            "Expected 'zsh|my-hostname' in output, got: {output_str}"
+        );
     }
 }

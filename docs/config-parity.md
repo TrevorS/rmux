@@ -18,7 +18,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] Semicolon command separator (`;`)
 - [x] Escaped semicolons (`\;` in bind multi-commands) **[CONF]**
 - [x] Line continuation (backslash at end of line) **[CONF]**
-- [ ] Tilde expansion (`~` → `$HOME`, `~user` → home dir) **[CONF]**
+- [x] Tilde expansion (`~` → `$HOME`) **[CONF]**
 
 ### Conditional Directives
 - [x] `%if <expression>` — conditional block **[CONF]**
@@ -151,7 +151,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 
 ### Special Variables
 - [x] `current_file` — path of config file being sourced **[CONF]**
-- [ ] `version` — tmux/rmux version string **[CONF]**
+- [x] `version` — tmux/rmux version string **[CONF]**
 - [x] `host` / `host_short` — hostname
 - [ ] `pid` — server process ID
 
@@ -159,7 +159,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] `client_name`, `client_tty`, `client_session`
 - [x] `client_width`, `client_height`
 - [x] `client_activity`
-- [ ] `client_prefix` — whether prefix key is active **[CONF]**
+- [x] `client_prefix` — whether prefix key is active **[CONF]**
 - [ ] `client_control_mode`, `client_created`
 - [ ] `client_flags`, `client_key_table`
 - [ ] `client_pid`, `client_termname`, `client_utf8`
@@ -174,7 +174,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] `window_name`, `window_index`, `window_id`, `window_active`
 - [x] `window_flags`, `window_panes`, `window_layout`
 - [ ] `window_activity`, `window_activity_flag`, `window_bell_flag`
-- [ ] `window_last_flag`, `window_zoomed_flag` **[CONF]**
+- [x] `window_last_flag`, `window_zoomed_flag` **[CONF]**
 - [ ] `window_marked_flag`, `window_silence_flag`
 - [ ] `window_bigger`, `window_cell_height`, `window_cell_width`
 
@@ -183,7 +183,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] `pane_width`, `pane_height`, `pane_dead`
 - [x] `pane_current_command`, `pane_current_path`, `pane_pid`
 - [x] `pane_in_mode`, `pane_tty`, `pane_start_command`
-- [ ] `pane_synchronized` **[CONF]**
+- [x] `pane_synchronized` **[CONF]**
 - [ ] `pane_at_top`, `pane_at_bottom`, `pane_at_left`, `pane_at_right`
 
 ---
@@ -263,7 +263,7 @@ Heavy use of advanced features. Requires:
 - [x] `set -ug` — unset option
 - [x] `#{E:@option}` expanding user options (already implemented for known vars)
 - [x] `#{?condition,...}` with `#{@user_option}` references
-- [ ] `#{version}` variable (for `#{>=:#{version},3.4}`)
+- [x] `#{version}` variable (for `#{>=:#{version},3.4}`)
 
 ### Phase 5: status/session.conf (status module)
 Builds the `@catppuccin_status_session` format string. Requires:
@@ -271,7 +271,7 @@ Builds the `@catppuccin_status_session` format string. Requires:
 - [x] `${MODULE_NAME}` interpolation in option names
 - [x] `source -F "#{d:current_file}/../utils/..."` — relative path resolution
 - [x] `set -ogq` / `set -gF` / `set -agF` as above
-- [ ] `#{?client_prefix,...}` — client_prefix variable
+- [x] `#{?client_prefix,...}` — client_prefix variable
 
 ### Phase 6: User's tmux.conf (post-TPM lines)
 ```
@@ -309,15 +309,15 @@ Ordered by what unblocks the most functionality:
 13. ~~`#{d:path}` dirname modifier~~
 14. ~~Line continuation (backslash at end of line)~~
 
-### P3 — Format variables (unblocks catppuccin conditionals)
-15. `version` variable
-16. `client_prefix` variable
-17. `window_zoomed_flag`, `window_last_flag` etc.
-18. `pane_synchronized` variable
-19. Tilde expansion (`~` in paths)
+### P3 — Format variables (unblocks catppuccin conditionals) ✅ DONE
+15. ~~`version` variable~~
+16. ~~`client_prefix` variable~~
+17. ~~`window_zoomed_flag`, `window_last_flag` etc.~~
+18. ~~`pane_synchronized` variable~~
+19. ~~Tilde expansion (`~` in paths)~~
 
 ### P4 — Advanced format features
-20. `#{b:path}` basename modifier
+20. ~~`#{b:path}` basename modifier~~
 21. `#{q:expr}` shell quoting
 22. Multi-branch conditionals `#{?c1,v1,c2,v2,...,default}`
 23. `#{m:pattern,string}` matching

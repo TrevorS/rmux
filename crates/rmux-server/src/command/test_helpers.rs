@@ -44,6 +44,8 @@ pub struct MockCommandServer {
     pub prompt_history: Vec<String>,
     /// Global environment variables.
     pub global_environ: HashMap<String, String>,
+    /// Hidden vars from %hidden directives, propagated across nested source-file calls.
+    pub config_hidden_vars: HashMap<String, String>,
 }
 
 impl MockCommandServer {
@@ -65,6 +67,7 @@ impl MockCommandServer {
             hooks: crate::hooks::HookStore::new(),
             prompt_history: Vec::new(),
             global_environ: HashMap::new(),
+            config_hidden_vars: HashMap::new(),
         }
     }
 
@@ -170,6 +173,15 @@ fn parse_option_value(value: &str) -> OptionValue {
         "on" | "true" => OptionValue::Flag(true),
         "off" | "false" => OptionValue::Flag(false),
         _ => OptionValue::String(value.to_string()),
+    }
+}
+
+/// Parse an option value, skipping type coercion for @-prefixed user options.
+fn parse_option_value_for_key(key: &str, value: &str) -> OptionValue {
+    if key.starts_with('@') {
+        OptionValue::String(value.to_string())
+    } else {
+        parse_option_value(value)
     }
 }
 
@@ -423,6 +435,7 @@ impl CommandServer for MockCommandServer {
         let window = session.windows.get_mut(&window_idx).unwrap();
         window.last_active_pane = Some(window.active_pane);
         window.active_pane = new_pane_id;
+        window.zoomed_pane = None; // split cancels zoom
         Ok(new_pane_id)
     }
 
@@ -587,8 +600,7 @@ impl CommandServer for MockCommandServer {
     }
 
     fn set_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
-        let val = parse_option_value(value);
-        self.options.set(key, val);
+        self.options.set(key, parse_option_value_for_key(key, value));
         Ok(())
     }
 
@@ -600,7 +612,7 @@ impl CommandServer for MockCommandServer {
     fn append_server_option(&mut self, key: &str, value: &str) -> Result<(), ServerError> {
         let current = self.options.get(key).map(format_option_value).unwrap_or_default();
         let new_value = format!("{current}{value}");
-        self.options.set(key, parse_option_value(&new_value));
+        self.options.set(key, parse_option_value_for_key(key, &new_value));
         Ok(())
     }
 
@@ -614,8 +626,7 @@ impl CommandServer for MockCommandServer {
             .sessions
             .find_by_id_mut(session_id)
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
-        let val = parse_option_value(value);
-        session.options.set(key, val);
+        session.options.set(key, parse_option_value_for_key(key, value));
         Ok(())
     }
 
@@ -640,7 +651,7 @@ impl CommandServer for MockCommandServer {
             .ok_or_else(|| ServerError::Command("session not found".into()))?;
         let current = session.options.get(key).map(format_option_value).unwrap_or_default();
         let new_value = format!("{current}{value}");
-        session.options.set(key, parse_option_value(&new_value));
+        session.options.set(key, parse_option_value_for_key(key, &new_value));
         Ok(())
     }
 
@@ -659,8 +670,7 @@ impl CommandServer for MockCommandServer {
             .windows
             .get_mut(&window_idx)
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
-        let val = parse_option_value(value);
-        window.options.set(key, val);
+        window.options.set(key, parse_option_value_for_key(key, value));
         Ok(())
     }
 
@@ -699,7 +709,7 @@ impl CommandServer for MockCommandServer {
             .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
         let current = window.options.get(key).map(format_option_value).unwrap_or_default();
         let new_value = format!("{current}{value}");
-        window.options.set(key, parse_option_value(&new_value));
+        window.options.set(key, parse_option_value_for_key(key, &new_value));
         Ok(())
     }
 
@@ -804,6 +814,10 @@ impl CommandServer for MockCommandServer {
                 );
             }
         }
+        // Seed with persisted hidden vars from parent source-file calls
+        for (k, v) in &self.config_hidden_vars {
+            ctx.hidden_vars.insert(k.clone(), v.clone());
+        }
         ctx.set_format_expand(move |expr| {
             let mut fctx = crate::format::FormatContext::new();
             if !user_opts.is_empty() {
@@ -813,6 +827,14 @@ impl CommandServer for MockCommandServer {
             crate::format::format_expand(expr, &fctx)
         });
         ctx
+    }
+
+    fn get_config_hidden_vars(&self) -> HashMap<String, String> {
+        self.config_hidden_vars.clone()
+    }
+
+    fn set_config_hidden_vars(&mut self, vars: HashMap<String, String>) {
+        self.config_hidden_vars = vars;
     }
 
     fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String> {
@@ -898,6 +920,30 @@ impl CommandServer for MockCommandServer {
         _direction: Option<Direction>,
         _amount: u32,
     ) -> Result<(), ServerError> {
+        self.redraw_sessions.push(session_id);
+        Ok(())
+    }
+
+    fn toggle_zoom(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
+    ) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+
+        if window.zoomed_pane == Some(pane_id) {
+            window.zoomed_pane = None;
+        } else {
+            window.zoomed_pane = Some(pane_id);
+        }
         self.redraw_sessions.push(session_id);
         Ok(())
     }
@@ -1371,6 +1417,7 @@ impl CommandServer for MockCommandServer {
 
     fn build_format_context(&self) -> crate::format::FormatContext {
         let mut ctx = crate::format::FormatContext::new();
+        ctx.set("version", env!("CARGO_PKG_VERSION"));
         if let Some(session_id) = self.client_session_id() {
             if let Some(session) = self.sessions.find_by_id(session_id) {
                 ctx.set("session_name", &*session.name);
@@ -1395,9 +1442,19 @@ impl CommandServer for MockCommandServer {
                 ctx.set("session_alerts", alerts.join(", "));
                 if let Some(widx) = self.client_active_window() {
                     ctx.set("window_index", widx.to_string());
+                    ctx.set(
+                        "window_last_flag",
+                        if session.last_window == Some(widx) { "1" } else { "0" },
+                    );
                     if let Some(window) = session.windows.get(&widx) {
                         ctx.set("window_name", &*window.name);
                         ctx.set("window_panes", window.pane_count().to_string());
+                        ctx.set(
+                            "window_zoomed_flag",
+                            if window.zoomed_pane.is_some() { "1" } else { "0" },
+                        );
+                        let sync = window.options.get_flag("synchronize-panes").unwrap_or(false);
+                        ctx.set("pane_synchronized", if sync { "1" } else { "0" });
                         if let Some(pane) = window.active_pane() {
                             ctx.set("pane_id", format!("%{}", pane.id));
                             ctx.set("pane_index", pane.id.to_string());
@@ -1412,6 +1469,7 @@ impl CommandServer for MockCommandServer {
                 }
             }
         }
+        ctx.set("client_prefix", "0");
         // current_file — path of config file being sourced (if any)
         if let Ok(cf) = self.options.get_string("current_file") {
             ctx.set("current_file", cf);

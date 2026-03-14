@@ -388,6 +388,16 @@ pub fn tokenize_command(input: &str) -> Vec<String> {
     args
 }
 
+/// Expand a leading `~` in a path to the user's home directory.
+pub fn expand_tilde(path: &str) -> String {
+    if path.starts_with("~/") || path == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return if path == "~" { home } else { format!("{home}{}", &path[1..]) };
+        }
+    }
+    path.to_string()
+}
+
 /// Load a configuration file and parse it into commands.
 pub fn load_config_file(path: &str) -> Result<Vec<Vec<String>>, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
@@ -541,6 +551,34 @@ mod tests {
         let cmds = parse_config_lines(input);
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0], vec!["set", "-g", "foo", ""]);
+    }
+
+    // --- Tilde expansion tests ---
+
+    #[test]
+    fn tilde_expansion_home() {
+        let result = expand_tilde("~/foo/bar");
+        // Should not start with ~ anymore
+        assert!(!result.starts_with('~'));
+        assert!(result.ends_with("/foo/bar"));
+    }
+
+    #[test]
+    fn tilde_expansion_bare() {
+        let result = expand_tilde("~");
+        assert!(!result.starts_with('~') || std::env::var("HOME").is_err());
+    }
+
+    #[test]
+    fn tilde_expansion_no_tilde() {
+        assert_eq!(expand_tilde("/absolute/path"), "/absolute/path");
+        assert_eq!(expand_tilde("relative/path"), "relative/path");
+    }
+
+    #[test]
+    fn tilde_expansion_mid_string() {
+        // Only leading ~ is expanded
+        assert_eq!(expand_tilde("foo/~/bar"), "foo/~/bar");
     }
 
     // --- Line continuation tests ---

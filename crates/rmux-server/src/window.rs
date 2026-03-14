@@ -33,6 +33,8 @@ pub struct Window {
     pub has_bell: bool,
     /// Activity alert flag (set when output received in a non-active window with monitor-activity).
     pub has_activity: bool,
+    /// Zoomed pane ID. When set, only this pane is rendered at full window size.
+    pub zoomed_pane: Option<u32>,
 }
 
 impl Window {
@@ -51,6 +53,7 @@ impl Window {
             options: default_window_options(),
             has_bell: false,
             has_activity: false,
+            zoomed_pane: None,
         }
     }
 

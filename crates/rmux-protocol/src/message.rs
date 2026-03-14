@@ -229,8 +229,13 @@ pub struct MsgWriteClose {
 /// A decoded protocol message.
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Protocol version exchange.
+    ///
+    /// tmux 3.4+ sends a null-terminated version string (e.g. "3.6a").
+    /// Older tmux sends a 4-byte integer (protocol version number).
+    /// We store the string form for maximum compatibility.
     Version {
-        version: u32,
+        version: String,
     },
     IdentifyFlags(i64),
     IdentifyTerm(String),

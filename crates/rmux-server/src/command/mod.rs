@@ -256,6 +256,10 @@ pub trait CommandServer {
     // --- Config ---
     /// Build a config context for conditional evaluation and variable expansion.
     fn build_config_context(&self) -> crate::config::ConfigContext;
+    /// Get current hidden vars (for nested source-file propagation).
+    fn get_config_hidden_vars(&self) -> std::collections::HashMap<String, String>;
+    /// Set hidden vars (for nested source-file propagation).
+    fn set_config_hidden_vars(&mut self, vars: std::collections::HashMap<String, String>);
     /// Execute a list of parsed config commands, returning any error messages.
     fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String>;
 
@@ -285,6 +289,13 @@ pub trait CommandServer {
         pane_id: u32,
         direction: Option<Direction>,
         amount: u32,
+    ) -> Result<(), ServerError>;
+    /// Toggle zoom on a pane (expand to fill window, or unzoom).
+    fn toggle_zoom(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        pane_id: u32,
     ) -> Result<(), ServerError>;
 
     // --- Swap/Move ---
@@ -471,6 +482,59 @@ pub fn find_command(name: &str) -> Option<&'static CommandEntry> {
 
 /// Execute a command given its arguments.
 pub fn execute_command(
+    argv: &[String],
+    server: &mut dyn CommandServer,
+) -> Result<CommandResult, ServerError> {
+    if argv.is_empty() {
+        return Err(ServerError::Command("no command specified".into()));
+    }
+
+    // Split argv on semicolons (tmux-compatible command chaining).
+    // "start-server;" or bare ";" tokens act as command separators.
+    let sub_commands = split_argv_on_semicolons(argv);
+    if sub_commands.len() > 1 {
+        let mut last_result = CommandResult::Ok;
+        for sub_argv in sub_commands {
+            if sub_argv.is_empty() {
+                continue;
+            }
+            last_result = execute_single_command(&sub_argv, server)?;
+        }
+        return Ok(last_result);
+    }
+
+    execute_single_command(argv, server)
+}
+
+/// Split argv on `;` boundaries. Handles trailing semicolons on tokens
+/// (e.g., `["start-server;", "show-options"]` → `[["start-server"], ["show-options"]]`).
+fn split_argv_on_semicolons(argv: &[String]) -> Vec<Vec<String>> {
+    let mut commands: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+
+    for arg in argv {
+        if arg == ";" {
+            if !current.is_empty() {
+                commands.push(std::mem::take(&mut current));
+            }
+        } else if let Some(prefix) = arg.strip_suffix(';') {
+            if !prefix.is_empty() {
+                current.push(prefix.to_string());
+            }
+            if !current.is_empty() {
+                commands.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(arg.clone());
+        }
+    }
+    if !current.is_empty() {
+        commands.push(current);
+    }
+    commands
+}
+
+fn execute_single_command(
     argv: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {

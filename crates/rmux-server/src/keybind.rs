@@ -157,6 +157,11 @@ impl KeyBindings {
         (None, consumed)
     }
 
+    /// Update the prefix key.
+    pub fn set_prefix(&mut self, key: KeyCode) {
+        self.prefix = key;
+    }
+
     /// Whether we're currently in prefix mode.
     pub fn in_prefix(&self) -> bool {
         self.in_prefix
@@ -288,6 +293,7 @@ fn default_prefix_table() -> HashMap<KeyCode, KeyBinding> {
     t.insert(b'q' as KeyCode, bind(vec!["display-panes".into()]));
     t.insert(b'i' as KeyCode, bind(vec!["display-message".into()]));
     t.insert(b'r' as KeyCode, bind(vec!["refresh-client".into()]));
+    t.insert(b'z' as KeyCode, bind(vec!["resize-pane".into(), "-Z".into()]));
 
     // Session switching
     t.insert(b'(' as KeyCode, bind(vec!["switch-client".into(), "-p".into()]));

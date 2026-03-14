@@ -98,7 +98,12 @@ fn make_four_pane_grid_window(sx: u32, sy: u32) -> Window {
 }
 
 fn bench_window_list(name: &str) -> Vec<WindowInfo> {
-    vec![WindowInfo { idx: 0, name: name.to_string(), flags: WindowFlags::ACTIVE }]
+    vec![WindowInfo {
+        idx: 0,
+        name: name.to_string(),
+        flags: WindowFlags::ACTIVE,
+        ..Default::default()
+    }]
 }
 
 fn bench_render_single_pane(c: &mut Criterion) {
@@ -118,6 +123,7 @@ fn bench_render_single_pane(c: &mut Criterion) {
                         black_box(sx),
                         black_box(sy),
                         black_box(&wl),
+                        None,
                         None,
                         None,
                         None,
@@ -143,6 +149,7 @@ fn bench_render_two_pane_horizontal(c: &mut Criterion) {
                 None,
                 None,
                 None,
+                None,
             ));
         });
     });
@@ -159,6 +166,7 @@ fn bench_render_four_pane_grid(c: &mut Criterion) {
                 black_box(80),
                 black_box(24),
                 black_box(&wl),
+                None,
                 None,
                 None,
                 None,

@@ -48,9 +48,16 @@ fn main() {
     let path = if let Some(p) = opts.socket_path {
         p
     } else if let Ok(tmux_env) = env::var("TMUX") {
-        // $TMUX format: "socket_path,pid,session_id" — extract socket path
-        let socket = tmux_env.split(',').next().unwrap_or(&tmux_env);
-        PathBuf::from(socket)
+        if tmux_env.is_empty() {
+            // Empty $TMUX — use default socket path
+            let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+            let uid = nix::unistd::getuid();
+            PathBuf::from(format!("{tmpdir}/rmux-{uid}/{}", opts.socket_name))
+        } else {
+            // $TMUX format: "socket_path,pid,session_id" — extract socket path
+            let socket = tmux_env.split(',').next().unwrap_or(&tmux_env);
+            PathBuf::from(socket)
+        }
     } else {
         let tmpdir = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let uid = nix::unistd::getuid();

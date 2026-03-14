@@ -166,12 +166,12 @@ pub fn cmd_source_file(
         return Err(ServerError::Command("source-file: missing path".into()));
     }
 
-    // Resolve the path (optionally format-expanding it)
+    // Resolve the path (optionally format-expanding it, then tilde-expanding)
     let path = if format_flag {
         let fmt_ctx = server.build_format_context();
-        crate::format::format_expand(positional[0], &fmt_ctx)
+        crate::config::expand_tilde(&crate::format::format_expand(positional[0], &fmt_ctx))
     } else {
-        positional[0].to_string()
+        crate::config::expand_tilde(positional[0])
     };
 
     let mut ctx = server.build_config_context();
@@ -191,13 +191,26 @@ pub fn cmd_source_file(
         }
     };
 
-    // Set current_file as a format variable for commands executed from this file
+    // Propagate hidden vars (from %hidden directives) to the server so nested
+    // source-file calls can access them (e.g., catppuccin's MODULE_NAME).
+    let prev_hidden = server.get_config_hidden_vars();
+    server.set_config_hidden_vars(ctx.hidden_vars.clone());
+
+    // Save and restore current_file so nested source-file calls don't clobber
+    // the parent's value (catppuccin_tmux.conf sources 15+ files that each need
+    // #{d:current_file} to resolve back to catppuccin_tmux.conf's directory).
+    let prev_current_file = server.get_server_option("current_file").ok();
     let _ = server.set_server_option("current_file", &abs_path.to_string_lossy());
 
     let errors = server.execute_config_commands(commands);
 
-    // Clear current_file after sourcing
-    let _ = server.unset_server_option("current_file");
+    // Restore previous hidden vars and current_file after sourcing
+    server.set_config_hidden_vars(prev_hidden);
+    if let Some(prev) = prev_current_file {
+        let _ = server.set_server_option("current_file", &prev);
+    } else {
+        let _ = server.unset_server_option("current_file");
+    }
 
     if errors.is_empty() {
         Ok(CommandResult::Ok)

@@ -50,9 +50,14 @@ impl Pane {
     /// Create a new pane with a specific ID.
     #[must_use]
     pub fn with_id(id: u32, sx: u32, sy: u32, history_limit: u32) -> Self {
+        let mut screen = Screen::new(sx, sy, history_limit);
+        // tmux defaults pane_title to the system hostname.
+        if let Ok(hostname) = nix::unistd::gethostname() {
+            screen.title = hostname.to_string_lossy().into_owned();
+        }
         Self {
             id,
-            screen: Screen::new(sx, sy, history_limit),
+            screen,
             parser: InputParser::new(),
             pty_fd: -1,
             pid: 0,
@@ -235,6 +240,25 @@ mod tests {
         // Entering again should not reset state
         p.enter_copy_mode("vi");
         assert!(p.is_in_copy_mode());
+    }
+
+    #[test]
+    fn default_pane_title_is_hostname() {
+        let p = Pane::new(80, 24, 0);
+        // tmux defaults pane_title to the system hostname
+        let expected = nix::unistd::gethostname()
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        assert_eq!(p.screen.title, expected);
+        assert!(!p.screen.title.is_empty(), "pane title should not be empty");
+    }
+
+    #[test]
+    fn osc_title_overrides_default() {
+        let mut p = Pane::new(80, 24, 0);
+        // OSC 0 sets pane title
+        p.process_input(b"\x1b]0;My Custom Title\x07");
+        assert_eq!(p.screen.title, "My Custom Title");
     }
 
     #[test]

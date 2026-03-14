@@ -225,7 +225,7 @@ mod keybinding_tests {
     fn unbind_nonexistent_key() {
         let mut s = MockCommandServer::new();
 
-        let result = exec(&mut s, &["unbind-key", "z"]);
+        let result = exec(&mut s, &["unbind-key", "Z"]);
         assert!(result.is_err(), "should error when unbinding unbound key");
     }
 
@@ -594,6 +594,158 @@ set -ogq @catppuccin_${MODULE_NAME}_icon \"${SHOW_ICON}\"
         assert!(output.contains("tmp"), "dirname failed: {output}");
 
         std::fs::remove_file(tmp).ok();
+    }
+}
+
+// ============================================================
+// P3: format variables
+// ============================================================
+
+mod format_var_tests {
+    use super::*;
+
+    #[test]
+    fn version_variable_available() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_version.conf";
+        std::fs::write(tmp, "set -gF @ver \"#{version}\"\n").unwrap();
+        exec(&mut s, &["source-file", tmp]).unwrap();
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@ver"]));
+        assert!(output.contains("3.6"), "version should be 3.6.x, got: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn version_comparison_compat() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Catppuccin checks #{>=:#{version},3.4}
+        let tmp = "/tmp/rmux_test_version_cmp.conf";
+        std::fs::write(tmp, "set -gF @ver_check \"#{>=:#{version},3.4}\"\n").unwrap();
+        exec(&mut s, &["source-file", tmp]).unwrap();
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@ver_check"]));
+        assert!(output.contains('1'), "3.6 >= 3.4 should be true, got: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn client_prefix_variable() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_client_prefix.conf";
+        std::fs::write(tmp, "set -gF @pfx \"#{client_prefix}\"\n").unwrap();
+        exec(&mut s, &["source-file", tmp]).unwrap();
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@pfx"]));
+        // Not in prefix mode, should be 0
+        assert!(output.contains('0'), "client_prefix should be 0, got: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn window_flags_available() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_win_flags.conf";
+        std::fs::write(
+            tmp,
+            "set -gF @zoomed \"#{window_zoomed_flag}\"\nset -gF @last \"#{window_last_flag}\"\n",
+        )
+        .unwrap();
+        exec(&mut s, &["source-file", tmp]).unwrap();
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@zoomed"]));
+        assert!(output.contains('0'), "zoomed should be 0, got: {output}");
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@last"]));
+        assert!(output.contains('0'), "last flag should be 0, got: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn pane_synchronized_variable() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_pane_sync.conf";
+        std::fs::write(tmp, "set -gF @sync \"#{pane_synchronized}\"\n").unwrap();
+        exec(&mut s, &["source-file", tmp]).unwrap();
+
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@sync"]));
+        assert!(output.contains('0'), "sync should be 0, got: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn zoom_pane_toggle() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let sid = s.client_session_id().unwrap();
+
+        // Split to have 2 panes
+        exec(&mut s, &["split-window"]).unwrap();
+
+        // Initially not zoomed
+        let window = &s.sessions.find_by_id(sid).unwrap().windows[&0];
+        assert!(window.zoomed_pane.is_none());
+
+        // Zoom active pane
+        exec(&mut s, &["resize-pane", "-Z"]).unwrap();
+        let window = &s.sessions.find_by_id(sid).unwrap().windows[&0];
+        assert!(window.zoomed_pane.is_some());
+
+        // Toggle again to unzoom
+        exec(&mut s, &["resize-pane", "-Z"]).unwrap();
+        let window = &s.sessions.find_by_id(sid).unwrap().windows[&0];
+        assert!(window.zoomed_pane.is_none());
+    }
+
+    #[test]
+    fn zoom_pane_reflects_in_format() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Split so we can zoom
+        exec(&mut s, &["split-window"]).unwrap();
+
+        // Check zoomed flag is 0 before zoom
+        let tmp = "/tmp/rmux_test_zoom_fmt.conf";
+        std::fs::write(tmp, "set -gF @z \"#{window_zoomed_flag}\"\n").unwrap();
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@z"]));
+        assert!(output.contains('0'), "should be 0 before zoom, got: {output}");
+
+        // Zoom
+        exec(&mut s, &["resize-pane", "-Z"]).unwrap();
+
+        // Re-expand format — should be 1 now
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@z"]));
+        assert!(output.contains('1'), "should be 1 after zoom, got: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn zoom_invalid_pane_fails() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Try to zoom a nonexistent pane — should return Err
+        let result = exec(&mut s, &["resize-pane", "-Z", "-t", "%999"]);
+        assert!(result.is_err());
     }
 }
 
@@ -1353,6 +1505,31 @@ mod display_message_tests {
         let mut s = MockCommandServer::new();
         let result = exec(&mut s, &["display-message"]).unwrap();
         assert!(matches!(result, CommandResult::Ok));
+    }
+
+    #[test]
+    fn display_message_t_flag_not_included_in_message() {
+        let mut s = MockCommandServer::new();
+        let (sid, _widx, _pid) = s.create_test_session("work");
+        s.client_session_id = Some(sid);
+
+        // -t target should be skipped, not included as message text
+        let output = output_text(exec(&mut s, &["display-message", "-t", "work", "-p", "hello"]));
+        assert_eq!(output.trim(), "hello", "target 'work' should not appear in output: {output}");
+    }
+
+    #[test]
+    fn display_message_t_flag_only_message_expanded() {
+        let mut s = MockCommandServer::new();
+        let (sid, _widx, _pid) = s.create_test_session("mysess");
+        s.client_session_id = Some(sid);
+
+        let output = output_text(exec(
+            &mut s,
+            &["display-message", "-t", "mysess", "-p", "#{session_name}"],
+        ));
+        // Should show session name, NOT "mysess #{session_name}"
+        assert!(!output.contains("mysess mysess"), "target value leaked into message: {output}");
     }
 }
 

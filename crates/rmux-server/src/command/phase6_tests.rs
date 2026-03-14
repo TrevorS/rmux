@@ -812,6 +812,29 @@ mod server_cmd_tests {
     }
 
     #[test]
+    fn semicolon_command_chaining() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // "start-server;" with trailing semicolon + second command
+        // First command is a no-op, second sets an option
+        exec(&mut s, &["start-server;", "set", "-g", "@semi", "yes"]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@semi"]));
+        assert!(output.contains("yes"), "option should be set via chained command, got: {output}");
+    }
+
+    #[test]
+    fn bare_semicolon_separator() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Bare ";" separator between commands
+        exec(&mut s, &["start-server", ";", "set", "-g", "@semi2", "ok"]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@semi2"]));
+        assert!(output.contains("ok"), "option should be set via ; separator, got: {output}");
+    }
+
+    #[test]
     fn send_prefix_writes_ctrl_b() {
         let mut s = MockCommandServer::new();
         s.create_test_session("test");
@@ -825,6 +848,42 @@ mod server_cmd_tests {
         s.create_test_session("test");
         let result = exec(&mut s, &["send-prefix", "-2"]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn nested_source_file_restores_current_file() {
+        // Simulates catppuccin's pattern: catppuccin_tmux.conf sources session.conf
+        // which sources status_module.conf. Each nested source must not clobber
+        // the parent's current_file so that subsequent source -F calls resolve.
+        let dir = std::env::temp_dir().join("rmux_test_nested_source");
+        let sub = dir.join("sub");
+        let _ = std::fs::create_dir_all(&sub);
+
+        // Inner file sets an option
+        std::fs::write(sub.join("inner.conf"), "set -g @inner_ok yes\n").unwrap();
+        // Outer file sources inner, then sets another option using plain path
+        // (no -F needed since we just test current_file restoration)
+        let outer_content =
+            format!("source-file {}\nset -g @after_inner yes\n", sub.join("inner.conf").display());
+        std::fs::write(dir.join("outer.conf"), &outer_content).unwrap();
+
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let outer_path = dir.join("outer.conf").to_string_lossy().to_string();
+        let result = exec(&mut s, &["source-file", &outer_path]);
+        assert!(result.is_ok(), "source-file should succeed: {result:?}");
+
+        // Both options should be set
+        let inner = s.get_server_option("@inner_ok").unwrap();
+        assert_eq!(inner, "yes");
+        let after = s.get_server_option("@after_inner").unwrap();
+        assert_eq!(after, "yes");
+
+        // current_file should be cleared after top-level source completes
+        assert!(s.get_server_option("current_file").is_err());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

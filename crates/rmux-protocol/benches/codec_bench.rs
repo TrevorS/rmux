@@ -10,7 +10,7 @@ use std::hint::black_box;
 
 fn make_test_messages() -> Vec<(&'static str, Message)> {
     vec![
-        ("Version", Message::Version { version: PROTOCOL_VERSION }),
+        ("Version", Message::Version { version: PROTOCOL_VERSION.to_string() }),
         ("Resize", Message::Resize { sx: 120, sy: 40, xpixel: 960, ypixel: 640 }),
         (
             "Command",

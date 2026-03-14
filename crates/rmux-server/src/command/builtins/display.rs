@@ -20,7 +20,7 @@ pub fn cmd_display_message(
             skip_next = false;
             continue;
         }
-        if arg == "-F" {
+        if arg == "-F" || arg == "-t" || arg == "-c" {
             skip_next = true;
             continue;
         }

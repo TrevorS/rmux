@@ -146,7 +146,9 @@ pub fn decode_message_full(
 fn encode_message_data(msg: &Message, buf: &mut BytesMut) {
     match msg {
         Message::Version { version } => {
-            buf.put_i32_le(*version as i32);
+            // Encode as null-terminated string (tmux 3.4+ format)
+            buf.put_slice(version.as_bytes());
+            buf.put_u8(0);
         }
         Message::IdentifyFlags(flags) => {
             buf.put_i64_le(*flags);
@@ -257,11 +259,16 @@ fn decode_message_data(msg_type: MessageType, data: &[u8]) -> Result<Message, Co
     let err = || CodecError::InvalidData { msg_type };
     match msg_type {
         MessageType::Version => {
-            if data.len() < 4 {
-                return Err(err());
+            // tmux 3.4+ sends a null-terminated version string (e.g. "3.6a\0").
+            // Older tmux sends a 4-byte integer. Handle both formats.
+            let version = decode_cstring(data);
+            if version.is_empty() && data.len() >= 4 {
+                // Fallback: old integer format
+                let v = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                Ok(Message::Version { version: v.to_string() })
+            } else {
+                Ok(Message::Version { version })
             }
-            let version = i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as u32;
-            Ok(Message::Version { version })
         }
         MessageType::IdentifyFlags => {
             if data.len() < 8 {
@@ -548,12 +555,33 @@ mod tests {
 
     #[test]
     fn encode_decode_version() {
-        let msg = Message::Version { version: PROTOCOL_VERSION };
+        let msg = Message::Version { version: PROTOCOL_VERSION.to_string() };
         let mut buf = BytesMut::new();
         encode_message(&msg, &mut buf).unwrap();
         let decoded = decode_message(&mut buf).unwrap().unwrap();
         match decoded {
-            Message::Version { version } => assert_eq!(version, PROTOCOL_VERSION),
+            Message::Version { version } => assert_eq!(version, PROTOCOL_VERSION.to_string()),
+            other => panic!("expected Version, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_version_string_format() {
+        // tmux 3.4+ sends version as null-terminated string
+        let mut buf = BytesMut::new();
+        let version_str = b"3.6a\0";
+        let total_len = (IMSG_HEADER_SIZE + version_str.len()) as u16;
+        // Build header: type=12 (Version), len, flags=0, peerid=0, pid=0
+        buf.put_u32_le(MessageType::Version as u32);
+        buf.put_u16_le(total_len);
+        buf.put_u16_le(0);
+        buf.put_u32_le(0);
+        buf.put_u32_le(0);
+        buf.put_slice(version_str);
+
+        let decoded = decode_message(&mut buf).unwrap().unwrap();
+        match decoded {
+            Message::Version { version } => assert_eq!(version, "3.6a"),
             other => panic!("expected Version, got {other:?}"),
         }
     }
@@ -1018,8 +1046,8 @@ mod tests {
 
         proptest! {
             #[test]
-            fn version_roundtrip(version in 0u32..1000) {
-                let msg = Message::Version { version };
+            fn version_roundtrip(version in "[0-9]{1,3}\\.[0-9]{1,2}[a-z]?") {
+                let msg = Message::Version { version: version.clone() };
                 let mut buf = BytesMut::new();
                 encode_message(&msg, &mut buf).unwrap();
                 let decoded = decode_message(&mut buf).unwrap().unwrap();

@@ -105,12 +105,17 @@ pub fn format_expand(template: &str, ctx: &FormatContext) -> String {
                     }
                 }
                 b'[' => {
-                    // #[style] — inline style directive, pass through as-is
+                    // #[style] — inline style directive.
+                    // Must find the matching ']' while skipping over #{...} blocks
+                    // so that e.g. #[fg=#{@thm_crust}] works correctly.
                     let start = i + 2;
-                    if let Some(end_bracket) = template[start..].find(']') {
-                        let end = start + end_bracket;
-                        // Pass through #[...] verbatim for the renderer
-                        result.push_str(&template[i..=end]);
+                    if let Some(end) = find_style_end(template, start) {
+                        let inner = &template[start..end];
+                        // Expand #{...} variables inside the style block
+                        let expanded = format_expand(inner, ctx);
+                        result.push_str("#[");
+                        result.push_str(&expanded);
+                        result.push(']');
                         i = end + 1;
                     } else {
                         result.push('#');
@@ -129,8 +134,12 @@ pub fn format_expand(template: &str, ctx: &FormatContext) -> String {
                 }
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Copy non-'#' bytes as a UTF-8 string slice (not byte-by-byte)
+            let start = i;
+            while i < len && bytes[i] != b'#' {
+                i += 1;
+            }
+            result.push_str(&template[start..i]);
         }
     }
 
@@ -151,6 +160,30 @@ fn short_alias(ch: u8) -> Option<&'static str> {
         b'W' => Some("window_name"),
         _ => None,
     }
+}
+
+/// Find the closing `]` for a `#[...]` style block, skipping over `#{...}` variable
+/// references so that `#[fg=#{@thm_crust},bg=#{@thm_bg}]` finds the correct `]`.
+fn find_style_end(s: &str, start: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = start;
+
+    while i < len {
+        match bytes[i] {
+            b']' => return Some(i),
+            b'#' if i + 1 < len && bytes[i + 1] == b'{' => {
+                // Skip over #{...} block
+                if let Some(brace_end) = find_matching_brace(s, i + 2) {
+                    i = brace_end + 1;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Find the matching closing `}` for an opening `{`, handling nested `#{...}`.
@@ -382,7 +415,12 @@ fn strftime_expand_with_timestamp(s: &str, timestamp: i64) -> String {
     let mut i = 0;
 
     while i < len {
-        if bytes[i] == b'%' && i + 1 < len {
+        if bytes[i] == b'%' {
+            if i + 1 >= len {
+                result.push('%');
+                i += 1;
+                continue;
+            }
             let code = bytes[i + 1];
             let replacement: Option<String> = match code {
                 b'H' => Some(format!("{hour:02}")),
@@ -450,8 +488,12 @@ fn strftime_expand_with_timestamp(s: &str, timestamp: i64) -> String {
                 i += 1;
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Copy non-'%' bytes as a UTF-8 string slice (not byte-by-byte)
+            let start = i;
+            while i < len && bytes[i] != b'%' {
+                i += 1;
+            }
+            result.push_str(&s[start..i]);
         }
     }
 
@@ -912,6 +954,29 @@ mod tests {
         let mut ctx = FormatContext::new();
         ctx.set("session_name", "dev");
         assert_eq!(format_expand("#[fg=green]#S#[default]", &ctx), "#[fg=green]dev#[default]");
+    }
+
+    #[test]
+    fn inline_style_expands_nested_vars() {
+        let mut ctx = FormatContext::new();
+        ctx.set_option_lookup(|key| match key {
+            "@thm_crust" => Some("#232634".to_string()),
+            "@thm_blue" => Some("#8caaee".to_string()),
+            _ => None,
+        });
+        // Catppuccin-style: #{@var} inside #[...]
+        assert_eq!(
+            format_expand("#[fg=#{@thm_crust},bg=#{@thm_blue}]text", &ctx),
+            "#[fg=#232634,bg=#8caaee]text"
+        );
+    }
+
+    #[test]
+    fn inline_style_nested_var_no_closing_brace() {
+        let ctx = FormatContext::new();
+        // Malformed — no closing }, should degrade gracefully
+        let result = format_expand("#[fg=#{bad]rest", &ctx);
+        assert!(!result.is_empty());
     }
 
     // --- strftime tests ---

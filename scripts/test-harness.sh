@@ -80,8 +80,9 @@ harness_start() {
     # Launch tmux with C-q as prefix (so C-b passes through to rmux).
     # Pass -f /dev/null to rmux to skip loading user's tmux.conf (which may
     # rebind prefix or change other settings the tests depend on).
+    # Unset TMUX so rmux uses its own socket path instead of the outer tmux's.
     tmux new-session -d -s "${HARNESS_TMUX_SESSION}" -x 120 -y 40 \
-        "TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux -f /dev/null; echo '[rmux exited]'; sleep 86400"
+        "unset TMUX; TMPDIR=${rmux_tmpdir} PATH=${HARNESS_BINARY_DIR}:\${PATH} rmux -f /dev/null; echo '[rmux exited]'; sleep 86400"
 
     # Remap tmux prefix to C-q so C-b passes through to rmux
     tmux set-option -t "${HARNESS_TMUX_SESSION}" prefix C-q
