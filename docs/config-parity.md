@@ -17,19 +17,19 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 - [x] Empty quoted strings preserved (`""`, `''`)
 - [x] Semicolon command separator (`;`)
 - [x] Escaped semicolons (`\;` in bind multi-commands) **[CONF]**
-- [ ] Line continuation (backslash at end of line) **[CONF]**
+- [x] Line continuation (backslash at end of line) **[CONF]**
 - [ ] Tilde expansion (`~` → `$HOME`, `~user` → home dir) **[CONF]**
 
 ### Conditional Directives
-- [ ] `%if <expression>` — conditional block **[CONF]**
-- [ ] `%elif <expression>` — else-if branch **[CONF]**
-- [ ] `%else` — else branch **[CONF]**
-- [ ] `%endif` — end conditional **[CONF]**
-- [ ] `%hidden NAME=VALUE` — hidden environment variable **[CONF]**
+- [x] `%if <expression>` — conditional block **[CONF]**
+- [x] `%elif <expression>` — else-if branch **[CONF]**
+- [x] `%else` — else branch **[CONF]**
+- [x] `%endif` — end conditional **[CONF]**
+- [x] `%hidden NAME=VALUE` — hidden environment variable **[CONF]**
 
 ### Variable Interpolation
-- [ ] `${VAR}` — environment variable substitution in values **[CONF]**
-- [ ] `${VAR}` in option names (catppuccin uses `@catppuccin_${MODULE_NAME}_color`)
+- [x] `${VAR}` — environment variable substitution in values **[CONF]**
+- [x] `${VAR}` in option names (catppuccin uses `@catppuccin_${MODULE_NAME}_color`)
 
 ### Backslash Escapes (in tokens)
 - [x] `\\` → backslash
@@ -220,11 +220,11 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial
 ### Missing for Full Plugin Support
 - [ ] `source` as `source-file` alias (prefix matching may cover this)
 - [x] All `set-option` flags needed by catppuccin (`-ogqF`, `-agF`, `-wgF`, `-ug`)
-- [ ] Conditional directives (`%if`/`%elif`/`%else`/`%endif`)
+- [x] Conditional directives (`%if`/`%elif`/`%else`/`%endif`)
 - [ ] Format expansion in `source-file -F` paths
 - [ ] `#{d:current_file}` for relative path resolution in plugins
 - [x] `#{@user_option}` format references
-- [ ] `${VAR}` interpolation in option names
+- [x] `${VAR}` interpolation in option names
 
 ---
 
@@ -254,9 +254,9 @@ Heavy use of advanced features. Requires:
 - [ ] `source -F "#{d:current_file}/themes/..."` — format-expanded source path
 - [ ] `#{d:current_file}` — directory of current config file
 - [ ] `#{@catppuccin_flavor}` — user option in format strings
-- [ ] `%if "#{==:#{@option},value}"` — conditional directives
-- [ ] `%elif`, `%else`, `%endif`
-- [ ] `%hidden VAR="value"` — hidden variables
+- [x] `%if "#{==:#{@option},value}"` — conditional directives
+- [x] `%elif`, `%else`, `%endif`
+- [x] `%hidden VAR="value"` — hidden variables
 - [x] `set -gF status-style "bg=#{@thm_mantle}"` — format expansion at set-time
 - [x] `set -wgF` — window-global with format
 - [x] `set -agF` — append-global with format
@@ -267,8 +267,8 @@ Heavy use of advanced features. Requires:
 
 ### Phase 5: status/session.conf (status module)
 Builds the `@catppuccin_status_session` format string. Requires:
-- [ ] `%hidden MODULE_NAME="session"` — hidden variable
-- [ ] `${MODULE_NAME}` interpolation in option names
+- [x] `%hidden MODULE_NAME="session"` — hidden variable
+- [x] `${MODULE_NAME}` interpolation in option names
 - [ ] `source -F "#{d:current_file}/../utils/..."` — relative path resolution
 - [x] `set -ogq` / `set -gF` / `set -agF` as above
 - [ ] `#{?client_prefix,...}` — client_prefix variable
@@ -298,16 +298,16 @@ Ordered by what unblocks the most functionality:
 6. ~~Combined flags: `-ogq`, `-ogqF`, `-agF`, `-wgF`, `-ug`~~
 7. ~~`#{@user_option}` in format expansion~~
 
-### P1 — Config directives (unblocks catppuccin)
-8. `%if` / `%elif` / `%else` / `%endif` conditional processing
-9. `%hidden` variable assignment
-10. `${VAR}` interpolation in option names and values
+### P1 — Config directives (unblocks catppuccin) ✅ DONE
+8. ~~`%if` / `%elif` / `%else` / `%endif` conditional processing~~
+9. ~~`%hidden` variable assignment~~
+10. ~~`${VAR}` interpolation in option names and values~~
 
 ### P2 — Source file features (unblocks catppuccin path resolution)
 11. `source -F` flag (format-expand file path)
 12. `current_file` variable tracking during source
 13. `#{d:path}` dirname modifier
-14. Line continuation (backslash at end of line)
+14. ~~Line continuation (backslash at end of line)~~
 
 ### P3 — Format variables (unblocks catppuccin conditionals)
 15. `version` variable

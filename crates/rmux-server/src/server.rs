@@ -351,8 +351,9 @@ impl Server {
 
     /// Queue config file commands for processing in the event loop.
     fn queue_config(&mut self, config_file: Option<&str>) {
+        let mut ctx = self.build_config_context();
         let commands = if let Some(path) = config_file {
-            match crate::config::load_config_file(path) {
+            match crate::config::load_config_file_with_context(path, &mut ctx) {
                 Ok(cmds) => {
                     tracing::info!("loading config: {path}");
                     cmds
@@ -369,7 +370,7 @@ impl Server {
                 tracing::info!("no default config file found");
                 return;
             };
-            match crate::config::load_config_file(&path) {
+            match crate::config::load_config_file_with_context(&path, &mut ctx) {
                 Ok(cmds) => {
                     tracing::info!("loading config: {path}");
                     cmds
@@ -3761,6 +3762,35 @@ impl CommandServer for Server {
     }
 
     // --- Config ---
+
+    fn build_config_context(&self) -> crate::config::ConfigContext {
+        let mut ctx = crate::config::ConfigContext::new();
+        // Collect all @user options for format expansion in %if conditions
+        let mut user_opts: HashMap<String, String> = HashMap::new();
+        for (k, v) in self.options.local_iter() {
+            if k.starts_with('@') {
+                user_opts.insert(k.to_string(), format_option_value(v));
+            }
+        }
+        if let Some(session_id) = self.client_session_id() {
+            if let Some(session) = self.sessions.find_by_id(session_id) {
+                for (k, v) in session.options.local_iter() {
+                    if k.starts_with('@') {
+                        user_opts.insert(k.to_string(), format_option_value(v));
+                    }
+                }
+            }
+        }
+        ctx.set_format_expand(move |expr| {
+            let mut fctx = crate::format::FormatContext::new();
+            if !user_opts.is_empty() {
+                let opts = user_opts.clone();
+                fctx.set_option_lookup(move |key| opts.get(key).cloned());
+            }
+            crate::format::format_expand(expr, &fctx)
+        });
+        ctx
+    }
 
     fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String> {
         let mut errors = Vec::new();

@@ -164,7 +164,8 @@ pub fn cmd_source_file(
         return Err(ServerError::Command("source-file: missing path".into()));
     }
     let path = positional[0];
-    let commands = crate::config::load_config_file(path)
+    let mut ctx = server.build_config_context();
+    let commands = crate::config::load_config_file_with_context(path, &mut ctx)
         .map_err(|e| ServerError::Command(format!("source-file: {e}")))?;
     let errors = server.execute_config_commands(commands);
     if errors.is_empty() {

@@ -687,6 +687,94 @@ test_set_option_catppuccin_ogq_pattern() {
     fi
 }
 
+# --- P1: Config directives ----------------------------------------------------
+
+test_source_file_if_directive() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_if_directive.conf"
+    cat > "${tmp}" <<'EOF'
+%if 1
+set -g @if_test "passed"
+%endif
+%if 0
+set -g @if_test "failed"
+%endif
+EOF
+    harness_rmux source-file "${tmp}"
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g '@if_test' 2>&1) || true
+    if ! echo "${output}" | grep -q 'passed'; then
+        _harness_fail "%if directive should include true branch, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
+test_source_file_hidden_var_expansion() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_hidden.conf"
+    cat > "${tmp}" <<'EOF'
+%hidden MODULE_NAME="session"
+set -g @catppuccin_${MODULE_NAME}_color "blue"
+EOF
+    harness_rmux source-file "${tmp}"
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g '@catppuccin_session_color' 2>&1) || true
+    if ! echo "${output}" | grep -q 'blue'; then
+        _harness_fail "%hidden + \${VAR} expansion failed, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
+test_source_file_elif_else() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_elif.conf"
+    cat > "${tmp}" <<'EOF'
+%if 0
+set -g @elif_result "first"
+%elif 0
+set -g @elif_result "second"
+%else
+set -g @elif_result "third"
+%endif
+EOF
+    harness_rmux source-file "${tmp}"
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g '@elif_result' 2>&1) || true
+    if ! echo "${output}" | grep -q 'third'; then
+        _harness_fail "%elif/%else chain failed, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
+test_source_file_line_continuation() {
+    harness_start
+    local tmp="/tmp/rmux_e2e_continuation.conf"
+    printf 'set -g \\\nhistory-limit \\\n7777\n' > "${tmp}"
+    harness_rmux source-file "${tmp}"
+    sleep 0.3
+
+    local output
+    output=$(harness_rmux show-options -g 'history-limit' 2>&1) || true
+    if ! echo "${output}" | grep -q '7777'; then
+        _harness_fail "line continuation failed, got: ${output}"
+        rm -f "${tmp}"
+        return 1
+    fi
+    rm -f "${tmp}"
+}
+
 # --- Main ---------------------------------------------------------------------
 
 echo "=== rmux E2E Test Suite ==="
@@ -743,6 +831,12 @@ run_test test_set_option_append
 run_test test_set_option_unset
 run_test test_set_option_format_expand
 run_test test_set_option_catppuccin_ogq_pattern
+
+# P1: Config directives
+run_test test_source_file_if_directive
+run_test test_source_file_hidden_var_expansion
+run_test test_source_file_elif_else
+run_test test_source_file_line_continuation
 
 # Overlay tests
 run_test test_choose_tree_open_close

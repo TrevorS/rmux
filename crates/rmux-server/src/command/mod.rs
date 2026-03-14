@@ -254,6 +254,8 @@ pub trait CommandServer {
     fn remove_key_binding(&mut self, table: &str, key_name: &str) -> Result<(), ServerError>;
 
     // --- Config ---
+    /// Build a config context for conditional evaluation and variable expansion.
+    fn build_config_context(&self) -> crate::config::ConfigContext;
     /// Execute a list of parsed config commands, returning any error messages.
     fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String>;
 

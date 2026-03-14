@@ -783,6 +783,38 @@ impl CommandServer for MockCommandServer {
 
     // --- Config ---
 
+    fn build_config_context(&self) -> crate::config::ConfigContext {
+        let mut ctx = crate::config::ConfigContext::new();
+        // Collect @user options for format expansion
+        let mut user_opts: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for (k, v) in self.options.local_iter() {
+            if k.starts_with('@') {
+                user_opts.insert(
+                    k.to_string(),
+                    match v {
+                        rmux_core::options::OptionValue::String(s) => s.clone(),
+                        rmux_core::options::OptionValue::Number(n) => n.to_string(),
+                        rmux_core::options::OptionValue::Flag(b) => {
+                            if *b { "on" } else { "off" }.to_string()
+                        }
+                        rmux_core::options::OptionValue::Style(s) => format!("{s:?}"),
+                        rmux_core::options::OptionValue::Array(a) => a.join(","),
+                    },
+                );
+            }
+        }
+        ctx.set_format_expand(move |expr| {
+            let mut fctx = crate::format::FormatContext::new();
+            if !user_opts.is_empty() {
+                let opts = user_opts.clone();
+                fctx.set_option_lookup(move |key| opts.get(key).cloned());
+            }
+            crate::format::format_expand(expr, &fctx)
+        });
+        ctx
+    }
+
     fn execute_config_commands(&mut self, commands: Vec<Vec<String>>) -> Vec<String> {
         let mut errors = Vec::new();
         for argv in commands {

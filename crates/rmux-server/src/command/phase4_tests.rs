@@ -409,6 +409,128 @@ mod config_tests {
 
         std::fs::remove_file(tmp).ok();
     }
+
+    #[test]
+    fn source_file_with_if_true() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_if_true.conf";
+        std::fs::write(tmp, "%if 1\nset -g history-limit 5555\n%endif\n").unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "history-limit"]));
+        assert!(output.contains("5555"), "config not applied: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_with_if_false() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_if_false.conf";
+        std::fs::write(tmp, "%if 0\nset -g history-limit 6666\n%endif\nset -g escape-time 42\n")
+            .unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        // history-limit should NOT have been set to 6666
+        let output = output_text(exec(&mut s, &["show-options", "-g", "history-limit"]));
+        assert!(!output.contains("6666"), "false branch was applied: {output}");
+        // escape-time should be set (outside the %if)
+        let output = output_text(exec(&mut s, &["show-options", "-g", "escape-time"]));
+        assert!(output.contains("42"), "output: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_with_hidden_and_var_expansion() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_hidden.conf";
+        std::fs::write(
+            tmp,
+            "%hidden MODULE_NAME=\"session\"\nset -g @catppuccin_${MODULE_NAME}_color blue\n",
+        )
+        .unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output =
+            output_text(exec(&mut s, &["show-options", "-g", "@catppuccin_session_color"]));
+        assert!(output.contains("blue"), "var expansion failed: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_with_line_continuation() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_continuation.conf";
+        std::fs::write(tmp, "set -g \\\nhistory-limit \\\n8888\n").unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "history-limit"]));
+        assert!(output.contains("8888"), "continuation failed: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_if_else_elif_chain() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_elif.conf";
+        std::fs::write(
+            tmp,
+            "%if 0\nset -g @result first\n%elif 0\nset -g @result second\n%else\nset -g @result third\n%endif\n",
+        )
+        .unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@result"]));
+        assert!(output.contains("third"), "elif chain failed: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
+
+    #[test]
+    fn source_file_catppuccin_module_simulation() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let tmp = "/tmp/rmux_test_catppuccin_module.conf";
+        std::fs::write(
+            tmp,
+            "\
+%hidden MODULE_NAME=\"session\"
+%hidden MODULE_COLOR=\"blue\"
+set -ogq @catppuccin_${MODULE_NAME}_color \"${MODULE_COLOR}\"
+set -ogq @catppuccin_${MODULE_NAME}_text \" #{${MODULE_NAME}_name}\"
+%if 1
+%hidden SHOW_ICON=\"yes\"
+%endif
+set -ogq @catppuccin_${MODULE_NAME}_icon \"${SHOW_ICON}\"
+",
+        )
+        .unwrap();
+
+        exec(&mut s, &["source-file", tmp]).unwrap();
+        let output =
+            output_text(exec(&mut s, &["show-options", "-g", "@catppuccin_session_color"]));
+        assert!(output.contains("blue"), "module color: {output}");
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@catppuccin_session_text"]));
+        assert!(output.contains("#{session_name}"), "module text: {output}");
+        let output = output_text(exec(&mut s, &["show-options", "-g", "@catppuccin_session_icon"]));
+        assert!(output.contains("yes"), "module icon: {output}");
+
+        std::fs::remove_file(tmp).ok();
+    }
 }
 
 // ============================================================
