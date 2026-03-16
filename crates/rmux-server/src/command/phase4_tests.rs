@@ -100,8 +100,8 @@ mod options_tests {
 
         let output = output_text(exec(&mut s, &["show-options", "-g"]));
         // Should contain default server options
-        assert!(output.contains("history-limit"), "output was: {output}");
         assert!(output.contains("escape-time"), "output was: {output}");
+        assert!(output.contains("buffer-limit"), "output was: {output}");
     }
 
     #[test]

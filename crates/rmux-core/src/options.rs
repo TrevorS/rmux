@@ -216,11 +216,10 @@ impl Options {
 pub fn default_server_options() -> Options {
     let mut opts = Options::new();
     opts.set("buffer-limit", OptionValue::Number(50));
-    opts.set("escape-time", OptionValue::Number(500));
+    opts.set("escape-time", OptionValue::Number(10));
     opts.set("exit-empty", OptionValue::Flag(true));
     opts.set("exit-unattached", OptionValue::Flag(false));
     opts.set("focus-events", OptionValue::Flag(false));
-    opts.set("history-limit", OptionValue::Number(2000));
     opts.set("set-clipboard", OptionValue::String("external".into()));
     opts.set("terminal-overrides", OptionValue::Array(Vec::new()));
     opts.set("default-terminal", OptionValue::String("screen".into()));
@@ -234,6 +233,7 @@ pub fn default_server_options() -> Options {
 pub fn default_session_options() -> Options {
     let mut opts = Options::new();
     opts.set("base-index", OptionValue::Number(0));
+    opts.set("history-limit", OptionValue::Number(2000));
     opts.set("default-shell", OptionValue::String("/bin/sh".into()));
     opts.set("default-command", OptionValue::String(String::new()));
     opts.set("prefix", OptionValue::String("C-b".into()));
@@ -266,7 +266,8 @@ pub fn default_session_options() -> Options {
     opts.set("prefix2", OptionValue::String("None".into()));
     opts.set("destroy-unattached", OptionValue::Flag(false));
     opts.set("detach-on-destroy", OptionValue::String("on".into()));
-    opts.set("word-separators", OptionValue::String(" ".into()));
+    // tmux default: all non-alphanumeric printable ASCII except underscore.
+    opts.set("word-separators", OptionValue::String("!\"#$%&'()*+,-.:;<=>?@[\\]^`{|}~".into()));
     opts.set("visual-activity", OptionValue::String("off".into()));
     opts.set("visual-bell", OptionValue::String("off".into()));
     opts.set("visual-silence", OptionValue::String("off".into()));
@@ -274,7 +275,7 @@ pub fn default_session_options() -> Options {
     opts.set("key-table", OptionValue::String("root".into()));
     opts.set("bell-action", OptionValue::String("any".into()));
     opts.set("activity-action", OptionValue::String("other".into()));
-    opts.set("silence-action", OptionValue::String("none".into()));
+    opts.set("silence-action", OptionValue::String("other".into()));
     opts.set("lock-after-time", OptionValue::Number(0)); // 0 = disabled
     opts.set("lock-command", OptionValue::String("lock -np".into()));
     opts
@@ -287,7 +288,7 @@ pub fn default_window_options() -> Options {
     opts.set("mode-keys", OptionValue::String("emacs".into()));
     opts.set("automatic-rename", OptionValue::Flag(true));
     opts.set("aggressive-resize", OptionValue::Flag(false));
-    opts.set("allow-rename", OptionValue::Flag(true));
+    opts.set("allow-rename", OptionValue::Flag(false));
     opts.set("monitor-activity", OptionValue::Flag(false));
     opts.set("pane-border-style", OptionValue::String("default".into()));
     opts.set("pane-active-border-style", OptionValue::String("fg=green".into()));
@@ -390,8 +391,8 @@ mod tests {
     #[test]
     fn default_server_options_valid() {
         let opts = default_server_options();
-        assert_eq!(opts.get_number("history-limit").unwrap(), 2000);
         assert!(opts.get_flag("exit-empty").unwrap());
+        assert_eq!(opts.get_number("escape-time").unwrap(), 10);
     }
 
     #[test]
@@ -535,7 +536,7 @@ mod tests {
         assert_eq!(opts.get_string("mode-keys").unwrap(), "emacs");
         assert!(opts.get_flag("automatic-rename").unwrap());
         assert!(!opts.get_flag("aggressive-resize").unwrap());
-        assert!(opts.get_flag("allow-rename").unwrap());
+        assert!(!opts.get_flag("allow-rename").unwrap());
         assert!(!opts.get_flag("monitor-activity").unwrap());
         assert!(!opts.get_flag("remain-on-exit").unwrap());
     }
@@ -635,7 +636,7 @@ mod tests {
         let opts = default_session_options();
         assert_eq!(opts.get_string("bell-action").unwrap(), "any");
         assert_eq!(opts.get_string("activity-action").unwrap(), "other");
-        assert_eq!(opts.get_string("silence-action").unwrap(), "none");
+        assert_eq!(opts.get_string("silence-action").unwrap(), "other");
         assert_eq!(opts.get_string("key-table").unwrap(), "root");
     }
 
@@ -649,7 +650,13 @@ mod tests {
     #[test]
     fn session_defaults_word_separators() {
         let opts = default_session_options();
-        assert_eq!(opts.get_string("word-separators").unwrap(), " ");
+        assert_eq!(opts.get_string("word-separators").unwrap(), "!\"#$%&'()*+,-.:;<=>?@[\\]^`{|}~");
+    }
+
+    #[test]
+    fn session_defaults_history_limit() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_number("history-limit").unwrap(), 2000);
     }
 
     #[test]
