@@ -24,12 +24,34 @@ pub fn cmd_start_server(
     Ok(CommandResult::Ok)
 }
 
-/// send-keys [-l] [-t target-pane] key ...
+/// send-keys [-l] [-R] [-X] [-H] [-N count] [-t target-pane] key ...
+/// -R: reset the terminal for the target pane
+/// -H: send hex key codes (not yet implemented)
 pub fn cmd_send_keys(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let literal = has_flag(args, "-l");
+    let copy_mode_cmd = has_flag(args, "-X");
+    let _hex_mode = has_flag(args, "-H");
+
+    // -R: reset the terminal
+    if has_flag(args, "-R") {
+        // Send a terminal reset sequence (ESC c = RIS)
+        server.send_bytes_to_pane(b"\x1bc")?;
+    }
+
+    // -X: dispatch copy-mode command
+    if copy_mode_cmd {
+        let keys = positional_args(args, &["-t", "-N"]);
+        if keys.is_empty() {
+            return Err(ServerError::Command("send-keys -X: no command specified".into()));
+        }
+        let command = keys.join(" ");
+        server.dispatch_copy_mode_command(&command)?;
+        return Ok(CommandResult::Ok);
+    }
+
     let (session_id, window_idx) = resolve_send_keys_target(args, server)?;
 
     // Get the active pane for the resolved window
@@ -39,21 +61,24 @@ pub fn cmd_send_keys(
         .ok_or_else(|| ServerError::Command("no target pane".into()))?;
 
     // Collect non-flag arguments as key names
-    let keys = positional_args(args, &["-t"]);
+    let keys = positional_args(args, &["-t", "-N"]);
     if keys.is_empty() {
         return Err(ServerError::Command("send-keys: no keys specified".into()));
     }
 
-    for key_arg in keys {
-        let bytes = if literal {
-            // In literal mode, send the argument text directly
-            key_arg.as_bytes().to_vec()
-        } else {
-            // Try to parse as a named key, fall back to literal bytes
-            rmux_terminal::keys::key_name_to_bytes(key_arg)
-                .unwrap_or_else(|| key_arg.as_bytes().to_vec())
-        };
-        server.write_to_pane(session_id, window_idx, pane_id, &bytes)?;
+    // -N count: repeat the key(s) N times
+    let repeat: u32 = get_option(args, "-N").and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+
+    for _ in 0..repeat {
+        for key_arg in &keys {
+            let bytes = if literal {
+                key_arg.as_bytes().to_vec()
+            } else {
+                rmux_terminal::keys::key_name_to_bytes(key_arg)
+                    .unwrap_or_else(|| key_arg.as_bytes().to_vec())
+            };
+            server.write_to_pane(session_id, window_idx, pane_id, &bytes)?;
+        }
     }
 
     Ok(CommandResult::Ok)
@@ -99,7 +124,7 @@ fn resolve_send_keys_target(
     }
 }
 
-/// bind-key [-r] [-T table] [-n] key command [args...]
+/// bind-key [-r] [-N note] [-T table] [-n] key command [args...]
 pub fn cmd_bind_key(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -107,6 +132,7 @@ pub fn cmd_bind_key(
     let table =
         if has_flag(args, "-n") { "root" } else { get_option(args, "-T").unwrap_or("prefix") };
     let repeatable = has_flag(args, "-r");
+    let note = get_option(args, "-N").map(String::from);
 
     // Custom arg parsing: after consuming flags, the first remaining arg is the key
     // (even if it's "-" or another flag-like string), followed by command + args.
@@ -115,8 +141,8 @@ pub fn cmd_bind_key(
         let arg = &args[i];
         if arg == "-r" || arg == "-n" {
             i += 1;
-        } else if arg == "-T" {
-            i += 2; // skip -T and its value
+        } else if arg == "-T" || arg == "-N" {
+            i += 2; // skip flag and its value
         } else if arg.starts_with('-') && arg.len() > 1 && arg.as_bytes()[1] != b'-' {
             // Combined flags like "-rn" — skip
             i += 1;
@@ -136,25 +162,36 @@ pub fn cmd_bind_key(
         return Err(ServerError::Command("bind-key: missing command".into()));
     }
     let argv: Vec<String> = args[i..].to_vec();
-    server.add_key_binding(table, key_name, argv, repeatable)?;
+    server.add_key_binding(table, key_name, argv, repeatable, note)?;
     Ok(CommandResult::Ok)
 }
 
-/// unbind-key [-T table] key
+/// unbind-key [-a] [-n] [-T table] [-q] key
 pub fn cmd_unbind_key(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let table = get_option(args, "-T").unwrap_or("prefix");
+    let quiet = has_flag(args, "-q");
+    let unbind_all = has_flag(args, "-a");
+    let table =
+        if has_flag(args, "-n") { "root" } else { get_option(args, "-T").unwrap_or("prefix") };
+
+    if unbind_all {
+        server.clear_key_table(table);
+        return Ok(CommandResult::Ok);
+    }
+
     let positional = positional_args(args, &["-T"]);
     if positional.is_empty() {
         return Err(ServerError::Command("unbind-key: missing key".into()));
     }
-    server.remove_key_binding(table, positional[0])?;
-    Ok(CommandResult::Ok)
+    let result = server.remove_key_binding(table, positional[0]);
+    if quiet { Ok(CommandResult::Ok) } else { result.map(|()| CommandResult::Ok) }
 }
 
-/// source-file [-F] [-q] path
+/// source-file [-F] [-q] path [path ...]
+///
+/// Supports glob patterns (e.g., `~/.config/tmux/conf.d/*.conf`).
 pub fn cmd_source_file(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -166,45 +203,90 @@ pub fn cmd_source_file(
         return Err(ServerError::Command("source-file: missing path".into()));
     }
 
-    // Resolve the path (optionally format-expanding it, then tilde-expanding)
-    let path = if format_flag {
-        let fmt_ctx = server.build_format_context();
-        crate::config::expand_tilde(&crate::format::format_expand(positional[0], &fmt_ctx))
-    } else {
-        crate::config::expand_tilde(positional[0])
-    };
+    let mut all_errors = Vec::new();
+    let mut had_load_failure = false;
 
+    for raw_path in &positional {
+        // Resolve the path (optionally format-expanding it, then tilde-expanding)
+        let expanded = if format_flag {
+            let fmt_ctx = server.build_format_context();
+            crate::config::expand_tilde(&crate::format::format_expand(raw_path, &fmt_ctx))
+        } else {
+            crate::config::expand_tilde(raw_path)
+        };
+
+        // Expand glob patterns; if no glob chars, treat as a literal path
+        let paths: Vec<String> = if expanded.contains('*') || expanded.contains('?') {
+            match glob::glob(&expanded) {
+                Ok(entries) => {
+                    let mut matched: Vec<String> = entries
+                        .filter_map(Result::ok)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect();
+                    matched.sort();
+                    matched
+                }
+                Err(e) => {
+                    if quiet_flag {
+                        continue;
+                    }
+                    return Err(ServerError::Command(format!("source-file: {e}")));
+                }
+            }
+        } else {
+            vec![expanded]
+        };
+
+        for path in &paths {
+            let (load_failed, errors) = source_single_file(path, quiet_flag, server);
+            if load_failed {
+                had_load_failure = true;
+            }
+            all_errors.extend(errors);
+        }
+    }
+
+    if all_errors.is_empty() {
+        Ok(CommandResult::Ok)
+    } else if had_load_failure && all_errors.len() == 1 {
+        // File-not-found on a single path: return as a proper error (matches tmux behavior)
+        Err(ServerError::Command(all_errors.into_iter().next().unwrap()))
+    } else {
+        Ok(CommandResult::Output(all_errors.join("\n") + "\n"))
+    }
+}
+
+/// Source a single config file, returning (load_failed, errors).
+/// `load_failed` is true if the file could not be read at all.
+fn source_single_file(
+    path: &str,
+    quiet: bool,
+    server: &mut dyn CommandServer,
+) -> (bool, Vec<String>) {
     let mut ctx = server.build_config_context();
-    // Set current_file so #{current_file} and #{d:current_file} work during sourcing
-    let abs_path = std::path::Path::new(&path)
+    let abs_path = std::path::Path::new(path)
         .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from(&path));
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
     ctx.hidden_vars.insert("current_file".to_string(), abs_path.to_string_lossy().into_owned());
 
-    let commands = match crate::config::load_config_file_with_context(&path, &mut ctx) {
+    let commands = match crate::config::load_config_file_with_context(path, &mut ctx) {
         Ok(cmds) => cmds,
         Err(e) => {
-            if quiet_flag {
-                return Ok(CommandResult::Ok);
+            if quiet {
+                return (true, Vec::new());
             }
-            return Err(ServerError::Command(format!("source-file: {e}")));
+            return (true, vec![format!("source-file: {e}")]);
         }
     };
 
-    // Propagate hidden vars (from %hidden directives) to the server so nested
-    // source-file calls can access them (e.g., catppuccin's MODULE_NAME).
     let prev_hidden = server.get_config_hidden_vars();
     server.set_config_hidden_vars(ctx.hidden_vars.clone());
 
-    // Save and restore current_file so nested source-file calls don't clobber
-    // the parent's value (catppuccin_tmux.conf sources 15+ files that each need
-    // #{d:current_file} to resolve back to catppuccin_tmux.conf's directory).
     let prev_current_file = server.get_server_option("current_file").ok();
     let _ = server.set_server_option("current_file", &abs_path.to_string_lossy());
 
     let errors = server.execute_config_commands(commands);
 
-    // Restore previous hidden vars and current_file after sourcing
     server.set_config_hidden_vars(prev_hidden);
     if let Some(prev) = prev_current_file {
         let _ = server.set_server_option("current_file", &prev);
@@ -212,11 +294,7 @@ pub fn cmd_source_file(
         let _ = server.unset_server_option("current_file");
     }
 
-    if errors.is_empty() {
-        Ok(CommandResult::Ok)
-    } else {
-        Ok(CommandResult::Output(errors.join("\n") + "\n"))
-    }
+    (false, errors)
 }
 
 /// run-shell [-b] command
@@ -224,33 +302,47 @@ pub fn cmd_run_shell(
     args: &[String],
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let background = has_flag(args, "-b");
     let positional = positional_args(args, &[]);
     if positional.is_empty() {
         return Err(ServerError::Command("run-shell: missing command".into()));
     }
     let command = positional.join(" ");
-    Ok(CommandResult::RunShell(command))
+    if background {
+        Ok(CommandResult::RunShellBackground(command))
+    } else {
+        Ok(CommandResult::RunShell(command))
+    }
 }
 
-/// command-prompt
+/// command-prompt [-I initial-text] [-p prompt] [template]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_command_prompt(
-    _args: &[String],
+    args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    server.enter_command_prompt();
+    let initial_text = get_option(args, "-I");
+    let prompt_str = get_option(args, "-p");
+    let template = positional_args(args, &["-I", "-p", "-t", "-T"]);
+    let template_str = template.first().copied();
+    server.enter_command_prompt_with(initial_text, prompt_str, template_str);
     Ok(CommandResult::Ok)
 }
 
-/// if-shell [-b] shell-command command [command]
+/// if-shell [-b] [-F] shell-command command [command]
 ///
 /// Execute shell-command; if it returns success (exit 0), run the first command,
 /// otherwise run the second command (if given).
+/// With -F, treat the shell-command as a format string: non-empty = true.
+/// -b: run in background (currently executes synchronously).
 pub fn cmd_if_shell(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let positional = positional_args(args, &[]);
+    let format_flag = has_flag(args, "-F");
+    let _background = has_flag(args, "-b");
+    let _target = get_option(args, "-t");
+    let positional = positional_args(args, &["-t"]);
     if positional.len() < 2 {
         return Err(ServerError::Command("if-shell: requires shell-command and command".into()));
     }
@@ -259,9 +351,15 @@ pub fn cmd_if_shell(
     let true_cmd = positional[1];
     let false_cmd = positional.get(2).copied();
 
-    let output = std::process::Command::new("sh").arg("-c").arg(shell_cmd).output();
-
-    let success = output.is_ok_and(|o| o.status.success());
+    let success = if format_flag {
+        // -F: expand as format string, non-empty/non-zero result = true
+        let ctx = server.build_format_context();
+        let expanded = crate::format::format_expand(shell_cmd, &ctx);
+        !expanded.is_empty() && expanded != "0"
+    } else {
+        let output = std::process::Command::new("sh").arg("-c").arg(shell_cmd).output();
+        output.is_ok_and(|o| o.status.success())
+    };
     let cmd_str = if success {
         true_cmd
     } else if let Some(fc) = false_cmd {
@@ -284,23 +382,24 @@ pub fn cmd_send_prefix(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    // Send the prefix key (Ctrl-b by default) to the active pane
-    let prefix_bytes = if has_flag(args, "-2") {
-        // prefix2 — not commonly used, default to Ctrl-b
-        vec![0x02]
-    } else {
-        vec![0x02] // Ctrl-b
-    };
+    let _target = get_option(args, "-t");
+    // Read the actual prefix/prefix2 from options instead of hardcoding
+    let option_key = if has_flag(args, "-2") { "prefix2" } else { "prefix" };
+    let prefix_str = server.get_server_option(option_key).unwrap_or_else(|_| "C-b".to_string());
+    let prefix_bytes =
+        rmux_terminal::keys::key_name_to_bytes(&prefix_str).unwrap_or_else(|| vec![0x02]); // fallback to Ctrl-b
     server.send_bytes_to_pane(&prefix_bytes)?;
     Ok(CommandResult::Ok)
 }
 
-/// clear-history [-t target-pane]
+/// clear-history [-H] [-t target-pane]
+/// -H: clear history and screen (not just history)
 pub fn cmd_clear_history(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _clear_screen = has_flag(args, "-H");
+    let _target = get_option(args, "-t");
     server.clear_history()?;
     Ok(CommandResult::Ok)
 }
@@ -353,20 +452,31 @@ pub fn cmd_show_hooks(
 /// confirm-before [-p prompt] command
 ///
 /// Ask for confirmation before executing a command.
-/// Executes the command directly (interactive confirmation needs client-side UI).
+/// Shows a y/n prompt; the command executes only if the user types "y".
 pub fn cmd_confirm_before(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let positional = positional_args(args, &["-p"]);
+    let custom_prompt = get_option(args, "-p");
+    let _target = get_option(args, "-t");
+    let positional = positional_args(args, &["-p", "-t"]);
     if positional.is_empty() {
         return Err(ServerError::Command("confirm-before: missing command".into()));
     }
     let cmd_str = positional.join(" ");
-    let cmd_args = crate::config::tokenize_command(&cmd_str);
-    if !cmd_args.is_empty() {
-        server.execute_command(&cmd_args)?;
-    }
+
+    // Build the prompt string — tmux defaults to the command name
+    let prompt_str = if let Some(p) = custom_prompt {
+        format!("{p} (y/n) ")
+    } else {
+        let cmd_name = cmd_str.split_whitespace().next().unwrap_or("confirm");
+        format!("{cmd_name}? (y/n) ")
+    };
+
+    // Use command-prompt with a template that wraps the command in an if-shell
+    // checking if the input was "y"
+    let template = format!("if-shell -F '#{{==:%%,y}}' '{cmd_str}'");
+    server.enter_command_prompt_with(None, Some(&prompt_str), Some(&template));
     Ok(CommandResult::Ok)
 }
 

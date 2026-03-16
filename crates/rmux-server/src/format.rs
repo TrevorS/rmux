@@ -46,6 +46,14 @@ impl FormatContext {
         None
     }
 
+    /// Return all variables as (key, value) pairs, sorted by key.
+    pub fn list_vars(&self) -> Vec<(&str, &str)> {
+        let mut pairs: Vec<(&str, &str)> =
+            self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        pairs.sort_by_key(|(k, _)| *k);
+        pairs
+    }
+
     /// Set the option lookup callback for `@`-prefixed user options.
     pub fn set_option_lookup(&mut self, f: impl Fn(&str) -> Option<String> + 'static) {
         self.option_lookup = Some(Box::new(f));

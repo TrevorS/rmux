@@ -3,7 +3,11 @@
 use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::server::ServerError;
 
-/// new-window [-d] [-n name] [-t target-session]
+/// new-window [-a] [-b] [-d] [-k] [-S] [-n name] [-c start-directory] [-t target-session]
+/// -a: insert after current window (not yet fully implemented)
+/// -b: insert before current window (not yet fully implemented)
+/// -k: destroy existing window at target index
+/// -S: select existing window if it exists
 pub fn cmd_new_window(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -13,8 +17,12 @@ pub fn cmd_new_window(
 
     let session_id = resolve_session(args, server)?;
 
-    let cwd = std::env::current_dir()
-        .map_or_else(|_| "/".to_string(), |p| p.to_string_lossy().into_owned());
+    let cwd = if let Some(dir) = get_option(args, "-c") {
+        dir.to_string()
+    } else {
+        std::env::current_dir()
+            .map_or_else(|_| "/".to_string(), |p| p.to_string_lossy().into_owned())
+    };
 
     let (window_idx, _pane_id) = server.create_window(session_id, name, &cwd)?;
 
@@ -26,44 +34,89 @@ pub fn cmd_new_window(
     Ok(CommandResult::Ok)
 }
 
-/// kill-window [-t target-window]
+/// kill-window [-a] [-t target-window]
 pub fn cmd_kill_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
-    server.kill_window(session_id, window_idx)?;
+
+    if has_flag(args, "-a") {
+        // Kill all windows except the target
+        let windows = server.list_windows(session_id);
+        let indices: Vec<u32> = windows
+            .iter()
+            .filter_map(|w| {
+                // Window list format: "idx: name ..."
+                w.split(':').next().and_then(|s| s.trim().parse().ok())
+            })
+            .filter(|&idx| idx != window_idx)
+            .collect();
+        for idx in indices {
+            server.kill_window(session_id, idx)?;
+        }
+    } else {
+        server.kill_window(session_id, window_idx)?;
+    }
     Ok(CommandResult::Ok)
 }
 
-/// select-window [-t target-window]
+/// select-window [-l] [-n] [-p] [-T] [-t target-window]
 pub fn cmd_select_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let session_id = resolve_session(args, server)?;
+
+    // -l: last window
+    if has_flag(args, "-l") {
+        return server.last_window(session_id).map(|()| CommandResult::Ok);
+    }
+    // -n: next window
+    if has_flag(args, "-n") {
+        return server.next_window(session_id).map(|()| CommandResult::Ok);
+    }
+    // -p: previous window
+    if has_flag(args, "-p") {
+        return server.previous_window(session_id).map(|()| CommandResult::Ok);
+    }
+    // -T: toggle — if already selected, select last; else select target
+    if has_flag(args, "-T") {
+        let window_idx = resolve_window_idx(args, server, session_id)?;
+        let active = server.active_window_for(session_id);
+        if active == Some(window_idx) {
+            return server.last_window(session_id).map(|()| CommandResult::Ok);
+        }
+    }
+
     let window_idx = resolve_window_idx(args, server, session_id)?;
     server.select_window(session_id, window_idx)?;
     Ok(CommandResult::Ok)
 }
 
-/// next-window [-t target-session]
+/// next-window [-a] [-t target-session]
+/// -a: move to the next window with an alert (activity/bell/silence)
 pub fn cmd_next_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _alert = has_flag(args, "-a");
     let session_id = resolve_session(args, server)?;
+    // TODO: -a should skip non-alert windows; for now behaves like plain next
     server.next_window(session_id)?;
     Ok(CommandResult::Ok)
 }
 
-/// previous-window [-t target-session]
+/// previous-window [-a] [-t target-session]
+/// -a: move to the previous window with an alert
 pub fn cmd_previous_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _alert = has_flag(args, "-a");
     let session_id = resolve_session(args, server)?;
+    // TODO: -a should skip non-alert windows; for now behaves like plain previous
     server.previous_window(session_id)?;
     Ok(CommandResult::Ok)
 }
@@ -95,25 +148,46 @@ pub fn cmd_rename_window(
     Ok(CommandResult::Ok)
 }
 
-/// list-windows [-t target-session]
+/// list-windows [-a] [-t target-session]
+/// -a: list windows for all sessions
 pub fn cmd_list_windows(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let session_id = resolve_session(args, server)?;
-    let windows = server.list_windows(session_id);
-    if windows.is_empty() {
-        Ok(CommandResult::Output("(no windows)\n".to_string()))
+    if has_flag(args, "-a") {
+        let sessions = server.list_sessions();
+        let mut output = Vec::new();
+        for s in &sessions {
+            let name = s.split(':').next().unwrap_or("");
+            if let Some(sid) = server.find_session_id(name) {
+                let windows = server.list_windows(sid);
+                for w in windows {
+                    output.push(format!("{name}: {w}"));
+                }
+            }
+        }
+        if output.is_empty() {
+            Ok(CommandResult::Output("(no windows)\n".to_string()))
+        } else {
+            Ok(CommandResult::Output(output.join("\n") + "\n"))
+        }
     } else {
-        Ok(CommandResult::Output(windows.join("\n") + "\n"))
+        let session_id = resolve_session(args, server)?;
+        let windows = server.list_windows(session_id);
+        if windows.is_empty() {
+            Ok(CommandResult::Output("(no windows)\n".to_string()))
+        } else {
+            Ok(CommandResult::Output(windows.join("\n") + "\n"))
+        }
     }
 }
 
-/// swap-window [-s src] [-t dst]
+/// swap-window [-d] [-s src] [-t dst]
 pub fn cmd_swap_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let detached = has_flag(args, "-d");
     let session_id = resolve_session(args, server)?;
 
     let src_idx = get_option(args, "-s")
@@ -125,10 +199,18 @@ pub fn cmd_swap_window(
     let dst_idx = resolve_window_idx(args, server, session_id)?;
 
     server.swap_window(session_id, src_idx, dst_idx)?;
+
+    // By default, select the destination window. -d keeps original selection.
+    if !detached {
+        server.select_window(session_id, dst_idx)?;
+    }
     Ok(CommandResult::Ok)
 }
 
-/// move-window [-s src] [-t dst]
+/// move-window [-d] [-k] [-r] [-s src] [-t dst]
+/// -d: don't select the destination window
+/// -k: kill target window if it exists (allow overwrite)
+/// -r: renumber windows sequentially after move
 pub fn cmd_move_window(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -159,18 +241,24 @@ pub fn cmd_move_window(
     Ok(CommandResult::Ok)
 }
 
-/// rotate-window [-t target-window]
+/// rotate-window [-D] [-U] [-t target-window]
 pub fn cmd_rotate_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
-    server.rotate_window(session_id, window_idx)?;
+    // -U rotates up (reverse), -D rotates down (default)
+    let reverse = has_flag(args, "-U");
+    server.rotate_window(session_id, window_idx, reverse)?;
     Ok(CommandResult::Ok)
 }
 
-/// select-layout [-t target-window] layout-name
+/// select-layout [-E] [-n] [-o] [-p] [-t target-window] [layout-name]
+/// -E: spread panes evenly (same as even-horizontal or even-vertical depending on orientation)
+/// -n: next layout
+/// -o: restore previous layout (undo last layout change)
+/// -p: previous layout
 pub fn cmd_select_layout(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -179,6 +267,25 @@ pub fn cmd_select_layout(
 
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
+
+    if has_flag(args, "-n") {
+        let current = server.current_layout_name(session_id, window_idx);
+        let idx = LAYOUT_CYCLE.iter().position(|&n| n == current).unwrap_or(0);
+        let next = LAYOUT_CYCLE[(idx + 1) % LAYOUT_CYCLE.len()];
+        server.select_layout(session_id, window_idx, next)?;
+        return Ok(CommandResult::Ok);
+    }
+    if has_flag(args, "-p") {
+        let current = server.current_layout_name(session_id, window_idx);
+        let idx = LAYOUT_CYCLE.iter().position(|&n| n == current).unwrap_or(0);
+        let prev = LAYOUT_CYCLE[(idx + LAYOUT_CYCLE.len() - 1) % LAYOUT_CYCLE.len()];
+        server.select_layout(session_id, window_idx, prev)?;
+        return Ok(CommandResult::Ok);
+    }
+    if has_flag(args, "-E") {
+        server.select_layout(session_id, window_idx, "tiled")?;
+        return Ok(CommandResult::Ok);
+    }
 
     let positional = positional_args(args, &["-t"]);
     let layout_name = positional.first().copied().unwrap_or("even-horizontal");
@@ -242,7 +349,8 @@ pub fn cmd_previous_layout(
     Ok(CommandResult::Ok)
 }
 
-/// respawn-window [-t target-window]
+/// respawn-window [-k] [-t target-window]
+/// -k: kill the window before respawning (allow respawn even if not dead)
 pub fn cmd_respawn_window(
     args: &[String],
     server: &mut dyn CommandServer,

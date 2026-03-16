@@ -46,6 +46,10 @@ pub struct PromptState {
     pub cursor_pos: usize,
     /// What to do when submitted.
     pub prompt_type: PromptType,
+    /// Custom prompt string (e.g., "(rename-session) ").
+    pub prompt_str: Option<String>,
+    /// Command template — input replaces `%%` (e.g., "rename-session '%%'").
+    pub template: Option<String>,
 }
 
 /// A connected client on the server side.
@@ -60,6 +64,8 @@ pub struct ServerClient {
     pub flags: ClientFlags,
     /// Attached session ID (if any).
     pub session_id: Option<u32>,
+    /// Previously attached session ID (for switch-client -l).
+    pub last_session_id: Option<u32>,
     /// Terminal width.
     pub sx: u32,
     /// Terminal height.
@@ -204,6 +210,7 @@ impl ServerClient {
             identify: IdentifyState::default(),
             flags: ClientFlags::empty(),
             session_id: None,
+            last_session_id: None,
             sx: 80,
             sy: 24,
             prompt: None,

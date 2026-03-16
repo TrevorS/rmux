@@ -1073,7 +1073,7 @@ mod last_pane_tests {
     fn last_pane_switches_back() {
         let mut s = MockCommandServer::new();
         let (sid, widx, pane1) = s.create_test_session("test");
-        let pane2 = s.split_window(sid, widx, true, "/tmp").unwrap();
+        let pane2 = s.split_window(sid, widx, true, "/tmp", None).unwrap();
 
         // pane2 is now active (set by split_window), pane1 is last
         let window = s.sessions.find_by_id(sid).unwrap().windows.get(&widx).unwrap();
@@ -1101,7 +1101,7 @@ mod last_pane_tests {
     fn last_pane_alias() {
         let mut s = MockCommandServer::new();
         let (sid, widx, _) = s.create_test_session("test");
-        s.split_window(sid, widx, true, "/tmp").unwrap();
+        s.split_window(sid, widx, true, "/tmp", None).unwrap();
 
         let result = exec(&mut s, &["lastp"]);
         assert!(result.is_ok());
@@ -1641,7 +1641,7 @@ bind-key -n F5 new-window
         let (sid, widx, pane1) = s.create_test_session("work");
 
         // Split horizontally
-        let pane2 = s.split_window(sid, widx, true, "/tmp").unwrap();
+        let pane2 = s.split_window(sid, widx, true, "/tmp", None).unwrap();
 
         let window = s.sessions.find_by_id(sid).unwrap().windows.get(&widx).unwrap();
         assert_eq!(window.pane_count(), 2);
@@ -1925,6 +1925,9 @@ impl std::fmt::Debug for crate::command::CommandResult {
             CommandResult::Detach => write!(f, "Detach"),
             CommandResult::Exit => write!(f, "Exit"),
             CommandResult::RunShell(cmd) => write!(f, "RunShell({cmd:?})"),
+            CommandResult::RunShellBackground(cmd) => {
+                write!(f, "RunShellBackground({cmd:?})")
+            }
             CommandResult::Suspend => write!(f, "Suspend"),
             CommandResult::TimedMessage(msg) => write!(f, "TimedMessage({msg:?})"),
             CommandResult::Overlay(_) => write!(f, "Overlay(...)"),

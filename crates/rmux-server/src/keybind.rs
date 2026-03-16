@@ -23,6 +23,8 @@ pub struct KeyBinding {
     pub argv: Vec<String>,
     /// Whether this binding is repeatable (-r flag).
     pub repeatable: bool,
+    /// Optional human-readable note (-N flag).
+    pub note: Option<String>,
 }
 
 /// Key binding tables and prefix mode state.
@@ -54,7 +56,7 @@ impl KeyBindings {
 
     /// Add a key binding to the given table.
     pub fn add_binding(&mut self, table: &str, key: KeyCode, argv: Vec<String>) {
-        self.add_binding_with_repeat(table, key, argv, false);
+        self.add_binding_with_opts(table, key, argv, false, None);
     }
 
     /// Add a key binding with repeat flag.
@@ -65,15 +67,34 @@ impl KeyBindings {
         argv: Vec<String>,
         repeatable: bool,
     ) {
+        self.add_binding_with_opts(table, key, argv, repeatable, None);
+    }
+
+    /// Add a key binding with all options.
+    pub fn add_binding_with_opts(
+        &mut self,
+        table: &str,
+        key: KeyCode,
+        argv: Vec<String>,
+        repeatable: bool,
+        note: Option<String>,
+    ) {
         self.tables
             .entry(table.to_string())
             .or_default()
-            .insert(key, KeyBinding { argv, repeatable });
+            .insert(key, KeyBinding { argv, repeatable, note });
     }
 
     /// Remove a key binding from the given table.
     pub fn remove_binding(&mut self, table: &str, key: KeyCode) -> bool {
         self.tables.get_mut(table).is_some_and(|t| t.remove(&key).is_some())
+    }
+
+    /// Remove all key bindings from the given table.
+    pub fn clear_table(&mut self, table: &str) {
+        if let Some(t) = self.tables.get_mut(table) {
+            t.clear();
+        }
     }
 
     /// Look up a binding in a specific table.
@@ -177,6 +198,11 @@ impl KeyBindings {
 
     /// List all key bindings as human-readable strings.
     pub fn list_bindings(&self) -> Vec<String> {
+        self.list_bindings_with_notes(false)
+    }
+
+    /// List all key bindings, optionally including -N notes.
+    pub fn list_bindings_with_notes(&self, show_notes: bool) -> Vec<String> {
         let mut result = Vec::new();
 
         for (table_name, table) in &self.tables {
@@ -184,7 +210,13 @@ impl KeyBindings {
                 let key_name = key_to_string(key);
                 let cmd = binding.argv.join(" ");
                 let repeat = if binding.repeatable { " -r" } else { "" };
-                result.push(format!("bind-key{repeat} -T {table_name} {key_name} {cmd}"));
+                let note_part = if show_notes {
+                    binding.note.as_ref().map_or(String::new(), |n| format!(" -N \"{n}\""))
+                } else {
+                    String::new()
+                };
+                result
+                    .push(format!("bind-key{repeat}{note_part} -T {table_name} {key_name} {cmd}"));
             }
         }
 
@@ -195,12 +227,12 @@ impl KeyBindings {
 
 /// Helper to create a non-repeatable key binding.
 fn bind(argv: Vec<String>) -> KeyBinding {
-    KeyBinding { argv, repeatable: false }
+    KeyBinding { argv, repeatable: false, note: None }
 }
 
 /// Helper to create a repeatable key binding (-r).
 fn bind_r(argv: Vec<String>) -> KeyBinding {
-    KeyBinding { argv, repeatable: true }
+    KeyBinding { argv, repeatable: true, note: None }
 }
 
 /// Default prefix key bindings matching tmux.

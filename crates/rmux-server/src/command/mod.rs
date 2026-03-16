@@ -28,6 +28,8 @@ pub enum CommandResult {
     Exit,
     /// Server should run a shell command asynchronously and return output.
     RunShell(String),
+    /// Server should run a shell command in the background (no output capture).
+    RunShellBackground(String),
     /// Client should be suspended (SIGTSTP).
     Suspend,
     /// Show a timed message in the status bar (display-message without -p).
@@ -84,6 +86,15 @@ pub enum Direction {
     Down,
     Left,
     Right,
+}
+
+/// Size specification for split-window.
+#[derive(Debug, Clone, Copy)]
+pub enum SplitSize {
+    /// Absolute number of lines/columns.
+    Lines(u32),
+    /// Percentage of the available space.
+    Percent(u32),
 }
 
 /// Trait providing the server interface needed by commands.
@@ -149,6 +160,7 @@ pub trait CommandServer {
         window_idx: u32,
         horizontal: bool,
         cwd: &str,
+        size: Option<SplitSize>,
     ) -> Result<u32, ServerError>;
     fn kill_pane(
         &mut self,
@@ -249,9 +261,12 @@ pub trait CommandServer {
         key_name: &str,
         argv: Vec<String>,
         repeatable: bool,
+        note: Option<String>,
     ) -> Result<(), ServerError>;
     /// Remove a key binding.
     fn remove_key_binding(&mut self, table: &str, key_name: &str) -> Result<(), ServerError>;
+    /// Remove all key bindings from a table.
+    fn clear_key_table(&mut self, table: &str);
 
     // --- Config ---
     /// Build a config context for conditional evaluation and variable expansion.
@@ -297,6 +312,8 @@ pub trait CommandServer {
         window_idx: u32,
         pane_id: u32,
     ) -> Result<(), ServerError>;
+    /// Unzoom the window if it is currently zoomed (no-op if not zoomed).
+    fn unzoom_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
 
     // --- Swap/Move ---
     fn swap_pane(
@@ -335,7 +352,12 @@ pub trait CommandServer {
         horizontal: bool,
     ) -> Result<(), ServerError>;
     fn last_pane(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
-    fn rotate_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
+    fn rotate_window(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        reverse: bool,
+    ) -> Result<(), ServerError>;
     fn select_layout(
         &mut self,
         session_id: u32,
@@ -351,11 +373,25 @@ pub trait CommandServer {
 
     // --- Command prompt ---
     /// Put the current client into command prompt mode.
-    fn enter_command_prompt(&mut self);
+    /// `initial_text` pre-fills the prompt, `prompt_str` sets a custom prompt,
+    /// `template` is the command template (with %% for the input).
+    fn enter_command_prompt_with(
+        &mut self,
+        initial_text: Option<&str>,
+        prompt_str: Option<&str>,
+        template: Option<&str>,
+    );
+    /// Shorthand: enter command prompt with no arguments.
+    fn enter_command_prompt(&mut self) {
+        self.enter_command_prompt_with(None, None, None);
+    }
 
     // --- Copy mode ---
     /// Enter copy mode on the active pane.
     fn enter_copy_mode(&mut self) -> Result<(), ServerError>;
+    /// Dispatch a copy-mode command by name (e.g., "cancel", "copy-selection-and-cancel").
+    /// Returns true if the pane was in copy mode and the command was dispatched.
+    fn dispatch_copy_mode_command(&mut self, command: &str) -> Result<bool, ServerError>;
     /// Get the mode-keys setting for the active pane's window.
     fn pane_mode_keys(&self) -> String;
 
@@ -377,6 +413,8 @@ pub trait CommandServer {
     fn list_clients(&self) -> Vec<String>;
     fn list_all_commands(&self) -> Vec<String>;
     fn list_key_bindings(&self) -> Vec<String>;
+    /// List all key bindings, including -N notes.
+    fn list_key_bindings_with_notes(&self) -> Vec<String>;
     /// Return recent server messages for show-messages.
     fn show_messages(&self) -> Vec<String>;
     /// Build a format context with current session/window/pane variables.
@@ -397,6 +435,10 @@ pub trait CommandServer {
     // --- Client switching ---
     /// Switch the current client to a different session.
     fn switch_client(&mut self, session_id: u32) -> Result<(), ServerError>;
+    /// Get the last session ID for the current client (for switch-client -l).
+    fn client_last_session_id(&self) -> Option<u32>;
+    /// Detach all other clients attached to the same session (for attach -d, detach -a).
+    fn detach_other_clients(&mut self) -> Result<(), ServerError>;
 
     // --- Environment ---
     /// Set an environment variable. `None` session_id means global (server-level).

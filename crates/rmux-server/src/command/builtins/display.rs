@@ -4,13 +4,26 @@ use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::overlay::{ListItem, ListKind, ListOverlay, MenuItem, MenuOverlay, OverlayState};
 use crate::server::ServerError;
 
-/// display-message [-p] [-F format] [message]
+/// display-message [-a] [-l] [-p] [-v] [-c target-client] [-d delay] [-t target-pane] [message]
+/// -a: list format variables
+/// -l: message length
+/// -v: verbose (print expanded variables)
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_message(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let print = has_flag(args, "-p");
+    let list_vars = has_flag(args, "-a");
+    let _verbose = has_flag(args, "-v");
+    let _delay = get_option(args, "-d");
+
+    if list_vars {
+        let ctx = server.build_format_context();
+        let output: Vec<String> =
+            ctx.list_vars().into_iter().map(|(k, v)| format!("{k} {v}")).collect();
+        return Ok(CommandResult::Output(output.join("\n") + "\n"));
+    }
 
     // Collect non-flag arguments as the message
     let mut skip_next = false;
@@ -20,7 +33,7 @@ pub fn cmd_display_message(
             skip_next = false;
             continue;
         }
-        if arg == "-F" || arg == "-t" || arg == "-c" {
+        if arg == "-F" || arg == "-t" || arg == "-c" || arg == "-d" {
             skip_next = true;
             continue;
         }
@@ -54,18 +67,27 @@ pub fn cmd_list_commands(
     Ok(CommandResult::Output(commands.join("\n") + "\n"))
 }
 
-/// list-keys [-T table]
+/// list-keys [-N] [-T table]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_list_keys(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    let bindings = server.list_key_bindings();
-    if bindings.is_empty() {
+    let table_filter = get_option(args, "-T");
+    let show_notes = has_flag(args, "-N");
+    let bindings =
+        if show_notes { server.list_key_bindings_with_notes() } else { server.list_key_bindings() };
+    let filtered: Vec<&String> = if let Some(table) = table_filter {
+        let pattern = format!("-T {table} ");
+        bindings.iter().filter(|b| b.contains(&pattern)).collect()
+    } else {
+        bindings.iter().collect()
+    };
+    if filtered.is_empty() {
         Ok(CommandResult::Output("(no bindings)\n".to_string()))
     } else {
-        Ok(CommandResult::Output(bindings.join("\n") + "\n"))
+        let output: Vec<&str> = filtered.iter().map(|s| s.as_str()).collect();
+        Ok(CommandResult::Output(output.join("\n") + "\n"))
     }
 }
 
@@ -132,7 +154,7 @@ pub fn cmd_clock_mode(
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     use std::fmt::Write;
-    let _ = args;
+    let _target = get_option(args, "-t");
 
     let now = chrono_free_now();
     let time_str = format!("{:02}:{:02}:{:02}", now.0, now.1, now.2);
@@ -610,9 +632,9 @@ pub fn cmd_pipe_pane(
     Ok(CommandResult::Ok)
 }
 
-/// resize-window [-t target-window] [-x width] [-y height] [-A]
+/// resize-window [-A] [-D] [-L] [-R] [-U] [-t target-window] [-x width] [-y height] [adjustment]
 ///
-/// Resize a window to a specific size.
+/// Resize a window. -A adjusts to smallest client. -D/-U/-L/-R adjust by amount.
 pub fn cmd_resize_window(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -628,6 +650,30 @@ pub fn cmd_resize_window(
     };
 
     let window_idx = server.active_window_for(session_id).unwrap_or(0);
+
+    // Directional adjustment
+    let amount: u32 = crate::command::positional_args(args, &["-t", "-x", "-y"])
+        .first()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    if has_flag(args, "-D") || has_flag(args, "-U") || has_flag(args, "-L") || has_flag(args, "-R")
+    {
+        // Get current window size (approximate from client size)
+        let cur_sx = server.client_sx();
+        let cur_sy = server.client_sy().saturating_sub(1);
+        let (new_sx, new_sy) = if has_flag(args, "-D") {
+            (None, Some(cur_sy + amount))
+        } else if has_flag(args, "-U") {
+            (None, Some(cur_sy.saturating_sub(amount)))
+        } else if has_flag(args, "-R") {
+            (Some(cur_sx + amount), None)
+        } else {
+            (Some(cur_sx.saturating_sub(amount)), None)
+        };
+        server.resize_window(session_id, window_idx, new_sx, new_sy)?;
+        return Ok(CommandResult::Ok);
+    }
 
     let sx = get_option(args, "-x")
         .map(|v| v.parse::<u32>().map_err(|_| ServerError::Command(format!("invalid width: {v}"))))

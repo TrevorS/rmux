@@ -24,6 +24,8 @@ pub struct MockCommandServer {
     pub command_client: u64,
     /// Simulated client session attachment.
     pub client_session_id: Option<u32>,
+    /// Last session ID (for switch-client -l).
+    pub last_session_id: Option<u32>,
     /// Simulated client terminal dimensions.
     pub client_sx: u32,
     pub client_sy: u32,
@@ -57,6 +59,7 @@ impl MockCommandServer {
             keybindings: KeyBindings::default_bindings(),
             command_client: 1,
             client_session_id: None,
+            last_session_id: None,
             client_sx: 80,
             client_sy: 24,
             pane_writes: HashMap::new(),
@@ -196,6 +199,10 @@ impl CommandServer for MockCommandServer {
 
     fn client_session_id(&self) -> Option<u32> {
         self.client_session_id
+    }
+
+    fn client_last_session_id(&self) -> Option<u32> {
+        self.last_session_id
     }
 
     fn client_active_window(&self) -> Option<u32> {
@@ -429,6 +436,7 @@ impl CommandServer for MockCommandServer {
         window_idx: u32,
         horizontal: bool,
         _cwd: &str,
+        _size: Option<crate::command::SplitSize>,
     ) -> Result<u32, ServerError> {
         let new_pane_id = self.add_pane_to_window(session_id, window_idx, horizontal);
         let session = self.sessions.find_by_id_mut(session_id).unwrap();
@@ -775,10 +783,11 @@ impl CommandServer for MockCommandServer {
         key_name: &str,
         argv: Vec<String>,
         repeatable: bool,
+        note: Option<String>,
     ) -> Result<(), ServerError> {
         let key = crate::keybind::string_to_key(key_name)
             .ok_or_else(|| ServerError::Command(format!("unknown key: {key_name}")))?;
-        self.keybindings.add_binding_with_repeat(table, key, argv, repeatable);
+        self.keybindings.add_binding_with_opts(table, key, argv, repeatable, note);
         Ok(())
     }
 
@@ -789,6 +798,10 @@ impl CommandServer for MockCommandServer {
             return Err(ServerError::Command(format!("key not bound: {key_name}")));
         }
         Ok(())
+    }
+
+    fn clear_key_table(&mut self, table: &str) {
+        self.keybindings.clear_table(table);
     }
 
     // --- Config ---
@@ -945,6 +958,19 @@ impl CommandServer for MockCommandServer {
             window.zoomed_pane = Some(pane_id);
         }
         self.redraw_sessions.push(session_id);
+        Ok(())
+    }
+
+    fn unzoom_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        window.zoomed_pane = None;
         Ok(())
     }
 
@@ -1205,7 +1231,12 @@ impl CommandServer for MockCommandServer {
         Err(ServerError::Command("no last pane".into()))
     }
 
-    fn rotate_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+    fn rotate_window(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        reverse: bool,
+    ) -> Result<(), ServerError> {
         let session = self
             .sessions
             .find_by_id_mut(session_id)
@@ -1226,16 +1257,19 @@ impl CommandServer for MockCommandServer {
                 (p.xoff, p.yoff, p.sx, p.sy)
             })
             .collect();
+        let n = positions.len();
         for (i, &pid) in pane_ids.iter().enumerate() {
-            let next_pos = &positions[(i + 1) % positions.len()];
+            let target_pos =
+                if reverse { &positions[(i + n - 1) % n] } else { &positions[(i + 1) % n] };
             if let Some(pane) = window.panes.get_mut(&pid) {
-                pane.xoff = next_pos.0;
-                pane.yoff = next_pos.1;
-                pane.resize(next_pos.2, next_pos.3);
+                pane.xoff = target_pos.0;
+                pane.yoff = target_pos.1;
+                pane.resize(target_pos.2, target_pos.3);
             }
         }
         if let Some(pos) = pane_ids.iter().position(|&id| id == window.active_pane) {
-            let next_active = pane_ids[(pos + 1) % pane_ids.len()];
+            let next_active =
+                if reverse { pane_ids[(pos + n - 1) % n] } else { pane_ids[(pos + 1) % n] };
             window.active_pane = next_active;
         }
         Ok(())
@@ -1308,7 +1342,12 @@ impl CommandServer for MockCommandServer {
 
     // --- Command prompt ---
 
-    fn enter_command_prompt(&mut self) {
+    fn enter_command_prompt_with(
+        &mut self,
+        _initial_text: Option<&str>,
+        _prompt_str: Option<&str>,
+        _template: Option<&str>,
+    ) {
         self.prompt_entered = true;
     }
 
@@ -1328,6 +1367,28 @@ impl CommandServer for MockCommandServer {
             window.panes.values_mut().next().ok_or(ServerError::Command("no pane".into()))?;
         pane.enter_copy_mode(&mode_keys);
         Ok(())
+    }
+
+    fn dispatch_copy_mode_command(&mut self, command: &str) -> Result<bool, ServerError> {
+        use crate::copymode;
+        let session_id = self.client_session_id.ok_or(ServerError::Command("no session".into()))?;
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or(ServerError::Command("session not found".into()))?;
+        let window = session.active_window_mut().ok_or(ServerError::Command("no window".into()))?;
+        let pane = window.active_pane_mut().ok_or(ServerError::Command("no pane".into()))?;
+        let Some(cm) = &mut pane.copy_mode else {
+            return Ok(false);
+        };
+        let action = copymode::dispatch_copy_mode_action(&pane.screen, cm, command);
+        if let copymode::CopyModeAction::Exit { copy_data } = action {
+            pane.copy_mode = None;
+            if let Some(data) = copy_data {
+                self.paste_buffers.add(data);
+            }
+        }
+        Ok(true)
     }
 
     fn pane_mode_keys(&self) -> String {
@@ -1409,6 +1470,10 @@ impl CommandServer for MockCommandServer {
 
     fn list_key_bindings(&self) -> Vec<String> {
         self.keybindings.list_bindings()
+    }
+
+    fn list_key_bindings_with_notes(&self) -> Vec<String> {
+        self.keybindings.list_bindings_with_notes(true)
     }
 
     fn show_messages(&self) -> Vec<String> {
@@ -1554,7 +1619,13 @@ impl CommandServer for MockCommandServer {
         if self.sessions.find_by_id(session_id).is_none() {
             return Err(ServerError::Command("session not found".into()));
         }
+        self.last_session_id = self.client_session_id;
         self.client_session_id = Some(session_id);
+        Ok(())
+    }
+
+    fn detach_other_clients(&mut self) -> Result<(), ServerError> {
+        // Mock: no-op (only one simulated client)
         Ok(())
     }
 

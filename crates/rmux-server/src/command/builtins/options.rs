@@ -259,13 +259,14 @@ pub fn cmd_show_window_options(
     cmd_show_options(&new_args, server)
 }
 
-/// show-options [-g] [-s] [-w] [-t target] [option-name]
+/// show-options [-g] [-q] [-s] [-w] [-t target] [option-name]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_show_options(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let global = has_flag(args, "-g");
+    let _quiet = has_flag(args, "-q");
     let window_scope = has_flag(args, "-w");
 
     let scope = if global {

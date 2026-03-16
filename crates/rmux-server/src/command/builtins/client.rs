@@ -3,11 +3,14 @@
 use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::server::ServerError;
 
-/// attach-session [-t target-session]
+/// attach-session [-d] [-t target-session]
+/// -d: detach other clients attached to the target session
 pub fn cmd_attach_session(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let detach_others = has_flag(args, "-d");
+
     // Find target session
     let target =
         args.iter().position(|a| a == "-t").and_then(|i| args.get(i + 1)).map(String::as_str);
@@ -36,26 +39,43 @@ pub fn cmd_attach_session(
             .ok_or_else(|| ServerError::Command("no sessions".into()))?
     };
 
+    if detach_others {
+        server.detach_other_clients()?;
+    }
+
     Ok(CommandResult::Attach(session_id))
 }
 
-/// detach-client
+/// detach-client [-a]
+/// -a: detach all other clients on the same session (keep current attached)
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_detach_client(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    if has_flag(args, "-a") {
+        server.detach_other_clients()?;
+        return Ok(CommandResult::Ok);
+    }
     Ok(CommandResult::Detach)
 }
 
-/// switch-client [-t target-session] [-n] [-p]
+/// switch-client [-l] [-t target-session] [-n] [-p]
 pub fn cmd_switch_client(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let next = has_flag(args, "-n");
     let prev = has_flag(args, "-p");
+    let last = has_flag(args, "-l");
+
+    if last {
+        let last_id = server
+            .client_last_session_id()
+            .ok_or_else(|| ServerError::Command("no last session".into()))?;
+        server.switch_client(last_id)?;
+        return Ok(CommandResult::Ok);
+    }
 
     if next || prev {
         // Switch to next/previous session
@@ -120,6 +140,6 @@ pub fn cmd_suspend_client(
     args: &[String],
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _target = get_option(args, "-t");
     Ok(CommandResult::Suspend)
 }

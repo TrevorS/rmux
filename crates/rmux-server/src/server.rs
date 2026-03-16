@@ -141,6 +141,8 @@ pub struct Server {
     deferred_commands: Vec<(u64, Vec<String>)>,
     /// Hidden variables from `%hidden` directives, propagated across nested source-file calls.
     config_hidden_vars: HashMap<String, String>,
+    /// Client IDs queued for detach by `detach_other_clients` (processed after command dispatch).
+    pending_detach: Vec<u64>,
 }
 
 impl Server {
@@ -176,6 +178,7 @@ impl Server {
             shim_dir: None,
             deferred_commands: Vec::new(),
             config_hidden_vars: HashMap::new(),
+            pending_detach: Vec::new(),
         }
     }
 
@@ -415,7 +418,7 @@ impl Server {
         };
 
         match crate::command::execute_command(&argv, self) {
-            Ok(CommandResult::RunShell(cmd)) => {
+            Ok(CommandResult::RunShell(cmd) | CommandResult::RunShellBackground(cmd)) => {
                 tracing::debug!("config run-shell: {cmd}");
                 let expanded = crate::config::expand_tilde(&cmd);
                 match self.shell_command(&expanded).spawn() {
@@ -885,6 +888,7 @@ impl Server {
         self.dispatch_command_result(client_id, result).await;
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn dispatch_command_result(
         &mut self,
         client_id: u64,
@@ -970,6 +974,22 @@ impl Server {
                     }
                 }
             }
+            Ok(CommandResult::RunShellBackground(cmd)) => {
+                // Fire and forget — don't capture output or block client
+                match self.shell_command(&cmd).spawn() {
+                    Ok(_child) => {
+                        tracing::debug!("run-shell -b: spawned background: {cmd}");
+                    }
+                    Err(e) => {
+                        tracing::warn!("run-shell -b spawn error: {e}");
+                    }
+                }
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    if !client.is_attached() {
+                        client.send(&Message::Exit).await.ok();
+                    }
+                }
+            }
             Err(e) => {
                 let err_msg = format!("{e}\n");
                 if let Some(client) = self.clients.get_mut(&client_id) {
@@ -984,6 +1004,12 @@ impl Server {
                     }
                 }
             }
+        }
+
+        // Process any clients queued for detach by detach_other_clients().
+        let pending = std::mem::take(&mut self.pending_detach);
+        for cid in pending {
+            self.detach_client(cid).await;
         }
     }
 
@@ -1771,17 +1797,17 @@ impl Server {
     /// Submit the current prompt (called when Enter is pressed).
     fn submit_prompt(&mut self, client_id: u64) {
         use crate::client::PromptType;
-        let (input, prompt_type) = {
+        let (input, prompt_type, template) = {
             let Some(client) = self.clients.get_mut(&client_id) else {
                 return;
             };
-            let (buf, pt) = client
+            let (buf, pt, tmpl) = client
                 .prompt
                 .as_ref()
-                .map(|p| (p.buffer.clone(), p.prompt_type.clone()))
+                .map(|p| (p.buffer.clone(), p.prompt_type.clone(), p.template.clone()))
                 .unwrap_or_default();
             client.prompt = None;
-            (buf, pt)
+            (buf, pt, tmpl)
         };
         if !input.is_empty() {
             // Add to prompt history
@@ -1789,7 +1815,13 @@ impl Server {
             self.prompt_history.truncate(100);
             match prompt_type {
                 PromptType::Command => {
-                    let argv = crate::config::tokenize_command(&input);
+                    // If a template is set, substitute %% with the input
+                    let cmd_str = if let Some(tmpl) = &template {
+                        tmpl.replace("%%", &input)
+                    } else {
+                        input.clone()
+                    };
+                    let argv = crate::config::tokenize_command(&cmd_str);
                     if !argv.is_empty() {
                         self.queue_command(client_id, argv);
                     }
@@ -2287,7 +2319,11 @@ impl Server {
                                 PromptType::SearchForward => format!("/{}", p.buffer),
                                 PromptType::SearchBackward => format!("?{}", p.buffer),
                                 PromptType::Command | PromptType::GotoLine => {
-                                    format!(":{}", p.buffer)
+                                    if let Some(ps) = &p.prompt_str {
+                                        format!("{ps}{}", p.buffer)
+                                    } else {
+                                        format!(":{}", p.buffer)
+                                    }
                                 }
                             }
                         })
@@ -2805,6 +2841,25 @@ impl CommandServer for Server {
         self.clients.get(&self.command_client).and_then(|c| c.session_id)
     }
 
+    fn client_last_session_id(&self) -> Option<u32> {
+        self.clients.get(&self.command_client).and_then(|c| c.last_session_id)
+    }
+
+    fn detach_other_clients(&mut self) -> Result<(), ServerError> {
+        let session_id = self
+            .client_session_id()
+            .ok_or_else(|| ServerError::Command("no current session".into()))?;
+        let my_id = self.command_client;
+        let others: Vec<u64> = self
+            .clients
+            .values()
+            .filter(|c| c.id != my_id && c.session_id == Some(session_id) && c.is_attached())
+            .map(|c| c.id)
+            .collect();
+        self.pending_detach.extend(others);
+        Ok(())
+    }
+
     fn client_active_window(&self) -> Option<u32> {
         let session_id = self.client_session_id()?;
         let session = self.sessions.find_by_id(session_id)?;
@@ -3116,6 +3171,7 @@ impl CommandServer for Server {
         window_idx: u32,
         horizontal: bool,
         cwd: &str,
+        _size: Option<command::SplitSize>,
     ) -> Result<u32, ServerError> {
         let (pane_id, sx, sy, _pane_height) = {
             let session = self
@@ -3416,6 +3472,10 @@ impl CommandServer for Server {
 
     fn list_key_bindings(&self) -> Vec<String> {
         self.keybindings.list_bindings()
+    }
+
+    fn list_key_bindings_with_notes(&self) -> Vec<String> {
+        self.keybindings.list_bindings_with_notes(true)
     }
 
     fn show_messages(&self) -> Vec<String> {
@@ -3855,10 +3915,11 @@ impl CommandServer for Server {
         key_name: &str,
         argv: Vec<String>,
         repeatable: bool,
+        note: Option<String>,
     ) -> Result<(), ServerError> {
         let key = string_to_key(key_name)
             .ok_or_else(|| ServerError::Command(format!("unknown key: {key_name}")))?;
-        self.keybindings.add_binding_with_repeat(table, key, argv, repeatable);
+        self.keybindings.add_binding_with_opts(table, key, argv, repeatable, note);
         Ok(())
     }
 
@@ -3869,6 +3930,10 @@ impl CommandServer for Server {
             return Err(ServerError::Command(format!("key not bound: {key_name}")));
         }
         Ok(())
+    }
+
+    fn clear_key_table(&mut self, table: &str) {
+        self.keybindings.clear_table(table);
     }
 
     // --- Config ---
@@ -4099,6 +4164,19 @@ impl CommandServer for Server {
             }
             window.zoomed_pane = Some(pane_id);
         }
+        Ok(())
+    }
+
+    fn unzoom_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+        let session = self
+            .sessions
+            .find_by_id_mut(session_id)
+            .ok_or_else(|| ServerError::Command("session not found".into()))?;
+        let window = session
+            .windows
+            .get_mut(&window_idx)
+            .ok_or_else(|| ServerError::Command(format!("window not found: {window_idx}")))?;
+        window.zoomed_pane = None;
         Ok(())
     }
 
@@ -4470,7 +4548,12 @@ impl CommandServer for Server {
         }
     }
 
-    fn rotate_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+    fn rotate_window(
+        &mut self,
+        session_id: u32,
+        window_idx: u32,
+        reverse: bool,
+    ) -> Result<(), ServerError> {
         {
             let session = self
                 .sessions
@@ -4497,19 +4580,22 @@ impl CommandServer for Server {
                 })
                 .collect();
 
-            // Each pane takes the position of the next pane
+            // Each pane takes the position of the next/previous pane
+            let n = positions.len();
             for (i, &pid) in pane_ids.iter().enumerate() {
-                let next_pos = &positions[(i + 1) % positions.len()];
+                let target_pos =
+                    if reverse { &positions[(i + n - 1) % n] } else { &positions[(i + 1) % n] };
                 if let Some(pane) = window.panes.get_mut(&pid) {
-                    pane.xoff = next_pos.0;
-                    pane.yoff = next_pos.1;
-                    pane.resize(next_pos.2, next_pos.3);
+                    pane.xoff = target_pos.0;
+                    pane.yoff = target_pos.1;
+                    pane.resize(target_pos.2, target_pos.3);
                 }
             }
 
-            // Advance active pane
+            // Advance/retreat active pane
             if let Some(pos) = pane_ids.iter().position(|&id| id == window.active_pane) {
-                let next_active = pane_ids[(pos + 1) % pane_ids.len()];
+                let next_active =
+                    if reverse { pane_ids[(pos + n - 1) % n] } else { pane_ids[(pos + 1) % n] };
                 window.active_pane = next_active;
             }
         }
@@ -4617,9 +4703,21 @@ impl CommandServer for Server {
 
     // --- Command prompt ---
 
-    fn enter_command_prompt(&mut self) {
+    fn enter_command_prompt_with(
+        &mut self,
+        initial_text: Option<&str>,
+        prompt_str: Option<&str>,
+        template: Option<&str>,
+    ) {
         if let Some(client) = self.clients.get_mut(&self.command_client) {
-            client.prompt = Some(PromptState::default());
+            let mut state = PromptState::default();
+            if let Some(text) = initial_text {
+                state.buffer = text.to_string();
+                state.cursor_pos = text.len();
+            }
+            state.prompt_str = prompt_str.map(String::from);
+            state.template = template.map(String::from);
+            client.prompt = Some(state);
         }
     }
 
@@ -4639,6 +4737,57 @@ impl CommandServer for Server {
         pane.enter_copy_mode(&mode_keys);
         self.mark_clients_redraw(session_id);
         Ok(())
+    }
+
+    fn dispatch_copy_mode_command(&mut self, command: &str) -> Result<bool, ServerError> {
+        let session_id =
+            self.client_session_id().ok_or(ServerError::Command("no session".into()))?;
+        let client_id = self.command_client;
+
+        // Check if active pane is in copy mode
+        let in_copy_mode = self
+            .sessions
+            .find_by_id(session_id)
+            .and_then(|s| s.active_window())
+            .and_then(|w| w.active_pane())
+            .is_some_and(|p| p.copy_mode.is_some());
+
+        if !in_copy_mode {
+            return Ok(false);
+        }
+
+        // Handle copy-pipe variants
+        if command.starts_with("copy-pipe") {
+            let parts: Vec<&str> = command.splitn(2, ' ').collect();
+            let action_name = parts[0];
+            let pipe_cmd = parts.get(1).copied().unwrap_or_default().to_string();
+            let cancel = action_name == "copy-pipe-and-cancel";
+            let copy_data = {
+                let Some(session) = self.sessions.find_by_id_mut(session_id) else {
+                    return Ok(false);
+                };
+                let Some(window) = session.active_window_mut() else { return Ok(false) };
+                let Some(pane) = window.active_pane_mut() else { return Ok(false) };
+                let Some(cm) = &mut pane.copy_mode else { return Ok(false) };
+                copymode::copy_selection(&pane.screen, cm)
+            };
+            let action = CopyModeAction::CopyPipe { copy_data, command: pipe_cmd, cancel };
+            self.handle_copy_mode_action(client_id, session_id, action);
+            return Ok(true);
+        }
+
+        let action = {
+            let Some(session) = self.sessions.find_by_id_mut(session_id) else {
+                return Ok(false);
+            };
+            let Some(window) = session.active_window_mut() else { return Ok(false) };
+            let Some(pane) = window.active_pane_mut() else { return Ok(false) };
+            let Some(cm) = &mut pane.copy_mode else { return Ok(false) };
+            copymode::dispatch_copy_mode_action(&pane.screen, cm, command)
+        };
+
+        self.handle_copy_mode_action(client_id, session_id, action);
+        Ok(true)
     }
 
     fn pane_mode_keys(&self) -> String {
@@ -4740,6 +4889,7 @@ impl CommandServer for Server {
         if let Some(client) = self.clients.get_mut(&client_id) {
             // Detach from old session
             if let Some(old_id) = client.session_id {
+                client.last_session_id = Some(old_id);
                 if let Some(old_session) = self.sessions.find_by_id_mut(old_id) {
                     old_session.attached = old_session.attached.saturating_sub(1);
                 }
