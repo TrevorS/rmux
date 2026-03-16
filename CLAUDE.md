@@ -27,7 +27,7 @@ cargo +nightly fuzz run fuzz_input_parser   # from project root
 
 **Pre-commit checklist:** `make check` (or `cargo fmt && cargo clippy --all-targets --all-features && cargo test`)
 
-**CI:** GitHub Actions runs fmt/clippy/test + coverage on push to `master` and on PRs (`.github/workflows/ci.yml`).
+**CI:** GitHub Actions runs fmt/clippy/test on push to `master` and on PRs (`.github/workflows/ci.yml`).
 
 ## Workspace Crates
 
