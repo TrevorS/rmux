@@ -15,7 +15,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 |---|---|---|---|
 | `new-session` | `-A -c -d -D -e -E -F -f -n -P -s -X -x -y`, shell cmd | — | Complete |
 | `kill-session` | `-a -C -t` | — | Complete |
-| `list-sessions` / `ls` | `-F -f` | — | Functional |
+| `list-sessions` / `ls` | `-F -f` | — | Functional (`-F` format and `-f` filter parsed but not applied) |
 | `has-session` | `-t` | — | Complete |
 | `rename-session` | `-t` | — | Complete |
 | `switch-client` | `-c -E -F -l -n -O -p -r -t -T -Z` | — | Complete |
@@ -41,7 +41,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `last-window` | `-t` | — | Complete |
 | `rename-window` | `-t` | — | Complete |
 | `list-windows` | `-a -F -f -t` | — | Complete |
-| `find-window` | `-C -N -r -t -T -Z` | — | Functional |
+| `find-window` | `-C -N -r -t -T -Z` | — | Functional (`-C/-N/-T` scope flags parsed but search is name-only) |
 | `swap-window` | `-d -s -t` | — | Complete |
 | `move-window` | `-a -b -d -k -r -s -t` | — | Complete |
 | `rotate-window` | `-D -t -U` | — | Complete |
@@ -104,7 +104,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `choose-buffer` / `choose-client` | `-F -f -G -K -N -O -r -t -Z` | — | Complete |
 | `display-menu` | `-b -c -H -O -s -S -t -T -x -y` | — | Complete |
 | `display-popup` | `-B -c -C -d -e -E -h -K -s -S -T -t -w -x -y` | — | Complete |
-| `pipe-pane` | `-I -o -t` | — | Functional |
+| `pipe-pane` | `-I -o -t` | — | Functional (`-o` toggle parsed but not applied) |
 | `resize-window` | `-A -D -L -R -U -t -x -y` | — | Complete |
 
 ### Environment Commands
