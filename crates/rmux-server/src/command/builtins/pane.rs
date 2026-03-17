@@ -52,7 +52,11 @@ pub fn cmd_split_window(
         None
     };
 
-    server.split_window(session_id, window_idx, horizontal, &cwd, size)?;
+    // Remaining positional args form the shell command
+    let shell_args = crate::command::positional_args(args, &["-c", "-e", "-F", "-l", "-p", "-t"]);
+    let shell_cmd = if shell_args.is_empty() { None } else { Some(shell_args.join(" ")) };
+
+    server.split_window(session_id, window_idx, horizontal, &cwd, size, shell_cmd.as_deref())?;
 
     Ok(CommandResult::Ok)
 }
@@ -515,10 +519,11 @@ pub fn cmd_respawn_pane(
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _kill_first = has_flag(args, "-k");
-    let _shell_cmd = crate::command::positional_args(args, &["-t"]);
+    let shell_args = crate::command::positional_args(args, &["-t"]);
+    let shell_cmd = if shell_args.is_empty() { None } else { Some(shell_args.join(" ")) };
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     let pane_id = resolve_pane_id(args, server, session_id, window_idx)?;
-    server.respawn_pane(session_id, window_idx, pane_id)?;
+    server.respawn_pane(session_id, window_idx, pane_id, shell_cmd.as_deref())?;
     Ok(CommandResult::Ok)
 }
 

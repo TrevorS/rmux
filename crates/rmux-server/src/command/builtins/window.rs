@@ -15,6 +15,8 @@ pub fn cmd_new_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    use crate::command::positional_args;
+
     let _detached = has_flag(args, "-d");
     let _after = has_flag(args, "-a");
     let _before = has_flag(args, "-b");
@@ -34,7 +36,12 @@ pub fn cmd_new_window(
             .map_or_else(|_| "/".to_string(), |p| p.to_string_lossy().into_owned())
     };
 
-    let (window_idx, _pane_id) = server.create_window(session_id, name, &cwd)?;
+    // Remaining positional args form the shell command
+    let shell_args = positional_args(args, &["-n", "-c", "-t", "-e", "-F"]);
+    let shell_cmd = if shell_args.is_empty() { None } else { Some(shell_args.join(" ")) };
+
+    let (window_idx, _pane_id) =
+        server.create_window(session_id, name, &cwd, shell_cmd.as_deref())?;
 
     // Select the new window (unless -d)
     if !has_flag(args, "-d") {
@@ -379,45 +386,119 @@ pub fn cmd_previous_layout(
     Ok(CommandResult::Ok)
 }
 
-/// respawn-window [-k] [-t target-window]
+/// respawn-window [-k] [-t target-window] [shell-command]
 /// -k: kill the window before respawning (allow respawn even if not dead)
 pub fn cmd_respawn_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    use crate::command::positional_args;
+
     let _kill_first = has_flag(args, "-k");
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
     let pane_id = server
         .active_pane_id_for(session_id, window_idx)
         .ok_or_else(|| ServerError::Command("no active pane".into()))?;
-    server.respawn_pane(session_id, window_idx, pane_id)?;
+
+    // Remaining positional args form the shell command
+    let shell_args = positional_args(args, &["-t"]);
+    let shell_cmd = if shell_args.is_empty() { None } else { Some(shell_args.join(" ")) };
+
+    server.respawn_pane(session_id, window_idx, pane_id, shell_cmd.as_deref())?;
     Ok(CommandResult::Ok)
 }
 
-/// link-window [-s src-window] [-t dst-window]
+/// link-window [-dk] [-s src-window] [-t dst-window]
 ///
-/// Link a window from one session to another. Stub — full implementation
-/// requires shared window ownership model.
-#[allow(clippy::unnecessary_wraps)]
+/// Link (copy) a window from one session to another.
+/// -d: do not select the linked window
+/// -k: kill target window if it exists
 pub fn cmd_link_window(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    Err(ServerError::Command("link-window: not yet implemented".into()))
+    let _detached = has_flag(args, "-d");
+    let kill_existing = has_flag(args, "-k");
+
+    // Parse source: -s session:window
+    let src_target = get_option(args, "-s");
+    let (src_session, src_window_idx) = if let Some(t) = src_target {
+        resolve_target_pair(t, server)?
+    } else {
+        let sid = server
+            .client_session_id()
+            .ok_or_else(|| ServerError::Command("no current session".into()))?;
+        let widx = server
+            .active_window_for(sid)
+            .ok_or_else(|| ServerError::Command("no current window".into()))?;
+        (sid, widx)
+    };
+
+    // Parse destination: -t session:window or session
+    let dst_target = get_option(args, "-t");
+    let (dst_session, dst_window_idx) = if let Some(t) = dst_target {
+        if t.contains(':') {
+            let (s, w) = resolve_target_pair(t, server)?;
+            (s, Some(w))
+        } else {
+            let sid = server
+                .find_session_id(t)
+                .ok_or_else(|| ServerError::Command(format!("session not found: {t}")))?;
+            (sid, None)
+        }
+    } else {
+        let sid = server
+            .client_session_id()
+            .ok_or_else(|| ServerError::Command("no current session".into()))?;
+        (sid, None)
+    };
+
+    server.link_window(src_session, src_window_idx, dst_session, dst_window_idx, kill_existing)?;
+    Ok(CommandResult::Ok)
 }
 
-/// unlink-window [-t target-window]
+/// unlink-window [-k] [-t target-window]
 ///
-/// Unlink a window from the current session. Stub.
-#[allow(clippy::unnecessary_wraps)]
+/// Unlink a window. Since rmux does not support shared windows,
+/// this behaves like kill-window when the window has only one link (always).
+/// -k: kill even if it's the last window
 pub fn cmd_unlink_window(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
-    Err(ServerError::Command("unlink-window: not yet implemented".into()))
+    let _kill_last = has_flag(args, "-k");
+    let session_id = resolve_session(args, server)?;
+    let window_idx = resolve_window_idx(args, server, session_id)?;
+    server.unlink_window(session_id, window_idx)?;
+    Ok(CommandResult::Ok)
+}
+
+/// Resolve a "session:window" target string into (session_id, window_idx).
+fn resolve_target_pair(
+    target: &str,
+    server: &dyn CommandServer,
+) -> Result<(u32, u32), ServerError> {
+    if let Some(colon) = target.find(':') {
+        let session_name = &target[..colon];
+        let window_part = &target[colon + 1..];
+        let session_id = server
+            .find_session_id(session_name)
+            .ok_or_else(|| ServerError::Command(format!("session not found: {session_name}")))?;
+        let window_idx: u32 = window_part
+            .parse()
+            .map_err(|_| ServerError::Command(format!("invalid window index: {window_part}")))?;
+        Ok((session_id, window_idx))
+    } else {
+        // Just a session name — use its active window
+        let session_id = server
+            .find_session_id(target)
+            .ok_or_else(|| ServerError::Command(format!("session not found: {target}")))?;
+        let window_idx = server
+            .active_window_for(session_id)
+            .ok_or_else(|| ServerError::Command("no active window".into()))?;
+        Ok((session_id, window_idx))
+    }
 }
 
 /// move-pane [-s src-pane] [-t dst-pane]

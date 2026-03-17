@@ -50,7 +50,11 @@ pub fn cmd_new_session(
             .map_or_else(|_| "/".to_string(), |p| p.to_string_lossy().into_owned())
     };
 
-    let session_id = server.create_session(name, &cwd, sx, sy)?;
+    // Remaining positional args form the shell command for the initial window
+    let shell_args = positional_args(args, &["-s", "-n", "-c", "-x", "-y", "-t", "-e", "-F", "-f"]);
+    let shell_cmd = if shell_args.is_empty() { None } else { Some(shell_args.join(" ")) };
+
+    let session_id = server.create_session(name, &cwd, sx, sy, shell_cmd.as_deref())?;
 
     // Rename initial window if -n was given
     if let Some(win_name) = window_name {
@@ -58,10 +62,6 @@ pub fn cmd_new_session(
             server.rename_window(session_id, widx, win_name)?;
         }
     }
-
-    // Remaining positional args as shell command (not yet supported for execution,
-    // but tmux uses the first positional as the shell command for the initial window)
-    let _shell_cmd = positional_args(args, &["-s", "-n", "-c", "-x", "-y", "-t"]);
 
     if detached { Ok(CommandResult::Ok) } else { Ok(CommandResult::Attach(session_id)) }
 }

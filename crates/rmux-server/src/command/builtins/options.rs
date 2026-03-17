@@ -12,6 +12,7 @@ struct SetOptionFlags {
     quiet: bool,
     only_if_unset: bool,
     unset: bool,
+    unset_all: bool,
     append: bool,
     format_expand: bool,
     target: Option<String>,
@@ -25,6 +26,7 @@ impl SetOptionFlags {
             quiet: has_flag(args, "-q"),
             only_if_unset: has_flag(args, "-o"),
             unset: has_flag(args, "-u"),
+            unset_all: has_flag(args, "-U"),
             append: has_flag(args, "-a"),
             format_expand: has_flag(args, "-F"),
             target: get_option(args, "-t").map(String::from),
@@ -52,8 +54,8 @@ pub fn cmd_set_option(
     }
     let raw_key = positional[0];
 
-    // Unset mode: no value needed
-    if flags.unset {
+    // Unset mode: no value needed. -U unsets globally across all sessions/windows.
+    if flags.unset || flags.unset_all {
         return handle_unset(raw_key, &flags, server);
     }
 
@@ -95,7 +97,8 @@ fn handle_unset(
     flags: &SetOptionFlags,
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    if flags.global || (!flags.window_scope && flags.target.is_none()) {
+    // -U unsets globally across all scopes
+    if flags.unset_all || flags.global || (!flags.window_scope && flags.target.is_none()) {
         server.unset_server_option(key)?;
     } else if flags.window_scope {
         let (session_id, window_idx) = resolve_window_target(flags, server)?;
@@ -383,7 +386,7 @@ mod tests {
     #[test]
     fn set_only_if_unset_session_scope() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         // Set on session scope
         run_set(&["-t", "test", "@opt", "first"], &mut server).unwrap();
@@ -428,7 +431,7 @@ mod tests {
     #[test]
     fn set_append_window_scope() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         run_set(&["-w", "window-status-format", "A"], &mut server).unwrap();
         run_set(&["-aw", "window-status-format", "B"], &mut server).unwrap();
@@ -459,7 +462,7 @@ mod tests {
     #[test]
     fn set_unset_session_scope() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         run_set(&["-t", "test", "@opt", "val"], &mut server).unwrap();
         assert!(server.has_session_option(sid, "@opt"));
@@ -470,7 +473,7 @@ mod tests {
     #[test]
     fn set_unset_window_scope() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         let widx = server.active_window_for(sid).unwrap_or(0);
         run_set(&["-w", "@wopt", "val"], &mut server).unwrap();
@@ -492,7 +495,7 @@ mod tests {
     #[test]
     fn set_format_expand_with_user_option() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         // Set a user option that -F can reference
         run_set(&["-g", "@thm_bg", "#1e1e2e"], &mut server).unwrap();
@@ -505,7 +508,7 @@ mod tests {
     #[test]
     fn set_format_expand_with_builtin_var() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("mytest", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("mytest", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         // -F should expand #{session_name}
         run_set(&["-gF", "@info", "s=#{session_name}"], &mut server).unwrap();
@@ -530,7 +533,7 @@ mod tests {
     #[test]
     fn set_combined_agf() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         run_set(&["-g", "@thm_blue", "#89b4fa"], &mut server).unwrap();
         run_set(&["-g", "status-right", "hello"], &mut server).unwrap();
@@ -543,7 +546,7 @@ mod tests {
     #[test]
     fn set_combined_wgf() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
         run_set(&["-g", "@color", "red"], &mut server).unwrap();
         // -wgF: window + global + format. Since -g takes precedence, sets server-level.
@@ -599,7 +602,7 @@ mod tests {
     #[test]
     fn catppuccin_format_expand_phase() {
         let mut server = MockCommandServer::new();
-        let sid = server.create_session("test", "/tmp", 80, 24).unwrap();
+        let sid = server.create_session("test", "/tmp", 80, 24, None).unwrap();
         server.client_session_id = Some(sid);
 
         // Set theme colors

@@ -182,6 +182,93 @@ impl Pty {
             }
         }
     }
+
+    /// Spawn a command in this PTY via `shell -c "command"`.
+    ///
+    /// Like `spawn_shell`, but runs a specific command instead of an interactive shell.
+    /// When the command exits, the pane becomes dead (EOF on master fd).
+    pub fn spawn_command(
+        self,
+        shell: &str,
+        cwd: &str,
+        command: &str,
+    ) -> Result<SpawnedProcess, PtyError> {
+        // Prepare C strings before fork (allocation is not async-signal-safe).
+        let shell_cstr = CString::new(shell).map_err(|e| {
+            PtyError::Spawn(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
+        let cwd_cstr = CString::new(cwd).map_err(|e| {
+            PtyError::Spawn(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
+        let flag_cstr = CString::new("-c").map_err(|e| {
+            PtyError::Spawn(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
+        let command_cstr = CString::new(command).map_err(|e| {
+            PtyError::Spawn(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
+
+        let Pty { master, slave } = self;
+        let slave_raw = slave.as_raw_fd();
+
+        // SAFETY: fork() is required for PTY process spawning. The child process
+        // only calls async-signal-safe libc functions (setsid, ioctl, dup2, close,
+        // chdir, signal, execvp, _exit) before exec replaces the process image.
+        // All strings were allocated before fork.
+        let result = unsafe { fork().map_err(PtyError::Create)? };
+
+        match result {
+            ForkResult::Child => {
+                // SAFETY: In child process after fork. Only calling async-signal-safe
+                // libc functions with pre-allocated C strings.
+                unsafe {
+                    // Create new session (detach from parent's controlling terminal)
+                    libc::setsid();
+
+                    // Set the slave as the controlling terminal
+                    libc::ioctl(slave_raw, libc::TIOCSCTTY as libc::c_ulong, 0);
+
+                    // Redirect stdin/stdout/stderr to the slave PTY
+                    libc::dup2(slave_raw, libc::STDIN_FILENO);
+                    libc::dup2(slave_raw, libc::STDOUT_FILENO);
+                    libc::dup2(slave_raw, libc::STDERR_FILENO);
+
+                    // Close all fds > 2. This is critical: without it, other
+                    // panes' master fds leak into this child, preventing EOF
+                    // when siblings exit (their slave fds stay open here).
+                    // This matches tmux's use of closefrom(STDERR_FILENO + 1).
+                    close_fds_above(libc::STDERR_FILENO);
+
+                    // Change to the working directory
+                    libc::chdir(cwd_cstr.as_ptr());
+
+                    // Reset signal handlers to defaults
+                    libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+                    libc::signal(libc::SIGINT, libc::SIG_DFL);
+                    libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+                    libc::signal(libc::SIGTERM, libc::SIG_DFL);
+                    libc::signal(libc::SIGHUP, libc::SIG_DFL);
+
+                    // Exec the command via shell -c "command"
+                    let argv: [*const libc::c_char; 4] = [
+                        shell_cstr.as_ptr(),
+                        flag_cstr.as_ptr(),
+                        command_cstr.as_ptr(),
+                        std::ptr::null(),
+                    ];
+                    libc::execvp(shell_cstr.as_ptr(), argv.as_ptr());
+
+                    // execvp only returns on failure
+                    libc::_exit(127);
+                }
+            }
+            ForkResult::Parent { child } => {
+                // Close slave fd in parent (child has its own copy from fork)
+                drop(slave);
+
+                Ok(SpawnedProcess { master, pid: child })
+            }
+        }
+    }
 }
 
 /// Close all file descriptors above `lowfd`.
@@ -423,6 +510,15 @@ mod tests {
     fn pty_device_name_invalid_fd() {
         assert!(pty_device_name(-1).is_none());
         assert!(pty_device_name(9999).is_none());
+    }
+
+    #[test]
+    fn spawn_command_runs_and_exits() {
+        let pty = Pty::open(80, 24).unwrap();
+        let spawned = pty.spawn_command("/bin/sh", "/tmp", "echo hello").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let status = waitpid(spawned.pid, Some(WaitPidFlag::WNOHANG));
+        assert!(status.is_ok());
     }
 
     #[test]

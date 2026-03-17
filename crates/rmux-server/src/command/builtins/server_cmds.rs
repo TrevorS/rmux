@@ -537,14 +537,26 @@ pub fn cmd_confirm_before(
 /// -L: lock channel
 /// -S: signal channel
 /// -U: unlock channel
-#[allow(clippy::unnecessary_wraps)]
 pub fn cmd_wait_for(
     args: &[String],
-    _server: &mut dyn CommandServer,
+    server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _lock = has_flag(args, "-L");
-    let _signal = has_flag(args, "-S");
-    let _unlock = has_flag(args, "-U");
-    let _positional = positional_args(args, &[]);
+    let lock = has_flag(args, "-L");
+    let signal = has_flag(args, "-S");
+    let unlock = has_flag(args, "-U");
+    let positional = positional_args(args, &[]);
+    let channel = positional
+        .first()
+        .ok_or_else(|| ServerError::Command("wait-for: missing channel name".into()))?;
+
+    if signal {
+        server.wait_channel_signal(channel);
+    } else if lock {
+        server.wait_channel_lock(channel)?;
+    } else if unlock {
+        server.wait_channel_unlock(channel)?;
+    }
+    // Default (no flags): in tmux this blocks until signaled.
+    // We can't block synchronously, so this is a no-op for now.
     Ok(CommandResult::Ok)
 }

@@ -143,6 +143,8 @@ pub struct Server {
     config_hidden_vars: HashMap<String, String>,
     /// Client IDs queued for detach by `detach_other_clients` (processed after command dispatch).
     pending_detach: Vec<u64>,
+    /// Wait-for channels (channel name -> locked).
+    wait_channels: HashMap<String, bool>,
 }
 
 impl Server {
@@ -179,6 +181,7 @@ impl Server {
             deferred_commands: Vec::new(),
             config_hidden_vars: HashMap::new(),
             pending_detach: Vec::new(),
+            wait_channels: HashMap::new(),
         }
     }
 
@@ -2515,10 +2518,15 @@ impl Server {
         sx: u32,
         sy: u32,
         cwd: &str,
+        shell_cmd: Option<&str>,
     ) -> Result<(), ServerError> {
         let shell = pty::default_shell();
         let pty_pair = pty::Pty::open(sx as u16, sy as u16)?;
-        let spawned = pty_pair.spawn_shell(&shell, cwd)?;
+        let spawned = if let Some(cmd) = shell_cmd {
+            pty_pair.spawn_command(&shell, cwd, cmd)?
+        } else {
+            pty_pair.spawn_shell(&shell, cwd)?
+        };
 
         let master_raw = spawned.master_fd();
 
@@ -2889,6 +2897,7 @@ impl CommandServer for Server {
         cwd: &str,
         sx: u32,
         sy: u32,
+        shell_cmd: Option<&str>,
     ) -> Result<u32, ServerError> {
         let session = self.sessions.create(name.to_string(), cwd.to_string());
         let session_id = session.id;
@@ -2912,7 +2921,18 @@ impl CommandServer for Server {
         session.windows.insert(window_idx, window);
 
         // Spawn the shell process
-        self.spawn_pane_process(pane_id, sx, pane_height, cwd)?;
+        self.spawn_pane_process(pane_id, sx, pane_height, cwd, shell_cmd)?;
+
+        // Record the start command if a shell command was provided
+        if let Some(cmd) = shell_cmd {
+            if let Some(session) = self.sessions.find_by_id_mut(session_id) {
+                if let Some(window) = session.windows.get_mut(&session.active_window) {
+                    if let Some(pane) = window.panes.get_mut(&pane_id) {
+                        pane.start_command = cmd.to_string();
+                    }
+                }
+            }
+        }
 
         self.fire_hook("after-new-session");
         Ok(session_id)
@@ -2979,6 +2999,7 @@ impl CommandServer for Server {
         session_id: u32,
         name: Option<&str>,
         cwd: &str,
+        shell_cmd: Option<&str>,
     ) -> Result<(u32, u32), ServerError> {
         let sx = self.client_sx();
         let sy = self.client_sy();
@@ -3000,7 +3021,7 @@ impl CommandServer for Server {
         let window_idx = session.next_window_index();
         session.windows.insert(window_idx, window);
 
-        self.spawn_pane_process(pane_id, sx, pane_height, cwd)?;
+        self.spawn_pane_process(pane_id, sx, pane_height, cwd, shell_cmd)?;
 
         self.fire_hook("after-new-window");
         self.queue_control_notification(session_id, format!("%window-add @{window_idx}\n"));
@@ -3172,6 +3193,7 @@ impl CommandServer for Server {
         horizontal: bool,
         cwd: &str,
         _size: Option<command::SplitSize>,
+        shell_cmd: Option<&str>,
     ) -> Result<u32, ServerError> {
         let (pane_id, sx, sy, _pane_height) = {
             let session = self
@@ -3257,7 +3279,7 @@ impl CommandServer for Server {
         }
 
         // Spawn shell in new pane
-        self.spawn_pane_process(pane_id, sx, sy, cwd)?;
+        self.spawn_pane_process(pane_id, sx, sy, cwd, shell_cmd)?;
 
         // Mark clients for redraw
         self.mark_clients_redraw(session_id);
@@ -4669,6 +4691,7 @@ impl CommandServer for Server {
         session_id: u32,
         window_idx: u32,
         pane_id: u32,
+        shell_cmd: Option<&str>,
     ) -> Result<(), ServerError> {
         // Clean up old PTY
         self.cleanup_pane(pane_id);
@@ -4695,7 +4718,7 @@ impl CommandServer for Server {
         };
 
         // Spawn a new shell process
-        self.spawn_pane_process(pane_id, sx, sy, &cwd)?;
+        self.spawn_pane_process(pane_id, sx, sy, &cwd, shell_cmd)?;
 
         self.mark_clients_redraw(session_id);
         Ok(())
@@ -5111,6 +5134,119 @@ impl CommandServer for Server {
             client.overlay = None;
             client.mark_redraw();
         }
+    }
+
+    fn wait_channel_signal(&mut self, channel: &str) {
+        self.wait_channels.remove(channel);
+    }
+
+    fn wait_channel_lock(&mut self, channel: &str) -> Result<(), ServerError> {
+        if self.wait_channels.get(channel) == Some(&true) {
+            return Err(ServerError::Command(format!("channel {channel} already locked")));
+        }
+        self.wait_channels.insert(channel.to_string(), true);
+        Ok(())
+    }
+
+    fn wait_channel_unlock(&mut self, channel: &str) -> Result<(), ServerError> {
+        if self.wait_channels.get(channel) != Some(&true) {
+            return Err(ServerError::Command(format!("channel {channel} not locked")));
+        }
+        self.wait_channels.remove(channel);
+        Ok(())
+    }
+
+    fn link_window(
+        &mut self,
+        src_session: u32,
+        src_window_idx: u32,
+        dst_session: u32,
+        dst_window_idx: Option<u32>,
+        kill_existing: bool,
+    ) -> Result<u32, ServerError> {
+        // Validate source window exists
+        {
+            let src = self
+                .sessions
+                .find_by_id(src_session)
+                .ok_or_else(|| ServerError::Command("source session not found".into()))?;
+            if !src.windows.contains_key(&src_window_idx) {
+                return Err(ServerError::Command(format!(
+                    "source window not found: {src_window_idx}"
+                )));
+            }
+        }
+
+        // Determine destination index
+        let dst_idx = if let Some(idx) = dst_window_idx {
+            let dst = self
+                .sessions
+                .find_by_id_mut(dst_session)
+                .ok_or_else(|| ServerError::Command("target session not found".into()))?;
+            if dst.windows.contains_key(&idx) {
+                if kill_existing {
+                    // Remove existing window at that index
+                    if let Some(win) = dst.windows.remove(&idx) {
+                        let pane_ids: Vec<u32> = win.panes.keys().copied().collect();
+                        for pid in pane_ids {
+                            self.cleanup_pane(pid);
+                        }
+                    }
+                } else {
+                    return Err(ServerError::Command(format!(
+                        "window {idx} already exists in target session"
+                    )));
+                }
+            }
+            idx
+        } else {
+            let dst = self
+                .sessions
+                .find_by_id(dst_session)
+                .ok_or_else(|| ServerError::Command("target session not found".into()))?;
+            dst.next_window_index()
+        };
+
+        // Get source window name for the new window
+        let window_name = {
+            let src = self
+                .sessions
+                .find_by_id(src_session)
+                .ok_or_else(|| ServerError::Command("source session not found".into()))?;
+            let src_win = src
+                .windows
+                .get(&src_window_idx)
+                .ok_or_else(|| ServerError::Command("source window not found".into()))?;
+            src_win.name.clone()
+        };
+        let cwd = std::env::current_dir()
+            .map_or_else(|_| "/".to_string(), |p| p.to_string_lossy().into_owned());
+
+        // Create new window in destination (not a true link, but functional)
+        let sx = self.client_sx();
+        let sy = self.client_sy();
+        let pane_height = sy.saturating_sub(1);
+        let dst = self
+            .sessions
+            .find_by_id_mut(dst_session)
+            .ok_or_else(|| ServerError::Command("target session not found".into()))?;
+
+        let mut window = Window::new(window_name, sx, pane_height);
+        let pane = Pane::new(sx, pane_height, 2000);
+        let pane_id = pane.id;
+        window.active_pane = pane_id;
+        window.layout = Some(LayoutCell::new_pane(0, 0, sx, pane_height, pane_id));
+        window.panes.insert(pane_id, pane);
+        dst.windows.insert(dst_idx, window);
+
+        self.spawn_pane_process(pane_id, sx, pane_height, &cwd, None)?;
+        self.mark_clients_redraw(dst_session);
+        Ok(dst_idx)
+    }
+
+    fn unlink_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+        // Since we don't support shared windows, unlink is equivalent to kill
+        self.kill_window(session_id, window_idx)
     }
 }
 

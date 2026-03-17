@@ -13,12 +13,12 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `new-session` | `-A -c -d -D -e -E -F -f -n -P -s -X -x -y` | shell cmd | Functional |
+| `new-session` | `-A -c -d -D -e -E -F -f -n -P -s -X -x -y`, shell cmd | — | Complete |
 | `kill-session` | `-a -C -t` | — | Complete |
 | `list-sessions` / `ls` | `-F -f` | — | Functional |
 | `has-session` | `-t` | — | Complete |
 | `rename-session` | `-t` | — | Complete |
-| `switch-client` | `-c -E -l -n -p -r -t -T -Z` | `-F -O` | Functional |
+| `switch-client` | `-c -E -F -l -n -O -p -r -t -T -Z` | — | Complete |
 
 ### Client Commands
 
@@ -26,14 +26,14 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 |---|---|---|---|
 | `attach-session` | `-c -d -E -f -r -t -x` | — | Complete |
 | `detach-client` | `-a -E -P -s -t` | — | Complete |
-| `refresh-client` | `-A -B -C -D -f -l -L -R -S -t -U` | `-c -r` | Functional (full redraw) |
+| `refresh-client` | `-A -B -c -C -D -f -l -L -r -R -S -t -U` | — | Complete |
 | `suspend-client` | `-t` | — | Complete |
 
 ### Window Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `new-window` | `-a -b -c -d -e -F -k -n -P -S -t` | shell cmd | Functional |
+| `new-window` | `-a -b -c -d -e -F -k -n -P -S -t`, shell cmd | — | Complete |
 | `kill-window` | `-a -t` | — | Complete |
 | `select-window` | `-l -n -p -T -t` | — | Complete |
 | `next-window` | `-a -t` | — | Complete |
@@ -47,15 +47,15 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `rotate-window` | `-D -t -U` | — | Complete |
 | `select-layout` | `-E -n -o -p -t layout-name` | — | Complete |
 | `next-layout` / `previous-layout` | `-t` | — | Complete |
-| `respawn-window` | `-k -t` | shell cmd | Functional |
-| `link-window` | — | all | Stub (always errors) |
-| `unlink-window` | — | all | Stub (always errors) |
+| `respawn-window` | `-k -t`, shell cmd | — | Complete |
+| `link-window` | `-d -k -s -t` | — | Functional (copies window, no shared ownership) |
+| `unlink-window` | `-k -t` | — | Functional (kills window, no shared ownership) |
 
 ### Pane Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `split-window` | `-b -c -d -e -f -F -h -I -l -p -P -t -v -Z` | — | Complete |
+| `split-window` | `-b -c -d -e -f -F -h -I -l -p -P -t -v -Z`, shell cmd | — | Complete |
 | `select-pane` | `-D -d -e -g -L -l -M -m -P -R -T -t -U -Z` | — | Complete |
 | `kill-pane` | `-a -t` | — | Complete |
 | `list-panes` | `-a -F -f -s -t` | — | Complete |
@@ -65,7 +65,7 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `break-pane` | `-a -b -d -F -n -P -s -t` | — | Complete |
 | `join-pane` | `-b -d -f -h -l -p -s -t -v` | — | Complete |
 | `last-pane` | `-d -e -t -Z` | — | Complete |
-| `respawn-pane` | `-k -t` | — | Complete |
+| `respawn-pane` | `-k -t`, shell cmd | — | Complete |
 
 ### Server / Control Commands
 
@@ -81,13 +81,13 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `confirm-before` | `-b -c -p -t -y` | — | Complete |
 | `send-prefix` | `-2 -t` | — | Complete |
 | `clear-history` | `-H -t` | — | Complete |
-| `wait-for` | `-L -S -U` | — | No-op stub (flags parsed) |
+| `wait-for` | `-L -S -U` | — | Functional (lock/signal/unlock; blocking wait is no-op) |
 
 ### Option Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `set-option` / `set` | `-a -F -g -o -p -q -s -t -u -w` | `-U` | Well-implemented |
+| `set-option` / `set` | `-a -F -g -o -p -q -s -t -u -U -w` | — | Complete |
 | `show-options` / `show` | `-A -g -H -p -q -s -t -v -w` | — | Complete |
 | `set-window-option` / `setw` | delegates to set-option `-w` | — | Complete |
 | `show-window-options` | delegates to show-options `-w` | — | Complete |

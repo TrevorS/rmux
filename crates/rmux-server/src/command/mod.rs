@@ -125,6 +125,7 @@ pub trait CommandServer {
         cwd: &str,
         sx: u32,
         sy: u32,
+        shell_cmd: Option<&str>,
     ) -> Result<u32, ServerError>;
     fn kill_session(&mut self, name: &str) -> Result<(), ServerError>;
     fn has_session(&self, name: &str) -> bool;
@@ -139,6 +140,7 @@ pub trait CommandServer {
         session_id: u32,
         name: Option<&str>,
         cwd: &str,
+        shell_cmd: Option<&str>,
     ) -> Result<(u32, u32), ServerError>;
     fn kill_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
     fn select_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
@@ -152,6 +154,20 @@ pub trait CommandServer {
         name: &str,
     ) -> Result<(), ServerError>;
     fn list_windows(&self, session_id: u32) -> Vec<String>;
+    /// Link (copy) a window from one session to another.
+    /// Creates a new window in `dst_session` with a fresh pane running the default shell.
+    /// True shared-window semantics are not yet supported.
+    fn link_window(
+        &mut self,
+        src_session: u32,
+        src_window_idx: u32,
+        dst_session: u32,
+        dst_window_idx: Option<u32>,
+        kill_existing: bool,
+    ) -> Result<u32, ServerError>;
+    /// Unlink a window from a session. Since rmux does not support shared windows,
+    /// this is equivalent to killing the window.
+    fn unlink_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError>;
 
     // --- Pane operations ---
     fn split_window(
@@ -161,6 +177,7 @@ pub trait CommandServer {
         horizontal: bool,
         cwd: &str,
         size: Option<SplitSize>,
+        shell_cmd: Option<&str>,
     ) -> Result<u32, ServerError>;
     fn kill_pane(
         &mut self,
@@ -369,6 +386,7 @@ pub trait CommandServer {
         session_id: u32,
         window_idx: u32,
         pane_id: u32,
+        shell_cmd: Option<&str>,
     ) -> Result<(), ServerError>;
 
     // --- Command prompt ---
@@ -431,6 +449,12 @@ pub trait CommandServer {
     fn send_bytes_to_pane(&self, bytes: &[u8]) -> Result<(), ServerError>;
     /// Clear scrollback history for the active pane.
     fn clear_history(&mut self) -> Result<(), ServerError>;
+    /// Signal a wait-for channel, waking any waiters.
+    fn wait_channel_signal(&mut self, channel: &str);
+    /// Lock a wait-for channel.
+    fn wait_channel_lock(&mut self, channel: &str) -> Result<(), ServerError>;
+    /// Unlock a wait-for channel.
+    fn wait_channel_unlock(&mut self, channel: &str) -> Result<(), ServerError>;
 
     // --- Client switching ---
     /// Switch the current client to a different session.

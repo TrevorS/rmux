@@ -490,7 +490,7 @@ mod display_tests {
         s.create_test_session("beta");
         // Add an extra window to alpha
         let alpha_id = s.find_session_id("alpha").unwrap();
-        s.create_window(alpha_id, Some("editor"), "/tmp").unwrap();
+        s.create_window(alpha_id, Some("editor"), "/tmp", None).unwrap();
 
         let result = exec(&mut s, &["choose-tree"]).unwrap();
         match result {
@@ -910,6 +910,38 @@ mod server_cmd_tests {
     }
 
     #[test]
+    fn wait_for_signal() {
+        let mut s = MockCommandServer::new();
+        // Signal should work even without prior lock
+        let result = exec(&mut s, &["wait-for", "-S", "mychan"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn wait_for_lock_unlock() {
+        let mut s = MockCommandServer::new();
+        // Lock
+        let result = exec(&mut s, &["wait-for", "-L", "ch1"]);
+        assert!(result.is_ok());
+        // Double lock should fail
+        let result = exec(&mut s, &["wait-for", "-L", "ch1"]);
+        assert!(result.is_err());
+        // Unlock
+        let result = exec(&mut s, &["wait-for", "-U", "ch1"]);
+        assert!(result.is_ok());
+        // Double unlock should fail
+        let result = exec(&mut s, &["wait-for", "-U", "ch1"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn wait_for_missing_channel() {
+        let mut s = MockCommandServer::new();
+        let result = exec(&mut s, &["wait-for", "-S"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn set_hook_and_show_hooks() {
         let mut s = MockCommandServer::new();
         let result = exec(&mut s, &["set-hook", "after-new-session", "display-message", "hi"]);
@@ -1272,5 +1304,141 @@ mod mark_binding_tests {
 
         let output = output_text(exec(&mut s, &["list-keys"]));
         assert!(output.contains("swap-mark"), "should have swap-mark binding: {output}");
+    }
+
+    // --- Shell command passthrough ---
+
+    #[test]
+    fn new_session_with_shell_command() {
+        let mut s = MockCommandServer::new();
+        // Positional arg after flags becomes the shell command
+        let result = exec(&mut s, &["new-session", "-d", "-s", "test", "echo hello"]);
+        assert!(result.is_ok());
+        assert!(s.has_session("test"));
+    }
+
+    #[test]
+    fn new_window_with_shell_command() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let result = exec(&mut s, &["new-window", "-t", "test", "top"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn split_window_with_shell_command() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let result = exec(&mut s, &["split-window", "-t", "test:0", "vim"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn respawn_pane_with_shell_command() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let result = exec(&mut s, &["respawn-pane", "-t", "test:0", "bash -c 'echo hi'"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn respawn_window_with_shell_command() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        let result = exec(&mut s, &["respawn-window", "-t", "test:0", "zsh"]);
+        assert!(result.is_ok());
+    }
+
+    // --- link-window / unlink-window ---
+
+    #[test]
+    fn link_window_copies_to_target_session() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("src");
+        s.create_test_session("dst");
+
+        let result = exec(&mut s, &["link-window", "-s", "src:0", "-t", "dst"]);
+        assert!(result.is_ok());
+
+        // dst should now have 2 windows (its original + linked)
+        let dst_id = s.find_session_id("dst").unwrap();
+        let windows = s.list_windows(dst_id);
+        assert_eq!(windows.len(), 2, "dst should have 2 windows after link");
+    }
+
+    #[test]
+    fn link_window_with_kill_existing() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("src");
+        s.create_test_session("dst");
+
+        // Link to specific index that already exists, with -k
+        let result = exec(&mut s, &["link-window", "-k", "-s", "src:0", "-t", "dst:0"]);
+        assert!(result.is_ok());
+
+        let dst_id = s.find_session_id("dst").unwrap();
+        let windows = s.list_windows(dst_id);
+        assert_eq!(windows.len(), 1, "dst should still have 1 window after -k replace");
+    }
+
+    #[test]
+    fn link_window_errors_on_existing_without_kill() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("src");
+        s.create_test_session("dst");
+
+        let result = exec(&mut s, &["link-window", "-s", "src:0", "-t", "dst:0"]);
+        assert!(result.is_err(), "should error when target window exists without -k");
+    }
+
+    #[test]
+    fn unlink_window_removes_window() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        // Create a second window so we can unlink the first
+        exec(&mut s, &["new-window", "-t", "test"]).unwrap();
+
+        let sid = s.find_session_id("test").unwrap();
+        assert_eq!(s.list_windows(sid).len(), 2);
+
+        let result = exec(&mut s, &["unlink-window", "-t", "test:0"]);
+        assert!(result.is_ok());
+        assert_eq!(s.list_windows(sid).len(), 1);
+    }
+
+    // --- set-option -U (unset all) ---
+
+    #[test]
+    fn set_option_unset_all() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        // Set an option globally, then unset with -U
+        exec(&mut s, &["set-option", "-g", "status-left", "foo"]).unwrap();
+        let result = exec(&mut s, &["set-option", "-U", "status-left"]);
+        assert!(result.is_ok());
+    }
+
+    // --- switch-client flag parsing ---
+
+    #[test]
+    fn switch_client_accepts_format_and_sort_flags() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("a");
+        s.create_test_session("b");
+        // -F and -O should be accepted without error
+        let result =
+            exec(&mut s, &["switch-client", "-t", "b", "-F", "#{session_name}", "-O", "name"]);
+        assert!(result.is_ok());
+    }
+
+    // --- refresh-client flag parsing ---
+
+    #[test]
+    fn refresh_client_accepts_cursor_and_report_flags() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+        // -c and -r should be accepted without error
+        let result = exec(&mut s, &["refresh-client", "-c", "-r"]);
+        assert!(result.is_ok());
     }
 }

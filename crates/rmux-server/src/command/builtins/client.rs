@@ -82,6 +82,8 @@ pub fn cmd_switch_client(
     let _zoom = has_flag(args, "-Z");
     let _target_client = get_option(args, "-c");
     let _key_table = get_option(args, "-T");
+    let _format = get_option(args, "-F");
+    let _sort_order = get_option(args, "-O");
 
     if last {
         let last_id = server
@@ -135,7 +137,7 @@ pub fn cmd_switch_client(
     Ok(CommandResult::Ok)
 }
 
-/// refresh-client [-DlRSU] [-A pane:visible-area] [-B subscription]
+/// refresh-client [-cDlrRSU] [-A pane:visible-area] [-B subscription]
 ///   [-C widthxheight] [-f flags] [-L forward-to-client] [-t target-client]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_refresh_client(
@@ -153,6 +155,8 @@ pub fn cmd_refresh_client(
     let _forward_to = get_option(args, "-L");
     let _reset_terminal = has_flag(args, "-R");
     let _unlock = has_flag(args, "-U");
+    let _tracking_cursor = has_flag(args, "-c");
+    let _report_size = has_flag(args, "-r");
     server.refresh_client();
     Ok(CommandResult::Ok)
 }

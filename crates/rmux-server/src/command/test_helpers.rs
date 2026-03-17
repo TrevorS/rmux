@@ -48,6 +48,8 @@ pub struct MockCommandServer {
     pub global_environ: HashMap<String, String>,
     /// Hidden vars from %hidden directives, propagated across nested source-file calls.
     pub config_hidden_vars: HashMap<String, String>,
+    /// Wait-for channels (channel name -> locked).
+    pub wait_channels: HashMap<String, bool>,
 }
 
 impl MockCommandServer {
@@ -71,6 +73,7 @@ impl MockCommandServer {
             prompt_history: Vec::new(),
             global_environ: HashMap::new(),
             config_hidden_vars: HashMap::new(),
+            wait_channels: HashMap::new(),
         }
     }
 
@@ -234,6 +237,7 @@ impl CommandServer for MockCommandServer {
         _cwd: &str,
         _sx: u32,
         sy: u32,
+        _shell_cmd: Option<&str>,
     ) -> Result<u32, ServerError> {
         let session = self.sessions.create(name.to_string(), "/tmp".to_string());
         let session_id = session.id;
@@ -303,6 +307,7 @@ impl CommandServer for MockCommandServer {
         session_id: u32,
         name: Option<&str>,
         _cwd: &str,
+        _shell_cmd: Option<&str>,
     ) -> Result<(u32, u32), ServerError> {
         let sx = self.client_sx;
         let sy = self.client_sy;
@@ -437,6 +442,7 @@ impl CommandServer for MockCommandServer {
         horizontal: bool,
         _cwd: &str,
         _size: Option<crate::command::SplitSize>,
+        _shell_cmd: Option<&str>,
     ) -> Result<u32, ServerError> {
         let new_pane_id = self.add_pane_to_window(session_id, window_idx, horizontal);
         let session = self.sessions.find_by_id_mut(session_id).unwrap();
@@ -1320,6 +1326,7 @@ impl CommandServer for MockCommandServer {
         session_id: u32,
         window_idx: u32,
         pane_id: u32,
+        _shell_cmd: Option<&str>,
     ) -> Result<(), ServerError> {
         let session = self
             .sessions
@@ -1817,5 +1824,85 @@ impl CommandServer for MockCommandServer {
 
     fn close_popup(&mut self) {
         // Mock: no-op
+    }
+
+    fn wait_channel_signal(&mut self, channel: &str) {
+        self.wait_channels.remove(channel);
+    }
+
+    fn wait_channel_lock(&mut self, channel: &str) -> Result<(), ServerError> {
+        if self.wait_channels.get(channel) == Some(&true) {
+            return Err(ServerError::Command(format!("channel {channel} already locked")));
+        }
+        self.wait_channels.insert(channel.to_string(), true);
+        Ok(())
+    }
+
+    fn wait_channel_unlock(&mut self, channel: &str) -> Result<(), ServerError> {
+        if self.wait_channels.get(channel) != Some(&true) {
+            return Err(ServerError::Command(format!("channel {channel} not locked")));
+        }
+        self.wait_channels.remove(channel);
+        Ok(())
+    }
+
+    fn link_window(
+        &mut self,
+        src_session: u32,
+        src_window_idx: u32,
+        dst_session: u32,
+        dst_window_idx: Option<u32>,
+        kill_existing: bool,
+    ) -> Result<u32, ServerError> {
+        // Validate source
+        let window_name = {
+            let src = self
+                .sessions
+                .find_by_id(src_session)
+                .ok_or_else(|| ServerError::Command("source session not found".into()))?;
+            let src_win = src.windows.get(&src_window_idx).ok_or_else(|| {
+                ServerError::Command(format!("source window not found: {src_window_idx}"))
+            })?;
+            src_win.name.clone()
+        };
+
+        let dst_idx = {
+            let dst = self
+                .sessions
+                .find_by_id(dst_session)
+                .ok_or_else(|| ServerError::Command("target session not found".into()))?;
+            let idx = dst_window_idx.unwrap_or_else(|| dst.next_window_index());
+            if dst.windows.contains_key(&idx) && !kill_existing {
+                return Err(ServerError::Command(format!(
+                    "window {idx} already exists in target session"
+                )));
+            }
+            idx
+        };
+
+        let dst = self
+            .sessions
+            .find_by_id_mut(dst_session)
+            .ok_or_else(|| ServerError::Command("target session not found".into()))?;
+        if kill_existing {
+            dst.windows.remove(&dst_idx);
+        }
+
+        let sx = self.client_sx;
+        let sy = self.client_sy;
+        let pane_height = sy.saturating_sub(1);
+        let mut window = Window::new(window_name, sx, pane_height);
+        let pane = Pane::new(sx, pane_height, 2000);
+        let pane_id = pane.id;
+        window.active_pane = pane_id;
+        window.layout = Some(LayoutCell::new_pane(0, 0, sx, pane_height, pane_id));
+        window.panes.insert(pane_id, pane);
+        dst.windows.insert(dst_idx, window);
+
+        Ok(dst_idx)
+    }
+
+    fn unlink_window(&mut self, session_id: u32, window_idx: u32) -> Result<(), ServerError> {
+        self.kill_window(session_id, window_idx)
     }
 }
