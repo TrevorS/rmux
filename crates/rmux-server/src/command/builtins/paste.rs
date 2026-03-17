@@ -6,16 +6,29 @@ use crate::command::{CommandResult, CommandServer, get_option, has_flag, positio
 use crate::server::ServerError;
 
 /// Enter copy mode on the active pane.
-/// copy-mode [-e] [-H] [-M] [-q] [-s src-pane] [-t target-pane] [-u]
+/// copy-mode [-d] [-e] [-H] [-M] [-q] [-u] [-s src-pane] [-S start-line] [-t target-pane]
+/// -d: don't detach other clients
 /// -e: exit copy mode if in it (otherwise no-op)
+/// -H: start at bottom of scrollback
+/// -M: set mark
 /// -q: cancel copy mode
 /// -u: scroll up one page
+/// -S: start line
+/// -s: source pane
+/// -t: target pane
 pub fn cmd_copy_mode(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _exit = has_flag(args, "-e");
     let cancel = has_flag(args, "-q");
     let scroll_up = has_flag(args, "-u");
+    let _detach = has_flag(args, "-d");
+    let _history = has_flag(args, "-H");
+    let _mark = has_flag(args, "-M");
+    let _start = get_option(args, "-S");
+    let _source = get_option(args, "-s");
+    let _target = get_option(args, "-t");
 
     if cancel {
         let _ = server.dispatch_copy_mode_command("cancel");
@@ -36,14 +49,17 @@ pub fn cmd_copy_mode(
 /// -d: delete buffer after pasting
 /// -p: use bracketed paste mode (wrap in ESC[200~ / ESC[201~)
 /// -r: don't use terminal newline translation
+/// -t: target pane
 pub fn cmd_paste_buffer(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let delete = has_flag(args, "-d");
     let _bracket_paste = has_flag(args, "-p");
+    let _no_newline_xlat = has_flag(args, "-r");
     let _separator = get_option(args, "-s");
     let name = get_option(args, "-b");
+    let _target = get_option(args, "-t");
     server.paste_buffer(name)?;
     if delete {
         let buf_name = name.unwrap_or("buffer0000");
@@ -54,11 +70,14 @@ pub fn cmd_paste_buffer(
 }
 
 /// List all paste buffers.
+/// list-buffers [-F format] [-f filter]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_list_buffers(
-    _args: &[String],
+    args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
     let buffers = server.list_buffers();
     if buffers.is_empty() {
         Ok(CommandResult::Ok)
@@ -78,13 +97,20 @@ pub fn cmd_show_buffer(
 }
 
 /// Set a buffer's contents.
+/// set-buffer [-a] [-w] [-b buffer-name] [-n new-name] [-t target-session] data
 /// -a: append to existing buffer instead of replacing
+/// -n: rename buffer
+/// -t: target session
+/// -w: wide character support
 pub fn cmd_set_buffer(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let append = has_flag(args, "-a");
     let name = get_option(args, "-b");
+    let _new_name = get_option(args, "-n");
+    let _target = get_option(args, "-t");
+    let _widechar = has_flag(args, "-w");
     let positionals = positional_args(args, &["-b"]);
     let data = positionals
         .first()
@@ -116,14 +142,18 @@ pub fn cmd_delete_buffer(
     Ok(CommandResult::Ok)
 }
 
-/// save-buffer [-a] [-b buffer-name] path
+/// save-buffer [-a] [-w] [-b buffer-name] [-t target-session] path
 /// -a: append to file instead of overwriting
+/// -t: target session
+/// -w: wide character support
 pub fn cmd_save_buffer(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let append = has_flag(args, "-a");
     let name = get_option(args, "-b");
+    let _target = get_option(args, "-t");
+    let _widechar = has_flag(args, "-w");
     let positionals = positional_args(args, &["-b"]);
     let path = positionals
         .first()
@@ -145,12 +175,16 @@ pub fn cmd_save_buffer(
     Ok(CommandResult::Ok)
 }
 
-/// load-buffer [-b buffer-name] path
+/// load-buffer [-w] [-b buffer-name] [-t target-session] path
+/// -t: target session
+/// -w: wide character support
 pub fn cmd_load_buffer(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let name = get_option(args, "-b");
+    let _target = get_option(args, "-t");
+    let _widechar = has_flag(args, "-w");
     let positionals = positional_args(args, &["-b"]);
     let path = positionals
         .first()

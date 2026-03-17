@@ -3,9 +3,18 @@
 use crate::command::{CommandResult, CommandServer, Direction, SplitSize, get_option, has_flag};
 use crate::server::ServerError;
 
-/// split-window [-h] [-v] [-d] [-l size] [-p percentage] [-c start-directory] [-t target-window]
+/// split-window [-b] [-d] [-f] [-h] [-v] [-I] [-P] [-Z] [-c start-directory] [-e environment]
+/// [-F format] [-l size] [-p percentage] [-t target-window] [shell-command]
+/// -b: split before target pane
+/// -d: do not make the new pane the active one
+/// -e: set an environment variable
+/// -f: use full window size for split
 /// -h: horizontal split (left-right panes, what tmux calls -h)
-/// No flag or -v: vertical split (top-bottom panes)
+/// -v: vertical split (top-bottom panes, default)
+/// -I: forward stdin to the child process
+/// -P: print information about the new pane
+/// -Z: zoom the new pane if the window is zoomed
+/// -F: specify output format
 /// -l: specify new pane size in lines/columns
 /// -p: specify new pane size as percentage
 pub fn cmd_split_window(
@@ -13,6 +22,14 @@ pub fn cmd_split_window(
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let horizontal = has_flag(args, "-h");
+    let _detached = has_flag(args, "-d");
+    let _before = has_flag(args, "-b");
+    let _env = get_option(args, "-e");
+    let _full_window = has_flag(args, "-f");
+    let _format = get_option(args, "-F");
+    let _stdin = has_flag(args, "-I");
+    let _print = has_flag(args, "-P");
+    let _zoom = has_flag(args, "-Z");
 
     let (session_id, window_idx) = resolve_session_window(args, server)?;
 
@@ -75,6 +92,10 @@ pub fn cmd_select_pane(
     if has_flag(args, "-d") || has_flag(args, "-e") {
         return Ok(CommandResult::Ok);
     }
+
+    // -g: get current style, -P: set pane style
+    let _get_style = has_flag(args, "-g");
+    let _set_style = get_option(args, "-P");
 
     // -l: last (previously active) pane
     if has_flag(args, "-l") {
@@ -194,13 +215,16 @@ pub fn cmd_kill_pane(
     Ok(CommandResult::Ok)
 }
 
-/// list-panes [-a] [-s] [-t target-window]
+/// list-panes [-a] [-s] [-F format] [-f filter] [-t target-window]
 /// -a: list panes for all windows in all sessions
 /// -s: list panes for all windows in the target session
 pub fn cmd_list_panes(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
+
     if has_flag(args, "-a") {
         let sessions = server.list_sessions();
         let mut output = Vec::new();
@@ -261,12 +285,19 @@ pub fn cmd_capture_pane(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _print = has_flag(args, "-p");
     let _quiet = has_flag(args, "-q");
     let join_lines = has_flag(args, "-J");
     let _escapes = has_flag(args, "-e");
     let _start_line = get_option(args, "-S");
     let _end_line = get_option(args, "-E");
     let buffer_name = get_option(args, "-b");
+    let _alt_screen = has_flag(args, "-a");
+    let _escape_chars = has_flag(args, "-C");
+    let _mark_pos = has_flag(args, "-M");
+    let _trailing_nl = has_flag(args, "-N");
+    let _print_flag = has_flag(args, "-P");
+    let _title_flag = has_flag(args, "-T");
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     let pane_id = resolve_pane_id(args, server, session_id, window_idx)?;
 
@@ -285,11 +316,15 @@ pub fn cmd_capture_pane(
     }
 }
 
-/// resize-pane [-U|-D|-L|-R|-Z] [-t target-pane] [amount]
+/// resize-pane [-U|-D|-L|-R|-Z] [-x width] [-y height] [-t target-pane] [amount]
 pub fn cmd_resize_pane(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _abs_width = get_option(args, "-x");
+    let _abs_height = get_option(args, "-y");
+    let _mouse = has_flag(args, "-M");
+    let _trim = has_flag(args, "-T");
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     let pane_id = resolve_pane_id(args, server, session_id, window_idx)?;
 
@@ -330,6 +365,7 @@ pub fn cmd_swap_pane(
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let (session_id, window_idx) = resolve_session_window(args, server)?;
+    let _detached = has_flag(args, "-d");
     if has_flag(args, "-Z") {
         server.unzoom_window(session_id, window_idx)?;
     }
@@ -385,12 +421,25 @@ pub fn cmd_swap_pane(
     Ok(CommandResult::Ok)
 }
 
-/// break-pane [-d] [-t target-pane]
+/// break-pane [-a] [-b] [-d] [-P] [-F format] [-n window-name] [-s src-pane] [-t target-window]
+/// -a: insert window after target
+/// -b: insert window before target
+/// -d: do not make the new window the active one
+/// -P: print information about the new window
+/// -F: specify output format
+/// -n: set window name
+/// -s: source pane
 pub fn cmd_break_pane(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let detached = has_flag(args, "-d");
+    let _after = has_flag(args, "-a");
+    let _before = has_flag(args, "-b");
+    let _format = get_option(args, "-F");
+    let _name = get_option(args, "-n");
+    let _print = has_flag(args, "-P");
+    let _source = get_option(args, "-s");
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     let pane_id = resolve_pane_id(args, server, session_id, window_idx)?;
     let new_window_idx = server.break_pane(session_id, window_idx, pane_id)?;
@@ -400,10 +449,12 @@ pub fn cmd_break_pane(
     Ok(CommandResult::Ok)
 }
 
-/// join-pane [-h] [-v] [-d] [-l size] [-p percentage] [-s src-pane] [-t dst-pane]
+/// join-pane [-b] [-d] [-f] [-h] [-v] [-l size] [-p percentage] [-s src-pane] [-t dst-pane]
+/// -b: join before target pane
+/// -d: don't change the active pane
+/// -f: use full window size for split
 /// -h: horizontal split (left-right)
 /// -v: vertical split (top-bottom, default)
-/// -d: don't change the active pane
 pub fn cmd_join_pane(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -411,6 +462,10 @@ pub fn cmd_join_pane(
     let _detached = has_flag(args, "-d");
     // -h means horizontal, -v means vertical (default if neither specified)
     let horizontal = has_flag(args, "-h");
+    let _before = has_flag(args, "-b");
+    let _full_window = has_flag(args, "-f");
+    let _size = get_option(args, "-l");
+    let _percentage = get_option(args, "-p");
 
     // Source: -s flag or current pane
     let (src_session, src_window) = if let Some(src_target) = get_option(args, "-s") {
@@ -442,6 +497,8 @@ pub fn cmd_last_pane(
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let unzoom = has_flag(args, "-Z");
+    let _disable_input = has_flag(args, "-d");
+    let _enable_input = has_flag(args, "-e");
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     if unzoom {
         server.unzoom_window(session_id, window_idx)?;
@@ -450,12 +507,15 @@ pub fn cmd_last_pane(
     Ok(CommandResult::Ok)
 }
 
-/// respawn-pane [-k] [-t target-pane]
+/// respawn-pane [-k] [-t target-pane] [shell-command]
 /// -k: kill the pane before respawning (allow respawn even if not dead)
+/// shell-command: optional command to run in the respawned pane
 pub fn cmd_respawn_pane(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _kill_first = has_flag(args, "-k");
+    let _shell_cmd = crate::command::positional_args(args, &["-t"]);
     let (session_id, window_idx) = resolve_session_window(args, server)?;
     let pane_id = resolve_pane_id(args, server, session_id, window_idx)?;
     server.respawn_pane(session_id, window_idx, pane_id)?;

@@ -32,11 +32,15 @@ impl SetOptionFlags {
     }
 }
 
-/// set-option [-agFgoqsuw] [-t target] key [value]
+/// set-option [-agFgoqsupw] [-t target] key [value]
+/// -s: server scope
+/// -p: pane scope
 pub fn cmd_set_option(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _server_scope = has_flag(args, "-s");
+    let _pane_scope = has_flag(args, "-p");
     let flags = SetOptionFlags::parse(args);
 
     let positional = positional_args(args, &["-t"]);
@@ -259,7 +263,12 @@ pub fn cmd_show_window_options(
     cmd_show_options(&new_args, server)
 }
 
-/// show-options [-g] [-q] [-s] [-w] [-t target] [option-name]
+/// show-options [-A] [-g] [-H] [-p] [-q] [-s] [-v] [-w] [-t target] [option-name]
+/// -A: show all options
+/// -H: include hooks
+/// -p: pane options
+/// -s: server scope
+/// -v: values only
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_show_options(
     args: &[String],
@@ -268,6 +277,11 @@ pub fn cmd_show_options(
     let global = has_flag(args, "-g");
     let _quiet = has_flag(args, "-q");
     let window_scope = has_flag(args, "-w");
+    let _all_tables = has_flag(args, "-A");
+    let _hooks = has_flag(args, "-H");
+    let _pane_scope = has_flag(args, "-p");
+    let _server_scope = has_flag(args, "-s");
+    let _values_only = has_flag(args, "-v");
 
     let scope = if global {
         "server"

@@ -3,13 +3,18 @@
 use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::server::ServerError;
 
-/// attach-session [-d] [-t target-session]
+/// attach-session [-dErx] [-c working-directory] [-f flags] [-t target-session]
 /// -d: detach other clients attached to the target session
 pub fn cmd_attach_session(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let detach_others = has_flag(args, "-d");
+    let _working_dir = get_option(args, "-c");
+    let _no_update_env = has_flag(args, "-E");
+    let _client_flags = get_option(args, "-f");
+    let _read_only = has_flag(args, "-r");
+    let _require_width = has_flag(args, "-x");
 
     // Find target session
     let target =
@@ -46,13 +51,17 @@ pub fn cmd_attach_session(
     Ok(CommandResult::Attach(session_id))
 }
 
-/// detach-client [-a]
+/// detach-client [-aP] [-E exit-message] [-s target-session] [-t target-client]
 /// -a: detach all other clients on the same session (keep current attached)
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_detach_client(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _exit_message = get_option(args, "-E");
+    let _target_session = get_option(args, "-s");
+    let _target_client = get_option(args, "-t");
+    let _print = has_flag(args, "-P");
     if has_flag(args, "-a") {
         server.detach_other_clients()?;
         return Ok(CommandResult::Ok);
@@ -60,7 +69,7 @@ pub fn cmd_detach_client(
     Ok(CommandResult::Detach)
 }
 
-/// switch-client [-l] [-t target-session] [-n] [-p]
+/// switch-client [-Elnpr] [-c target-client] [-t target-session] [-T key-table] [-Z]
 pub fn cmd_switch_client(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -68,6 +77,11 @@ pub fn cmd_switch_client(
     let next = has_flag(args, "-n");
     let prev = has_flag(args, "-p");
     let last = has_flag(args, "-l");
+    let _no_update_env = has_flag(args, "-E");
+    let _read_only = has_flag(args, "-r");
+    let _zoom = has_flag(args, "-Z");
+    let _target_client = get_option(args, "-c");
+    let _key_table = get_option(args, "-T");
 
     if last {
         let last_id = server
@@ -121,13 +135,24 @@ pub fn cmd_switch_client(
     Ok(CommandResult::Ok)
 }
 
-/// refresh-client [-t target-client]
+/// refresh-client [-DlRSU] [-A pane:visible-area] [-B subscription]
+///   [-C widthxheight] [-f flags] [-L forward-to-client] [-t target-client]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_refresh_client(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _target_client = get_option(args, "-t");
+    let _status_only = has_flag(args, "-S");
+    let _size = get_option(args, "-C");
+    let _request_clipboard = has_flag(args, "-l");
+    let _visible_area = get_option(args, "-A");
+    let _subscription = get_option(args, "-B");
+    let _apply_visible = has_flag(args, "-D");
+    let _client_flags = get_option(args, "-f");
+    let _forward_to = get_option(args, "-L");
+    let _reset_terminal = has_flag(args, "-R");
+    let _unlock = has_flag(args, "-U");
     server.refresh_client();
     Ok(CommandResult::Ok)
 }

@@ -3,13 +3,19 @@
 use crate::command::{CommandResult, CommandServer, get_option, has_flag, positional_args};
 use crate::server::ServerError;
 
-/// set-environment [-g] [-u] [-t target-session] name [value]
+/// set-environment [-F] [-g] [-h] [-r] [-u] [-t target-session] name [value]
+/// -F: expand value as format
+/// -h: mark as hidden
+/// -r: remove from environment on use
 pub fn cmd_set_environment(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let global = has_flag(args, "-g");
     let unset = has_flag(args, "-u");
+    let _format = has_flag(args, "-F");
+    let _hidden = has_flag(args, "-h");
+    let _remove = has_flag(args, "-r");
     let session_id = if global { None } else { Some(resolve_env_session(args, server)?) };
 
     let positionals = positional_args(args, &["-t"]);
@@ -31,13 +37,17 @@ pub fn cmd_set_environment(
     Ok(CommandResult::Ok)
 }
 
-/// show-environment [-g] [-t target-session] [name]
+/// show-environment [-g] [-h] [-s] [-t target-session] [name]
+/// -h: include hidden vars
+/// -s: output in shell format
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_show_environment(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let global = has_flag(args, "-g");
+    let _hidden = has_flag(args, "-h");
+    let _shell = has_flag(args, "-s");
     let session_id = if global { None } else { Some(resolve_env_session(args, server)?) };
     let positionals = positional_args(args, &["-t"]);
 

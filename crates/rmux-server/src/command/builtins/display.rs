@@ -1,13 +1,16 @@
 //! Display and information commands.
 
-use crate::command::{CommandResult, CommandServer, get_option, has_flag};
+use crate::command::{CommandResult, CommandServer, get_option, has_flag, positional_args};
 use crate::overlay::{ListItem, ListKind, ListOverlay, MenuItem, MenuOverlay, OverlayState};
 use crate::server::ServerError;
 
-/// display-message [-a] [-l] [-p] [-v] [-c target-client] [-d delay] [-t target-pane] [message]
+/// display-message [-a] [-l] [-p] [-v] [-b target-buffer] [-c target-client]
+///                 [-d delay] [-F format] [-t target-pane] [message]
 /// -a: list format variables
 /// -l: message length
 /// -v: verbose (print expanded variables)
+/// -b: store output in target buffer
+/// -F: format string override
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_message(
     args: &[String],
@@ -16,7 +19,11 @@ pub fn cmd_display_message(
     let print = has_flag(args, "-p");
     let list_vars = has_flag(args, "-a");
     let _verbose = has_flag(args, "-v");
+    let _length = has_flag(args, "-l");
+    let _client = get_option(args, "-c");
     let _delay = get_option(args, "-d");
+    let _format = get_option(args, "-F");
+    let _buffer = get_option(args, "-b");
 
     if list_vars {
         let ctx = server.build_format_context();
@@ -67,7 +74,10 @@ pub fn cmd_list_commands(
     Ok(CommandResult::Output(commands.join("\n") + "\n"))
 }
 
-/// list-keys [-N] [-T table]
+/// list-keys [-1] [-a] [-N] [-P] [-T table]
+/// -1: one key per line
+/// -a: list all tables
+/// -P: print as command list
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_list_keys(
     args: &[String],
@@ -75,6 +85,9 @@ pub fn cmd_list_keys(
 ) -> Result<CommandResult, ServerError> {
     let table_filter = get_option(args, "-T");
     let show_notes = has_flag(args, "-N");
+    let _single_col = has_flag(args, "-1");
+    let _print_cmds = has_flag(args, "-P");
+    let _all_tables = has_flag(args, "-a");
     let bindings =
         if show_notes { server.list_key_bindings_with_notes() } else { server.list_key_bindings() };
     let filtered: Vec<&String> = if let Some(table) = table_filter {
@@ -121,14 +134,18 @@ pub fn cmd_list_clients(
     }
 }
 
-/// display-panes [-d duration] [-t target-client]
+/// display-panes [-b command] [-d duration] [-t target-client]
 ///
 /// Show pane numbers briefly. In tmux this is an interactive overlay.
 /// For now, output pane information as text.
+/// -b: command template to run when a pane is selected
+/// -d: display duration
 pub fn cmd_display_panes(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _command = get_option(args, "-b");
+    let _duration = get_option(args, "-d");
     let session_id = if let Some(target) = get_option(args, "-t") {
         server
             .find_session_id(target)
@@ -216,16 +233,32 @@ fn big_digit(ch: char, row: usize) -> &'static str {
     DIGITS[idx].get(row).copied().unwrap_or("   ")
 }
 
-/// choose-tree [-s] [-w] [-t target-pane]
+/// choose-tree [-G] [-N] [-r] [-s] [-w] [-Z] [-F format] [-f filter] [-K key-format]
+///             [-O sort-order] [-t target-pane]
 ///
 /// Interactive tree view of sessions and windows.
 /// Default shows sessions expanded with windows. `-s` collapses to sessions only.
+/// -G: no preview
+/// -N: start with name filter
+/// -r: reverse sort
+/// -w: start with windows expanded
+/// -Z: zoom
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_choose_tree(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let sessions_only = has_flag(args, "-s");
+    let _windows = has_flag(args, "-w");
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
+    let _no_preview = has_flag(args, "-G");
+    let _key_format = get_option(args, "-K");
+    let _starting_name = has_flag(args, "-N");
+    let _sort = get_option(args, "-O");
+    let _reverse = has_flag(args, "-r");
+    let _target = get_option(args, "-t");
+    let _zoom = has_flag(args, "-Z");
     let tree_info = server.session_tree_info();
     let mut items = Vec::new();
 
@@ -284,7 +317,8 @@ pub fn cmd_choose_tree(
     })))
 }
 
-/// choose-buffer [-t target-pane]
+/// choose-buffer [-G] [-N] [-r] [-Z] [-F format] [-f filter] [-K key-format]
+///               [-O sort-order] [-t target-pane]
 ///
 /// Interactive buffer list.
 #[allow(clippy::unnecessary_wraps)]
@@ -292,7 +326,15 @@ pub fn cmd_choose_buffer(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
+    let _key_format = get_option(args, "-K");
+    let _sort = get_option(args, "-O");
+    let _reverse = has_flag(args, "-r");
+    let _target = get_option(args, "-t");
+    let _no_preview = has_flag(args, "-G");
+    let _starting_name = has_flag(args, "-N");
+    let _zoom = has_flag(args, "-Z");
     let buffers = server.buffer_info_list();
     let items: Vec<ListItem> = buffers
         .into_iter()
@@ -322,7 +364,8 @@ pub fn cmd_choose_buffer(
     })))
 }
 
-/// choose-client [-t target-pane]
+/// choose-client [-G] [-N] [-r] [-Z] [-F format] [-f filter] [-K key-format]
+///               [-O sort-order] [-t target-pane]
 ///
 /// Interactive client list.
 #[allow(clippy::unnecessary_wraps)]
@@ -330,7 +373,15 @@ pub fn cmd_choose_client(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
+    let _key_format = get_option(args, "-K");
+    let _sort = get_option(args, "-O");
+    let _reverse = has_flag(args, "-r");
+    let _target = get_option(args, "-t");
+    let _no_preview = has_flag(args, "-G");
+    let _starting_name = has_flag(args, "-N");
+    let _zoom = has_flag(args, "-Z");
     let clients = server.client_info_list();
     let items: Vec<ListItem> = clients
         .into_iter()
@@ -360,9 +411,17 @@ pub fn cmd_choose_client(
     })))
 }
 
-/// display-menu [-t target-pane] [-T title] [-x pos] [-y pos] name key command ...
+/// display-menu [-H] [-O] [-b border-type] [-c target-client] [-s style]
+///              [-S selected-style] [-t target-pane] [-T title] [-x pos] [-y pos]
+///              name key command ...
 ///
 /// Show a menu overlay.
+/// -H: select on hover
+/// -O: don't close on outside click
+/// -b: border type
+/// -c: target client
+/// -s: style
+/// -S: selected style
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_menu(
     args: &[String],
@@ -371,6 +430,12 @@ pub fn cmd_display_menu(
     let title = get_option(args, "-T").unwrap_or("Menu");
     let x: u32 = get_option(args, "-x").and_then(|v| v.parse().ok()).unwrap_or(0);
     let y: u32 = get_option(args, "-y").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let _buffer = get_option(args, "-b");
+    let _client = get_option(args, "-c");
+    let _hover_select = has_flag(args, "-H");
+    let _no_outside_close = has_flag(args, "-O");
+    let _style = get_option(args, "-s");
+    let _selected_style = get_option(args, "-S");
 
     // Parse positional args as triplets: name key command
     let positional = crate::command::positional_args(args, &["-t", "-T", "-x", "-y"]);
@@ -418,10 +483,18 @@ pub fn cmd_display_menu(
     })))
 }
 
-/// display-popup [-B] [-C] [-E|-EE] [-T title] [-t target-pane]
+/// display-popup [-B] [-C] [-E|-EE] [-c target-client] [-d cwd] [-e env]
+///               [-K key-binding] [-s style] [-S selected-style]
+///               [-T title] [-t target-pane]
 ///               [-w width] [-h height] [-x pos] [-y pos] [command]
 ///
 /// Show a popup window with an embedded shell or command.
+/// -c: target client
+/// -d: working directory
+/// -e: environment variable
+/// -K: key binding
+/// -s: style
+/// -S: selected style
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_display_popup(
     args: &[String],
@@ -436,6 +509,12 @@ pub fn cmd_display_popup(
     let title = get_option(args, "-T").unwrap_or("").to_string();
     let has_border = !has_flag(args, "-B"); // -B disables border
     let close_on_exit = has_flag(args, "-E") || has_flag(args, "-EE");
+    let _client = get_option(args, "-c");
+    let _cwd = get_option(args, "-d");
+    let _env = get_option(args, "-e");
+    let _key_binding = get_option(args, "-K");
+    let _style = get_option(args, "-s");
+    let _selected_style = get_option(args, "-S");
 
     // Parse dimensions — support percentage or absolute values
     let client_sx = server.client_sx();
@@ -611,16 +690,17 @@ pub fn cmd_show_prompt_history(
     }
 }
 
-/// pipe-pane [-o] [-t target-pane] [command]
+/// pipe-pane [-I] [-o] [-t target-pane] [command]
 ///
 /// Pipe pane output to a shell command. With no command, stops piping.
 /// The -o flag opens a pipe only if none is currently active (toggle).
+/// -I: pipe stdin to command
 pub fn cmd_pipe_pane(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    use crate::command::positional_args;
-
+    let _only_if_inactive = has_flag(args, "-o");
+    let _stdin_pipe = has_flag(args, "-I");
     let positional = positional_args(args, &["-t"]);
     if positional.is_empty() {
         // No command — stop piping

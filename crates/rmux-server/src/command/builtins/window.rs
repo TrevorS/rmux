@@ -3,16 +3,26 @@
 use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::server::ServerError;
 
-/// new-window [-a] [-b] [-d] [-k] [-S] [-n name] [-c start-directory] [-t target-session]
+/// new-window [-a] [-b] [-d] [-e env] [-k] [-F format] [-P] [-S] [-n name] [-c start-directory] [-t target-session]
 /// -a: insert after current window (not yet fully implemented)
 /// -b: insert before current window (not yet fully implemented)
+/// -e: set environment variable
 /// -k: destroy existing window at target index
+/// -F: format string for -P output
+/// -P: print window info after creation
 /// -S: select existing window if it exists
 pub fn cmd_new_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let _detached = has_flag(args, "-d");
+    let _after = has_flag(args, "-a");
+    let _before = has_flag(args, "-b");
+    let _kill_existing = has_flag(args, "-k");
+    let _select_existing = has_flag(args, "-S");
+    let _env = get_option(args, "-e");
+    let _format = get_option(args, "-F");
+    let _print = has_flag(args, "-P");
     let name = get_option(args, "-n");
 
     let session_id = resolve_session(args, server)?;
@@ -148,12 +158,14 @@ pub fn cmd_rename_window(
     Ok(CommandResult::Ok)
 }
 
-/// list-windows [-a] [-t target-session]
+/// list-windows [-a] [-F format] [-f filter] [-t target-session]
 /// -a: list windows for all sessions
 pub fn cmd_list_windows(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
     if has_flag(args, "-a") {
         let sessions = server.list_sessions();
         let mut output = Vec::new();
@@ -207,7 +219,9 @@ pub fn cmd_swap_window(
     Ok(CommandResult::Ok)
 }
 
-/// move-window [-d] [-k] [-r] [-s src] [-t dst]
+/// move-window [-a] [-b] [-d] [-k] [-r] [-s src] [-t dst]
+/// -a: insert after current window
+/// -b: insert before current window
 /// -d: don't select the destination window
 /// -k: kill target window if it exists (allow overwrite)
 /// -r: renumber windows sequentially after move
@@ -215,6 +229,11 @@ pub fn cmd_move_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _detached = has_flag(args, "-d");
+    let _kill_existing = has_flag(args, "-k");
+    let _renumber = has_flag(args, "-r");
+    let _after = has_flag(args, "-a");
+    let _before = has_flag(args, "-b");
     // Source session/window
     let src_session_id = if let Some(src) = get_option(args, "-s") {
         let name = src.split(':').next().unwrap_or(src);
@@ -267,6 +286,7 @@ pub fn cmd_select_layout(
 
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
+    let _undo = has_flag(args, "-o");
 
     if has_flag(args, "-n") {
         let current = server.current_layout_name(session_id, window_idx);
@@ -294,13 +314,23 @@ pub fn cmd_select_layout(
     Ok(CommandResult::Ok)
 }
 
-/// find-window [-t target-session] match-string
+/// find-window [-C] [-N] [-r] [-T] [-Z] [-t target-session] match-string
+/// -C: search window content
+/// -N: search window names
+/// -r: use regex for matching
+/// -T: search window titles
+/// -Z: zoom pane if necessary
 pub fn cmd_find_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     use crate::command::positional_args;
 
+    let _content_search = has_flag(args, "-C");
+    let _name_search = has_flag(args, "-N");
+    let _regex = has_flag(args, "-r");
+    let _title_search = has_flag(args, "-T");
+    let _zoom = has_flag(args, "-Z");
     let session_id = resolve_session(args, server)?;
     let positional = positional_args(args, &["-t"]);
     let pattern = positional
@@ -355,6 +385,7 @@ pub fn cmd_respawn_window(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
+    let _kill_first = has_flag(args, "-k");
     let session_id = resolve_session(args, server)?;
     let window_idx = resolve_window_idx(args, server, session_id)?;
     let pane_id = server

@@ -24,9 +24,13 @@ pub fn cmd_start_server(
     Ok(CommandResult::Ok)
 }
 
-/// send-keys [-l] [-R] [-X] [-H] [-N count] [-t target-pane] key ...
+/// send-keys [-l] [-R] [-X] [-H] [-F] [-K] [-M] [-N count] [-c target-client] [-t target-pane] key ...
 /// -R: reset the terminal for the target pane
 /// -H: send hex key codes (not yet implemented)
+/// -c: target client
+/// -F: expand format sequences
+/// -K: key name syntax
+/// -M: pass through mouse events
 pub fn cmd_send_keys(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -34,6 +38,10 @@ pub fn cmd_send_keys(
     let literal = has_flag(args, "-l");
     let copy_mode_cmd = has_flag(args, "-X");
     let _hex_mode = has_flag(args, "-H");
+    let _client = get_option(args, "-c");
+    let _format_flag = has_flag(args, "-F");
+    let _key_syntax = has_flag(args, "-K");
+    let _mouse = has_flag(args, "-M");
 
     // -R: reset the terminal
     if has_flag(args, "-R") {
@@ -189,15 +197,21 @@ pub fn cmd_unbind_key(
     if quiet { Ok(CommandResult::Ok) } else { result.map(|()| CommandResult::Ok) }
 }
 
-/// source-file [-F] [-q] path [path ...]
+/// source-file [-F] [-n] [-q] [-v] [-t target-pane] path [path ...]
 ///
 /// Supports glob patterns (e.g., `~/.config/tmux/conf.d/*.conf`).
+/// -n: parse only, don't execute
+/// -t: target pane
+/// -v: verbose output
 pub fn cmd_source_file(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let format_flag = has_flag(args, "F");
     let quiet_flag = has_flag(args, "q");
+    let _no_execute = has_flag(args, "n");
+    let _target = get_option(args, "-t");
+    let _verbose = has_flag(args, "v");
     let positional = positional_args(args, &[]);
     if positional.is_empty() {
         return Err(ServerError::Command("source-file: missing path".into()));
@@ -297,13 +311,25 @@ fn source_single_file(
     (false, errors)
 }
 
-/// run-shell [-b] command
+/// run-shell [-b] [-C] [-E] [-d delay] [-s target-session] [-t target-pane] [-c cwd] command
+/// -C: capture output
+/// -d: delay before running
+/// -E: don't apply environment
+/// -s: target session
+/// -t: target pane
+/// -c: working directory
 pub fn cmd_run_shell(
     args: &[String],
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let background = has_flag(args, "-b");
-    let positional = positional_args(args, &[]);
+    let _capture = has_flag(args, "-C");
+    let _delay = get_option(args, "-d");
+    let _env_flag = has_flag(args, "-E");
+    let _session = get_option(args, "-s");
+    let _target = get_option(args, "-t");
+    let _cwd = get_option(args, "-c");
+    let positional = positional_args(args, &["-d", "-s", "-t", "-c"]);
     if positional.is_empty() {
         return Err(ServerError::Command("run-shell: missing command".into()));
     }
@@ -315,7 +341,17 @@ pub fn cmd_run_shell(
     }
 }
 
-/// command-prompt [-I initial-text] [-p prompt] [template]
+/// command-prompt [-1] [-b] [-e] [-F] [-k] [-l] [-I initial-text] [-i incremental]
+///                [-N note] [-p prompt] [-T key-table] [template]
+/// -1: accept one key
+/// -b: run in background
+/// -e: only exit on enter
+/// -F: format flag
+/// -i: incremental search callback
+/// -k: accept one key press
+/// -l: literal mode
+/// -N: note text
+/// -T: key table
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_command_prompt(
     args: &[String],
@@ -323,6 +359,15 @@ pub fn cmd_command_prompt(
 ) -> Result<CommandResult, ServerError> {
     let initial_text = get_option(args, "-I");
     let prompt_str = get_option(args, "-p");
+    let _one_key = has_flag(args, "-1");
+    let _background = has_flag(args, "-b");
+    let _exit_only = has_flag(args, "-e");
+    let _format = has_flag(args, "-F");
+    let _incremental = get_option(args, "-i");
+    let _key_only = has_flag(args, "-k");
+    let _literal = has_flag(args, "-l");
+    let _note = get_option(args, "-N");
+    let _key_table = get_option(args, "-T");
     let template = positional_args(args, &["-I", "-p", "-t", "-T"]);
     let template_str = template.first().copied();
     server.enter_command_prompt_with(initial_text, prompt_str, template_str);
@@ -449,16 +494,22 @@ pub fn cmd_show_hooks(
     }
 }
 
-/// confirm-before [-p prompt] command
+/// confirm-before [-b] [-p prompt] [-c target-client] [-t target-pane] [-y] command
 ///
 /// Ask for confirmation before executing a command.
 /// Shows a y/n prompt; the command executes only if the user types "y".
+/// -b: don't block
+/// -c: target client
+/// -y: default to yes
 pub fn cmd_confirm_before(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let custom_prompt = get_option(args, "-p");
     let _target = get_option(args, "-t");
+    let _background = has_flag(args, "-b");
+    let _client = get_option(args, "-c");
+    let _default_yes = has_flag(args, "-y");
     let positional = positional_args(args, &["-p", "-t"]);
     if positional.is_empty() {
         return Err(ServerError::Command("confirm-before: missing command".into()));
@@ -480,14 +531,20 @@ pub fn cmd_confirm_before(
     Ok(CommandResult::Ok)
 }
 
-/// wait-for [-L|-U|-S] channel
+/// wait-for [-L] [-S] [-U] channel
 ///
 /// Wait for or signal a named channel for scripting synchronization.
+/// -L: lock channel
+/// -S: signal channel
+/// -U: unlock channel
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_wait_for(
     args: &[String],
     _server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _lock = has_flag(args, "-L");
+    let _signal = has_flag(args, "-S");
+    let _unlock = has_flag(args, "-U");
+    let _positional = positional_args(args, &[]);
     Ok(CommandResult::Ok)
 }

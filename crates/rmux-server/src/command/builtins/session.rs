@@ -3,7 +3,8 @@
 use crate::command::{CommandResult, CommandServer, get_option, has_flag};
 use crate::server::ServerError;
 
-/// new-session [-d] [-s session-name] [-n window-name] [-c start-directory] [-x width] [-y height]
+/// new-session [-AdDEPX] [-s session-name] [-n window-name] [-c start-directory]
+///   [-e environment] [-F format] [-f flags] [-x width] [-y height]
 pub fn cmd_new_session(
     args: &[String],
     server: &mut dyn CommandServer,
@@ -17,6 +18,13 @@ pub fn cmd_new_session(
         get_option(args, "-x").and_then(|s| s.parse().ok()).unwrap_or_else(|| server.client_sx());
     let sy: u32 =
         get_option(args, "-y").and_then(|s| s.parse().ok()).unwrap_or_else(|| server.client_sy());
+    let _detach_other = has_flag(args, "-D");
+    let _no_update_env = has_flag(args, "-E");
+    let _format = get_option(args, "-F");
+    let _client_flags = get_option(args, "-f");
+    let _print = has_flag(args, "-P");
+    let _use_given_size = has_flag(args, "-X");
+    let _environment = get_option(args, "-e");
 
     // -A: attach to existing session if it exists
     if has_flag(args, "-A") && server.has_session(name) {
@@ -58,12 +66,13 @@ pub fn cmd_new_session(
     if detached { Ok(CommandResult::Ok) } else { Ok(CommandResult::Attach(session_id)) }
 }
 
-/// kill-session [-a] [-t target-session]
+/// kill-session [-aC] [-t target-session]
 pub fn cmd_kill_session(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
     let kill_all_except = has_flag(args, "-a");
+    let _clear_alerts = has_flag(args, "-C");
     let target = get_option(args, "-t");
 
     if kill_all_except {
@@ -96,13 +105,14 @@ pub fn cmd_kill_session(
     Ok(CommandResult::Ok)
 }
 
-/// list-sessions
+/// list-sessions [-F format] [-f filter]
 #[allow(clippy::unnecessary_wraps)]
 pub fn cmd_list_sessions(
     args: &[String],
     server: &mut dyn CommandServer,
 ) -> Result<CommandResult, ServerError> {
-    let _ = args;
+    let _format = get_option(args, "-F");
+    let _filter = get_option(args, "-f");
     let sessions = server.list_sessions();
     if sessions.is_empty() {
         Ok(CommandResult::Output("no server running on this socket\n".to_string()))

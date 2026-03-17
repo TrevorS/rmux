@@ -13,40 +13,40 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `new-session` | `-d -s -x -y -n -c -A` | `-D -e -E -F -f -P -X`, shell cmd | Functional |
-| `kill-session` | `-t -a` | `-C` | Functional |
-| `list-sessions` / `ls` | (none) | `-F` | Functional |
+| `new-session` | `-A -c -d -D -e -E -F -f -n -P -s -X -x -y` | shell cmd | Functional |
+| `kill-session` | `-a -C -t` | — | Complete |
+| `list-sessions` / `ls` | `-F -f` | — | Functional |
 | `has-session` | `-t` | — | Complete |
 | `rename-session` | `-t` | — | Complete |
-| `switch-client` | `-l -n -p -t` | `-c -E -F -O -r -T -Z` | Functional |
+| `switch-client` | `-c -E -l -n -p -r -t -T -Z` | `-F -O` | Functional |
 
 ### Client Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `attach-session` | `-d -t` | `-c -E -f -r -x` | Functional |
-| `detach-client` | `-a` | `-E -s -t -P` | Functional |
-| `refresh-client` | (none) | all (`-A -B -c -C -D -f -l -L -r -R -S -t -U`) | Stub (full redraw) |
-| `suspend-client` | `-t` | — | Functional |
+| `attach-session` | `-c -d -E -f -r -t -x` | — | Complete |
+| `detach-client` | `-a -E -P -s -t` | — | Complete |
+| `refresh-client` | `-A -B -C -D -f -l -L -R -S -t -U` | `-c -r` | Functional (full redraw) |
+| `suspend-client` | `-t` | — | Complete |
 
 ### Window Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `new-window` | `-a -b -d -k -n -S -t -c` | `-e -F -P`, shell cmd | Functional |
-| `kill-window` | `-a -t` | — | Functional |
-| `select-window` | `-l -n -p -T -t` | — | Functional |
-| `next-window` | `-a -t` | — | Functional |
-| `previous-window` | `-a -t` | — | Functional |
+| `new-window` | `-a -b -c -d -e -F -k -n -P -S -t` | shell cmd | Functional |
+| `kill-window` | `-a -t` | — | Complete |
+| `select-window` | `-l -n -p -T -t` | — | Complete |
+| `next-window` | `-a -t` | — | Complete |
+| `previous-window` | `-a -t` | — | Complete |
 | `last-window` | `-t` | — | Complete |
 | `rename-window` | `-t` | — | Complete |
-| `list-windows` | `-a -t` | `-F -f` | Functional |
-| `find-window` | `-t` | `-C -N -r -T -Z` | Basic matching |
-| `swap-window` | `-d -s -t` | — | Functional |
-| `move-window` | `-d -k -r -s -t` | `-a -b` | Functional |
-| `rotate-window` | `-t -D -U` | — | Functional |
-| `select-layout` | `-E -n -p -t layout-name` | `-o` | Functional |
-| `next-layout` / `previous-layout` | (none) | — | Functional |
+| `list-windows` | `-a -F -f -t` | — | Complete |
+| `find-window` | `-C -N -r -t -T -Z` | — | Functional |
+| `swap-window` | `-d -s -t` | — | Complete |
+| `move-window` | `-a -b -d -k -r -s -t` | — | Complete |
+| `rotate-window` | `-D -t -U` | — | Complete |
+| `select-layout` | `-E -n -o -p -t layout-name` | — | Complete |
+| `next-layout` / `previous-layout` | `-t` | — | Complete |
 | `respawn-window` | `-k -t` | shell cmd | Functional |
 | `link-window` | — | all | Stub (always errors) |
 | `unlink-window` | — | all | Stub (always errors) |
@@ -55,76 +55,76 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `split-window` | `-h -v -d -l -p -t -c` | `-b -e -f -F -I -P -Z` | Functional |
-| `select-pane` | `-D -d -e -L -l -M -m -R -T -U -Z -t` | `-g -P` | Functional |
-| `kill-pane` | `-a -t` | — | Functional |
-| `list-panes` | `-a -s -t` | `-F -f` | Functional |
-| `capture-pane` | `-b -e -E -J -p -q -S -t` | `-a -C -M -N -P -T` | Functional |
-| `resize-pane` | `-D -L -R -U -x -y -Z` | `-M -T` | Functional |
-| `swap-pane` | `-D -s -U -t -Z` | `-d` | Functional |
-| `break-pane` | `-d -t` | `-a -b -F -n -P -s` | Functional |
-| `join-pane` | `-d -h -s -t -v` | `-b -f -l -p` | Functional |
-| `last-pane` | `-t -Z` | `-d -e` | Functional |
-| `respawn-pane` | `-k -t` | shell cmd | Functional |
+| `split-window` | `-b -c -d -e -f -F -h -I -l -p -P -t -v -Z` | — | Complete |
+| `select-pane` | `-D -d -e -g -L -l -M -m -P -R -T -t -U -Z` | — | Complete |
+| `kill-pane` | `-a -t` | — | Complete |
+| `list-panes` | `-a -F -f -s -t` | — | Complete |
+| `capture-pane` | `-a -b -C -e -E -J -M -N -p -P -q -S -t -T` | — | Complete |
+| `resize-pane` | `-D -L -M -R -T -U -x -y -Z` | — | Complete |
+| `swap-pane` | `-d -D -s -t -U -Z` | — | Complete |
+| `break-pane` | `-a -b -d -F -n -P -s -t` | — | Complete |
+| `join-pane` | `-b -d -f -h -l -p -s -t -v` | — | Complete |
+| `last-pane` | `-d -e -t -Z` | — | Complete |
+| `respawn-pane` | `-k -t` | — | Complete |
 
 ### Server / Control Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `send-keys` | `-H -l -N -R -t -X` | `-c -F -K -M` | Functional |
+| `send-keys` | `-c -F -H -K -l -M -N -R -t -X` | — | Complete |
 | `bind-key` | `-n -N -r -T` | — | Complete |
-| `unbind-key` | `-a -n -q -T` | — | Functional |
-| `source-file` | `-F -q`, glob, multiple paths | `-n -t -v` | Functional |
-| `run-shell` | `-b` (positional) | `-C -d -E -s -t -c` | Functional (sync + background) |
-| `command-prompt` | `-I -p` (template) | `-1 -b -e -F -i -k -l -N -T` | Functional (rename works) |
+| `unbind-key` | `-a -n -q -T` | — | Complete |
+| `source-file` | `-F -n -q -t -v`, glob, multiple paths | — | Complete |
+| `run-shell` | `-b -C -c -d -E -s -t` | — | Complete |
+| `command-prompt` | `-1 -b -e -F -I -i -k -l -N -p -T` | — | Complete |
 | `if-shell` | `-b -F -t` | — | Complete |
-| `confirm-before` | `-p -t` | `-b -c -y` | Functional (y/n prompt via command-prompt) |
+| `confirm-before` | `-b -c -p -t -y` | — | Complete |
 | `send-prefix` | `-2 -t` | — | Complete |
-| `clear-history` | `-H -t` | — | Functional |
-| `wait-for` | (none) | `-L -S -U` | No-op stub |
+| `clear-history` | `-H -t` | — | Complete |
+| `wait-for` | `-L -S -U` | — | No-op stub (flags parsed) |
 
 ### Option Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `set-option` / `set` | `-a -F -g -o -q -t -u -w` | `-p -s -U` | Well-implemented |
-| `show-options` / `show` | `-g -q -w -t` | `-A -H -p -s -v` | Functional |
-| `set-window-option` / `setw` | delegates to set-option `-w` | same gaps | Functional |
-| `show-window-options` | delegates to show-options `-w` | same gaps | Functional |
+| `set-option` / `set` | `-a -F -g -o -p -q -s -t -u -w` | `-U` | Well-implemented |
+| `show-options` / `show` | `-A -g -H -p -q -s -t -v -w` | — | Complete |
+| `set-window-option` / `setw` | delegates to set-option `-w` | — | Complete |
+| `show-window-options` | delegates to show-options `-w` | — | Complete |
 
 ### Display Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `display-message` | `-a -c -d -l -p -v` | `-b -F` | Functional |
-| `list-keys` | `-N -T` | `-1 -P -a` | Functional (filters by table) |
-| `display-panes` | `-t` | `-b -d` | Text output, not overlay |
-| `clock-mode` | `-t` | — | Functional (text output) |
-| `choose-tree` | `-s` | `-F -f -G -K -N -O -r -t -w -Z` | Functional |
-| `choose-buffer` / `choose-client` | (none) | all filter/format flags | Functional |
-| `display-menu` | `-t -T -x -y` | `-b -c -H -O -s -S` | Functional |
-| `display-popup` | `-B -C -E -h -T -t -w -x -y` | `-c -d -e -K -s -S` | Functional |
-| `pipe-pane` | `-o -t` (`-o` parsed not checked) | `-I` | Partial |
-| `resize-window` | `-A -D -L -R -U -t -x -y` | — | Functional |
+| `display-message` | `-a -b -c -d -F -l -p -v` | — | Complete |
+| `list-keys` | `-1 -a -N -P -T` | — | Complete |
+| `display-panes` | `-b -d -t` | — | Functional (text output, not overlay) |
+| `clock-mode` | `-t` | — | Complete |
+| `choose-tree` | `-F -f -G -K -N -O -r -s -t -w -Z` | — | Complete |
+| `choose-buffer` / `choose-client` | `-F -f -G -K -N -O -r -t -Z` | — | Complete |
+| `display-menu` | `-b -c -H -O -s -S -t -T -x -y` | — | Complete |
+| `display-popup` | `-B -c -C -d -e -E -h -K -s -S -T -t -w -x -y` | — | Complete |
+| `pipe-pane` | `-I -o -t` | — | Functional |
+| `resize-window` | `-A -D -L -R -U -t -x -y` | — | Complete |
 
 ### Environment Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `set-environment` | `-g -u -t` | `-F -h -r` | Functional |
-| `show-environment` | `-g -t` | `-h -s` | Functional |
+| `set-environment` | `-F -g -h -r -t -u` | — | Complete |
+| `show-environment` | `-g -h -s -t` | — | Complete |
 
 ### Paste Buffer Commands
 
 | Command | Flags Implemented | Flags Missing | Status |
 |---|---|---|---|
-| `copy-mode` | `-e -q -u` | `-d -H -M -S -s -t` | Functional |
-| `paste-buffer` | `-b -d -p -r -s` | `-t` | Functional |
-| `set-buffer` | `-a -b` | `-n -t -w` | Functional |
+| `copy-mode` | `-d -e -H -M -q -S -s -t -u` | — | Complete |
+| `paste-buffer` | `-b -d -p -r -s -t` | — | Complete |
+| `set-buffer` | `-a -b -n -t -w` | — | Complete |
 | `delete-buffer` | `-b` | — | Complete |
-| `save-buffer` / `load-buffer` | `-a -b` | `-t -w` | Functional |
+| `save-buffer` / `load-buffer` | `-a -b -t -w` | — | Complete |
 | `show-buffer` | `-b` | — | Complete |
-| `list-buffers` | (none) | `-F -f` | Functional |
+| `list-buffers` | `-F -f` | — | Complete |
 
 ### Stubs / No-ops
 
@@ -552,10 +552,10 @@ tmux has extensive mouse bindings in the root table — **all missing from rmux*
 - [x] `#{@user_option}` format references
 - [x] `#{E:@option}` double expansion
 
-### Missing for Full Plugin Support
-- [ ] `run-shell -b` (background execution)
-- [ ] `send-keys -X` (copy-mode command dispatch)
-- [ ] `command-prompt -I/-p` (initial text, custom prompts)
+### Plugin Support Checklist
+- [x] `run-shell -b` (background execution)
+- [x] `send-keys -X` (copy-mode command dispatch)
+- [x] `command-prompt -I/-p` (initial text, custom prompts)
 - [x] Glob patterns in `source-file`
 - [ ] `$VAR` (no-brace) interpolation
 
