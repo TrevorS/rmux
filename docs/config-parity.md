@@ -141,42 +141,47 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 
 | Option | rmux | Default Correct? | Notes |
 |---|---|---|---|
+| `backspace` | [x] | Yes (`""`) | |
 | `buffer-limit` | [x] | Yes (50) | |
+| `command-alias` | [x] | Yes (6 standard aliases) | Array type |
+| `copy-command` | [x] | Yes (`""`) | |
+| `default-client-command` | [x] | Yes (`""`) | |
 | `default-terminal` | [x] | Yes (`"screen"`, matches `TMUX_TERM`) | |
+| `editor` | [x] | Yes (`""`) | |
 | `escape-time` | [x] | Yes (10) | |
 | `exit-empty` | [x] | Yes | |
 | `exit-unattached` | [x] | Yes | |
+| `extended-keys` | [x] | Yes (`"off"`) | Choice: off/on/always |
 | `focus-events` | [x] | Yes | |
+| `history-file` | [x] | Yes (`""`) | |
 | `history-limit` | — | Moved to session scope (correct) | |
+| `input-buffer-size` | [x] | Yes (1048576) | |
 | `message-limit` | [x] | Yes (1000) | |
 | `prefix-timeout` | [x] | Yes (0) | |
+| `prompt-history-limit` | [x] | Yes (100) | |
 | `set-clipboard` | [x] | Yes (`"external"`) | |
-| `backspace` | [ ] | — | |
-| `command-alias` | [ ] | — | Array of command aliases |
-| `copy-command` | [ ] | — | |
-| `default-client-command` | [ ] | — | |
-| `editor` | [ ] | — | |
-| `extended-keys` | [ ] | — | |
-| `history-file` | [ ] | — | |
-| `input-buffer-size` | [ ] | — | |
-| `prompt-history-limit` | [ ] | — | |
-| `terminal-features` | [ ] | — | Feature detection for terminals |
-| `terminal-overrides` | [~] | Missing default `linux*:AX@` | |
-| `user-keys` | [ ] | — | |
+| `terminal-features` | [x] | Yes (xterm*, screen*) | Array type |
+| `terminal-overrides` | [x] | Yes (`"linux*:AX@"`) | Array type |
+| `user-keys` | [x] | Yes (`[]`) | Array type |
 
 ### Session Options
 
 | Option | rmux | Default Correct? | Notes |
 |---|---|---|---|
 | `activity-action` | [x] | Yes | |
+| `assume-paste-time` | [x] | Yes (1) | |
 | `base-index` | [x] | Yes (0) | |
 | `bell-action` | [x] | Yes | |
 | `default-command` | [x] | Yes | |
 | `default-shell` | [x] | Yes | |
 | `default-size` | [x] | Yes | |
-| `destroy-unattached` | [~] | Value OK but tmux has 4-choice enum (`off/on/keep-last/keep-group`) | |
+| `destroy-unattached` | [x] | Yes (`"off"`) | Choice: off/on/keep-last/keep-group |
 | `detach-on-destroy` | [x] | Yes | |
+| `display-panes-active-colour` | [x] | Yes (`"red"`) | |
+| `display-panes-colour` | [x] | Yes (`"blue"`) | |
+| `display-panes-time` | [x] | Yes (1000) | |
 | `display-time` | [x] | Yes (750) | |
+| `focus-follows-mouse` | [x] | Yes | |
 | `key-table` | [x] | Yes | |
 | `lock-after-time` | [x] | Yes (0) | |
 | `lock-command` | [x] | Yes | |
@@ -184,13 +189,14 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `message-style` | [x] | Yes | |
 | `mouse` | [x] | Yes | |
 | `prefix` | [x] | Yes (`C-b`) | |
-| `prefix2` | [~] | Stores `"None"` string instead of KEYC_NONE | |
+| `prefix2` | [x] | Yes (`""` = no prefix2) | |
 | `renumber-windows` | [x] | Yes | |
 | `repeat-time` | [x] | Yes (500) | |
 | `set-titles` | [x] | Yes | |
 | `set-titles-string` | [x] | Yes | |
 | `silence-action` | [x] | Yes (`"other"`) | |
 | `status` | [x] | Yes | |
+| `status-format` | [x] | Yes (`[]`) | Array, dynamically computed |
 | `status-interval` | [x] | Yes (15) | |
 | `status-justify` | [x] | Yes | |
 | `status-keys` | [x] | Yes | |
@@ -198,42 +204,53 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `status-left-length` | [x] | Yes (10) | |
 | `status-left-style` | [x] | Yes | |
 | `status-position` | [x] | Yes | |
-| `status-right` | [~] | Missing `#{?window_bigger,...}` prefix | |
+| `status-right` | [x] | Yes (includes `#{?window_bigger,...}`) | |
 | `status-right-length` | [x] | Yes (40) | |
 | `status-right-style` | [x] | Yes | |
 | `status-style` | [x] | Yes | |
+| `update-environment` | [x] | Yes (8 vars) | Array type |
 | `visual-activity` | [x] | Yes | |
 | `visual-bell` | [x] | Yes | |
 | `visual-silence` | [x] | Yes | |
 | `word-separators` | [x] | Yes (full punctuation set) | |
-| `assume-paste-time` | [ ] | — | |
-| `display-panes-active-colour` | [ ] | — | |
-| `display-panes-colour` | [ ] | — | |
-| `display-panes-time` | [ ] | — | |
-| `focus-follows-mouse` | [ ] | — | |
-| `status-format` | [ ] | — | Complex array format |
-| `update-environment` | [ ] | — | |
 
 ### Window Options
 
 | Option | rmux | Default Correct? | Notes |
 |---|---|---|---|
 | `aggressive-resize` | [x] | Yes | |
+| `allow-passthrough` | [x] | Yes (`"off"`) | Choice: off/on/all |
+| `allow-rename` | [x] | Yes (`false`) | |
 | `alternate-screen` | [x] | Yes | |
 | `automatic-rename` | [x] | Yes | |
+| `automatic-rename-format` | [x] | Yes (conditional format) | |
+| `clock-mode-colour` | [x] | Yes (`"blue"`) | |
+| `clock-mode-style` | [x] | Yes (24) | |
 | `copy-mode-current-match-style` | [x] | Yes | |
 | `copy-mode-mark-style` | [x] | Yes | |
 | `copy-mode-match-style` | [x] | Yes | |
+| `fill-character` | [x] | Yes (`""`) | |
+| `main-pane-height` | [x] | Yes (`"24"`) | String type, supports `%` |
+| `main-pane-width` | [x] | Yes (`"80"`) | String type, supports `%` |
 | `mode-keys` | [x] | Yes | |
+| `mode-style` | [x] | Yes (`"bg=yellow,fg=black"`) | |
 | `monitor-activity` | [x] | Yes | |
 | `monitor-bell` | [x] | Yes | |
 | `monitor-silence` | [x] | Yes (0) | |
+| `pane-active-border-style` | [x] | Yes (conditional format) | |
 | `pane-base-index` | [x] | Yes (0) | |
 | `pane-border-format` | [x] | Yes | |
+| `pane-border-lines` | [x] | Yes (`"single"`) | Choice: single/double/heavy/simple/number |
 | `pane-border-status` | [x] | Yes | |
 | `pane-border-style` | [x] | Yes | |
+| `popup-border-lines` | [x] | Yes (`"single"`) | |
+| `popup-border-style` | [x] | Yes (`"default"`) | |
+| `popup-style` | [x] | Yes (`"default"`) | |
+| `remain-on-exit` | [x] | Yes (`"off"`) | Choice: off/on/failed |
+| `scroll-on-clear` | [x] | Yes | |
 | `synchronize-panes` | [x] | Yes | |
 | `window-active-style` | [x] | Yes | |
+| `window-size` | [x] | Yes (`"latest"`) | Choice: largest/smallest/manual/latest |
 | `window-status-activity-style` | [x] | Yes | |
 | `window-status-bell-style` | [x] | Yes | |
 | `window-status-current-format` | [~] | Simplified — uses `#I:#W#F` instead of conditional `#{?window_flags,...}` | |
@@ -245,23 +262,6 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 | `window-style` | [x] | Yes | |
 | `wrap-search` | [x] | Yes | |
 | `xterm-keys` | [x] | Yes (deprecated) | |
-| `allow-passthrough` | [~] | tmux has 3-choice enum (`off/on/all`), rmux uses flag | |
-| `allow-rename` | [x] | Yes (`false`) | |
-| `main-pane-height` | [~] | Value OK but tmux type is string (allows `%`) | |
-| `main-pane-width` | [~] | Same issue | |
-| `pane-active-border-style` | [~] | rmux: `"fg=green"`, tmux: conditional format | |
-| `remain-on-exit` | [~] | tmux has 3-choice (`off/on/failed`) | |
-| `automatic-rename-format` | [ ] | — | |
-| `clock-mode-colour` | [ ] | — | |
-| `clock-mode-style` | [ ] | — | |
-| `fill-character` | [ ] | — | |
-| `mode-style` | [ ] | — | |
-| `pane-border-lines` | [ ] | — | |
-| `popup-border-lines` | [ ] | — | |
-| `popup-border-style` | [ ] | — | |
-| `popup-style` | [ ] | — | |
-| `scroll-on-clear` | [ ] | — | |
-| `window-size` | [ ] | — | |
 
 ### Option Scopes & Inheritance
 

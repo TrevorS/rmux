@@ -221,10 +221,37 @@ pub fn default_server_options() -> Options {
     opts.set("exit-unattached", OptionValue::Flag(false));
     opts.set("focus-events", OptionValue::Flag(false));
     opts.set("set-clipboard", OptionValue::String("external".into()));
-    opts.set("terminal-overrides", OptionValue::Array(Vec::new()));
+    opts.set("terminal-overrides", OptionValue::Array(vec!["linux*:AX@".into()]));
     opts.set("default-terminal", OptionValue::String("screen".into()));
     opts.set("message-limit", OptionValue::Number(1000));
     opts.set("prefix-timeout", OptionValue::Number(0));
+    opts.set("backspace", OptionValue::String(String::new()));
+    opts.set(
+        "command-alias",
+        OptionValue::Array(vec![
+            "split-pane=split-window".into(),
+            "splitp=split-window".into(),
+            "server-info=show-messages".into(),
+            "info=show-messages".into(),
+            "choose-window=choose-tree -w".into(),
+            "choose-session=choose-tree -s".into(),
+        ]),
+    );
+    opts.set("copy-command", OptionValue::String(String::new()));
+    opts.set("default-client-command", OptionValue::String(String::new()));
+    opts.set("editor", OptionValue::String(String::new()));
+    opts.set("extended-keys", OptionValue::String("off".into()));
+    opts.set("history-file", OptionValue::String(String::new()));
+    opts.set("input-buffer-size", OptionValue::Number(1_048_576));
+    opts.set("prompt-history-limit", OptionValue::Number(100));
+    opts.set(
+        "terminal-features",
+        OptionValue::Array(vec![
+            "xterm*:clipboard:ccolour:cstyle:focus:title".into(),
+            "screen*:title".into(),
+        ]),
+    );
+    opts.set("user-keys", OptionValue::Array(Vec::new()));
     opts
 }
 
@@ -239,7 +266,7 @@ pub fn default_session_options() -> Options {
     opts.set("prefix", OptionValue::String("C-b".into()));
     opts.set("status", OptionValue::Flag(true));
     opts.set("status-left", OptionValue::String("[#{session_name}] ".into()));
-    opts.set("status-right", OptionValue::String("\"#{=21:pane_title}\" %H:%M %d-%b-%y".into()));
+    opts.set("status-right", OptionValue::String("#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y".into()));
     opts.set("mouse", OptionValue::Flag(false));
     opts.set("renumber-windows", OptionValue::Flag(false));
     opts.set("automatic-rename", OptionValue::Flag(true));
@@ -263,8 +290,8 @@ pub fn default_session_options() -> Options {
         "set-titles-string",
         OptionValue::String("#S:#I:#W - \"#T\" #{session_alerts}".into()),
     );
-    opts.set("prefix2", OptionValue::String("None".into()));
-    opts.set("destroy-unattached", OptionValue::Flag(false));
+    opts.set("prefix2", OptionValue::String(String::new()));
+    opts.set("destroy-unattached", OptionValue::String("off".into()));
     opts.set("detach-on-destroy", OptionValue::String("on".into()));
     // tmux default: all non-alphanumeric printable ASCII except underscore.
     opts.set("word-separators", OptionValue::String("!\"#$%&'()*+,-.:;<=>?@[\\]^`{|}~".into()));
@@ -278,6 +305,25 @@ pub fn default_session_options() -> Options {
     opts.set("silence-action", OptionValue::String("other".into()));
     opts.set("lock-after-time", OptionValue::Number(0)); // 0 = disabled
     opts.set("lock-command", OptionValue::String("lock -np".into()));
+    opts.set("assume-paste-time", OptionValue::Number(1));
+    opts.set("display-panes-active-colour", OptionValue::String("red".into()));
+    opts.set("display-panes-colour", OptionValue::String("blue".into()));
+    opts.set("display-panes-time", OptionValue::Number(1000));
+    opts.set("focus-follows-mouse", OptionValue::Flag(false));
+    opts.set("status-format", OptionValue::Array(Vec::new()));
+    opts.set(
+        "update-environment",
+        OptionValue::Array(vec![
+            "DISPLAY".into(),
+            "KRB5CCNAME".into(),
+            "SSH_ASKPASS".into(),
+            "SSH_AUTH_SOCK".into(),
+            "SSH_AGENT_PID".into(),
+            "SSH_CONNECTION".into(),
+            "WINDOWID".into(),
+            "XAUTHORITY".into(),
+        ]),
+    );
     opts
 }
 
@@ -291,7 +337,12 @@ pub fn default_window_options() -> Options {
     opts.set("allow-rename", OptionValue::Flag(false));
     opts.set("monitor-activity", OptionValue::Flag(false));
     opts.set("pane-border-style", OptionValue::String("default".into()));
-    opts.set("pane-active-border-style", OptionValue::String("fg=green".into()));
+    opts.set(
+        "pane-active-border-style",
+        OptionValue::String(
+            "#{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}".into(),
+        ),
+    );
     opts.set("pane-border-status", OptionValue::String("off".into()));
     opts.set(
         "pane-border-format",
@@ -299,15 +350,15 @@ pub fn default_window_options() -> Options {
             "#{?pane_active,#[reverse],}#{pane_index}#[default] \"#{pane_title}\"".into(),
         ),
     );
-    opts.set("remain-on-exit", OptionValue::Flag(false));
+    opts.set("remain-on-exit", OptionValue::String("off".into()));
     opts.set("alternate-screen", OptionValue::Flag(true));
     opts.set("monitor-bell", OptionValue::Flag(true));
     opts.set("monitor-silence", OptionValue::Number(0));
     opts.set("synchronize-panes", OptionValue::Flag(false));
     opts.set("wrap-search", OptionValue::Flag(true));
     opts.set("pane-base-index", OptionValue::Number(0));
-    opts.set("main-pane-height", OptionValue::Number(24));
-    opts.set("main-pane-width", OptionValue::Number(80));
+    opts.set("main-pane-height", OptionValue::String("24".into()));
+    opts.set("main-pane-width", OptionValue::String("80".into()));
     opts.set("window-status-style", OptionValue::String("default".into()));
     opts.set("window-status-current-style", OptionValue::String("default".into()));
     opts.set("window-status-last-style", OptionValue::String("default".into()));
@@ -316,11 +367,27 @@ pub fn default_window_options() -> Options {
     opts.set("window-status-separator", OptionValue::String(" ".into()));
     opts.set("window-active-style", OptionValue::String("default".into()));
     opts.set("window-style", OptionValue::String("default".into()));
-    opts.set("allow-passthrough", OptionValue::Flag(false));
+    opts.set("allow-passthrough", OptionValue::String("off".into()));
     opts.set("xterm-keys", OptionValue::Flag(true));
     opts.set("copy-mode-match-style", OptionValue::String("bg=cyan,fg=black".into()));
     opts.set("copy-mode-current-match-style", OptionValue::String("bg=magenta,fg=black".into()));
     opts.set("copy-mode-mark-style", OptionValue::String("bg=red,fg=black".into()));
+    opts.set(
+        "automatic-rename-format",
+        OptionValue::String(
+            "#{?pane_in_mode,[tmux],#{pane_current_command}}#{?pane_dead,[dead],}".into(),
+        ),
+    );
+    opts.set("clock-mode-colour", OptionValue::String("blue".into()));
+    opts.set("clock-mode-style", OptionValue::Number(24));
+    opts.set("fill-character", OptionValue::String(String::new()));
+    opts.set("mode-style", OptionValue::String("bg=yellow,fg=black".into()));
+    opts.set("pane-border-lines", OptionValue::String("single".into()));
+    opts.set("popup-border-lines", OptionValue::String("single".into()));
+    opts.set("popup-border-style", OptionValue::String("default".into()));
+    opts.set("popup-style", OptionValue::String("default".into()));
+    opts.set("scroll-on-clear", OptionValue::Flag(true));
+    opts.set("window-size", OptionValue::String("latest".into()));
     opts
 }
 
@@ -538,7 +605,7 @@ mod tests {
         assert!(!opts.get_flag("aggressive-resize").unwrap());
         assert!(!opts.get_flag("allow-rename").unwrap());
         assert!(!opts.get_flag("monitor-activity").unwrap());
-        assert!(!opts.get_flag("remain-on-exit").unwrap());
+        assert_eq!(opts.get_string("remain-on-exit").unwrap(), "off");
     }
 
     mod prop_tests {
@@ -670,5 +737,99 @@ mod tests {
     fn window_defaults_copy_mode_mark_style() {
         let opts = default_window_options();
         assert_eq!(opts.get_string("copy-mode-mark-style").unwrap(), "bg=red,fg=black");
+    }
+
+    // --- Server option defaults ---
+
+    #[test]
+    fn server_defaults_new_options() {
+        let opts = default_server_options();
+        assert_eq!(opts.get_string("backspace").unwrap(), "");
+        assert_eq!(opts.get_string("copy-command").unwrap(), "");
+        assert_eq!(opts.get_string("editor").unwrap(), "");
+        assert_eq!(opts.get_string("extended-keys").unwrap(), "off");
+        assert_eq!(opts.get_string("history-file").unwrap(), "");
+        assert_eq!(opts.get_number("input-buffer-size").unwrap(), 1_048_576);
+        assert_eq!(opts.get_number("prompt-history-limit").unwrap(), 100);
+    }
+
+    #[test]
+    fn server_defaults_arrays() {
+        let opts = default_server_options();
+        if let Some(OptionValue::Array(aliases)) = opts.get("command-alias") {
+            assert!(aliases.iter().any(|a| a.starts_with("split-pane=")));
+            assert_eq!(aliases.len(), 6);
+        } else {
+            panic!("command-alias should be Array");
+        }
+        if let Some(OptionValue::Array(features)) = opts.get("terminal-features") {
+            assert!(features.iter().any(|f| f.starts_with("xterm*")));
+        } else {
+            panic!("terminal-features should be Array");
+        }
+        if let Some(OptionValue::Array(overrides)) = opts.get("terminal-overrides") {
+            assert_eq!(overrides, &["linux*:AX@"]);
+        } else {
+            panic!("terminal-overrides should be Array");
+        }
+    }
+
+    // --- Session option defaults ---
+
+    #[test]
+    fn session_defaults_new_options() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_number("assume-paste-time").unwrap(), 1);
+        assert_eq!(opts.get_string("display-panes-active-colour").unwrap(), "red");
+        assert_eq!(opts.get_string("display-panes-colour").unwrap(), "blue");
+        assert_eq!(opts.get_number("display-panes-time").unwrap(), 1000);
+        assert!(!opts.get_flag("focus-follows-mouse").unwrap());
+    }
+
+    #[test]
+    fn session_defaults_fixed_options() {
+        let opts = default_session_options();
+        assert_eq!(opts.get_string("prefix2").unwrap(), "");
+        assert_eq!(opts.get_string("destroy-unattached").unwrap(), "off");
+        assert!(opts.get_string("status-right").unwrap().contains("window_bigger"));
+    }
+
+    #[test]
+    fn session_defaults_update_environment() {
+        let opts = default_session_options();
+        if let Some(OptionValue::Array(env)) = opts.get("update-environment") {
+            assert!(env.contains(&"SSH_AUTH_SOCK".to_string()));
+            assert!(env.contains(&"DISPLAY".to_string()));
+            assert_eq!(env.len(), 8);
+        } else {
+            panic!("update-environment should be Array");
+        }
+    }
+
+    // --- Window option defaults ---
+
+    #[test]
+    fn window_defaults_new_options() {
+        let opts = default_window_options();
+        assert!(
+            opts.get_string("automatic-rename-format").unwrap().contains("pane_current_command")
+        );
+        assert_eq!(opts.get_string("clock-mode-colour").unwrap(), "blue");
+        assert_eq!(opts.get_number("clock-mode-style").unwrap(), 24);
+        assert_eq!(opts.get_string("mode-style").unwrap(), "bg=yellow,fg=black");
+        assert_eq!(opts.get_string("pane-border-lines").unwrap(), "single");
+        assert_eq!(opts.get_string("popup-border-style").unwrap(), "default");
+        assert!(opts.get_flag("scroll-on-clear").unwrap());
+        assert_eq!(opts.get_string("window-size").unwrap(), "latest");
+    }
+
+    #[test]
+    fn window_defaults_fixed_types() {
+        let opts = default_window_options();
+        assert_eq!(opts.get_string("allow-passthrough").unwrap(), "off");
+        assert_eq!(opts.get_string("main-pane-height").unwrap(), "24");
+        assert_eq!(opts.get_string("main-pane-width").unwrap(), "80");
+        assert_eq!(opts.get_string("remain-on-exit").unwrap(), "off");
+        assert!(opts.get_string("pane-active-border-style").unwrap().contains("pane_in_mode"));
     }
 }
