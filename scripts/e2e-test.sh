@@ -886,6 +886,74 @@ test_source_file_dirname_current_file() {
     rm -f "${tmp}"
 }
 
+# --- Format expansion tests ---------------------------------------------------
+
+test_format_expansion_modifiers() {
+    harness_start
+
+    # Shell quoting
+    local output
+    output=$(harness_rmux display-message -p '#{q:session_name}' 2>&1) || true
+    if [[ "${output}" != "'0'" ]]; then
+        _harness_fail "#{q:session_name} should be '0', got: ${output}"
+        return 1
+    fi
+
+    # String length
+    output=$(harness_rmux display-message -p '#{n:session_name}' 2>&1) || true
+    if [[ "${output}" != "1" ]]; then
+        _harness_fail "#{n:session_name} should be 1, got: ${output}"
+        return 1
+    fi
+
+    # Arithmetic
+    output=$(harness_rmux display-message -p '#{e|+:#{window_index},10}' 2>&1) || true
+    if [[ "${output}" != "10" ]]; then
+        _harness_fail "#{e|+:#{window_index},10} should be 10, got: ${output}"
+        return 1
+    fi
+
+    # Logical NOT
+    output=$(harness_rmux display-message -p '#{!window_zoomed_flag}' 2>&1) || true
+    if [[ "${output}" != "1" ]]; then
+        _harness_fail "#{!window_zoomed_flag} should be 1 (not zoomed), got: ${output}"
+        return 1
+    fi
+}
+
+test_format_variables() {
+    harness_start
+
+    # pid should be a positive integer
+    local output
+    output=$(harness_rmux display-message -p '#{pid}' 2>&1) || true
+    if ! [[ "${output}" =~ ^[0-9]+$ ]] || [[ "${output}" -eq 0 ]]; then
+        _harness_fail "#{pid} should be a positive number, got: ${output}"
+        return 1
+    fi
+
+    # socket_path should not be empty
+    output=$(harness_rmux display-message -p '#{socket_path}' 2>&1) || true
+    if [[ -z "${output}" ]]; then
+        _harness_fail "#{socket_path} should not be empty"
+        return 1
+    fi
+
+    # version should contain 3.6
+    output=$(harness_rmux display-message -p '#{version}' 2>&1) || true
+    if ! echo "${output}" | grep -q '3\.6'; then
+        _harness_fail "#{version} should contain 3.6, got: ${output}"
+        return 1
+    fi
+
+    # client_key_table should be 'root' when not in prefix
+    output=$(harness_rmux display-message -p '#{client_key_table}' 2>&1) || true
+    if [[ "${output}" != "root" ]]; then
+        _harness_fail "#{client_key_table} should be 'root', got: ${output}"
+        return 1
+    fi
+}
+
 # --- Main ---------------------------------------------------------------------
 
 echo "=== rmux E2E Test Suite ==="
@@ -955,6 +1023,10 @@ run_test test_source_file_format_flag
 run_test test_source_file_quiet_flag
 run_test test_source_file_current_file
 run_test test_source_file_dirname_current_file
+
+# Format expansion
+run_test test_format_expansion_modifiers
+run_test test_format_variables
 
 # Process cleanup
 run_test test_child_process_cleanup

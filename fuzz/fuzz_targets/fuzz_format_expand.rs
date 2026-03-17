@@ -10,12 +10,17 @@ fuzz_target!(|data: &[u8]| {
         ctx.set("window_index", "3");
         ctx.set("pane_title", "shell");
         ctx.set("template", "Session: #{session_name}");
+        ctx.set("count", "42");
+        ctx.set("active", "1");
+        ctx.set("path", "/home/user/project/file.rs");
         let _ = format_expand(template, &ctx);
 
         // Test with option lookup (exercises #{@...} paths)
         let mut ctx2 = FormatContext::new();
         ctx2.set("session_name", "main");
         ctx2.set("window_index", "3");
+        ctx2.set("count", "42");
+        ctx2.set("active", "1");
         ctx2.set_option_lookup(|key| match key {
             "@thm_bg" => Some("#1e1e2e".to_string()),
             "@catppuccin_flavor" => Some("mocha".to_string()),

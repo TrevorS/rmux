@@ -101,6 +101,76 @@ impl MockCommandServer {
         (session_id, window_idx, pane_id)
     }
 
+    /// Set session-level format variables on a context.
+    fn set_session_format_vars(
+        ctx: &mut crate::format::FormatContext,
+        session: &crate::session::Session,
+        session_id: u32,
+    ) {
+        ctx.set("session_name", &*session.name);
+        ctx.set("session_id", format!("${session_id}"));
+        ctx.set("session_windows", session.windows.len().to_string());
+        ctx.set("session_attached", session.attached.to_string());
+        ctx.set("session_created", session.created.to_string());
+        ctx.set("session_activity", session.activity.to_string());
+        ctx.set("session_path", &session.cwd);
+        let alerts: Vec<String> = session
+            .sorted_window_indices()
+            .iter()
+            .filter_map(|&idx| {
+                let w = session.windows.get(&idx)?;
+                let mut flags = String::new();
+                if w.has_bell {
+                    flags.push('#');
+                }
+                if w.has_activity {
+                    flags.push('!');
+                }
+                if flags.is_empty() { None } else { Some(format!("{idx}:{flags}")) }
+            })
+            .collect();
+        ctx.set("session_alerts", alerts.join(", "));
+    }
+
+    /// Set window and pane format variables on a context.
+    fn set_window_format_vars(
+        ctx: &mut crate::format::FormatContext,
+        session: &crate::session::Session,
+        widx: u32,
+    ) {
+        ctx.set("window_index", widx.to_string());
+        ctx.set("window_last_flag", if session.last_window == Some(widx) { "1" } else { "0" });
+        let Some(window) = session.windows.get(&widx) else { return };
+        ctx.set("window_name", &*window.name);
+        ctx.set("window_id", format!("@{}", window.id));
+        ctx.set("window_panes", window.pane_count().to_string());
+        ctx.set("window_active", "1");
+        ctx.set("window_zoomed_flag", if window.zoomed_pane.is_some() { "1" } else { "0" });
+        ctx.set("window_activity_flag", if window.has_activity { "1" } else { "0" });
+        ctx.set("window_bell_flag", if window.has_bell { "1" } else { "0" });
+        ctx.set("window_silence_flag", "0");
+        ctx.set("window_bigger", "0");
+        let sync = window.options.get_flag("synchronize-panes").unwrap_or(false);
+        ctx.set("pane_synchronized", if sync { "1" } else { "0" });
+        if let Some(pane) = window.active_pane() {
+            ctx.set("pane_id", format!("%{}", pane.id));
+            ctx.set("pane_index", pane.id.to_string());
+            ctx.set("pane_title", &*pane.screen.title);
+            ctx.set("pane_width", pane.screen.width().to_string());
+            ctx.set("pane_height", pane.screen.height().to_string());
+            ctx.set("pane_active", "1");
+            ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
+            ctx.set("pane_dead_status", "0");
+            ctx.set("pane_start_command", &*pane.start_command);
+            ctx.set("pane_at_top", if pane.yoff == 0 { "1" } else { "0" });
+            ctx.set("pane_at_left", if pane.xoff == 0 { "1" } else { "0" });
+            ctx.set("pane_at_bottom", "0");
+            ctx.set("pane_at_right", "0");
+            ctx.set("history_size", pane.screen.grid.history_size().to_string());
+            ctx.set("history_limit", pane.screen.grid.history_limit().to_string());
+        }
+    }
+
     /// Helper: add a second pane to a window (simulating split-window).
     /// Returns the new pane_id.
     pub fn add_pane_to_window(
@@ -1490,58 +1560,35 @@ impl CommandServer for MockCommandServer {
     fn build_format_context(&self) -> crate::format::FormatContext {
         let mut ctx = crate::format::FormatContext::new();
         ctx.set("version", env!("CARGO_PKG_VERSION"));
+        ctx.set("pid", std::process::id().to_string());
+        ctx.set("socket_path", "/tmp/rmux-test/default");
+        ctx.set("mouse_x", "0");
+        ctx.set("mouse_y", "0");
         if let Some(session_id) = self.client_session_id() {
             if let Some(session) = self.sessions.find_by_id(session_id) {
-                ctx.set("session_name", &*session.name);
-                ctx.set("session_windows", session.windows.len().to_string());
-                ctx.set("session_created", session.created.to_string());
-                ctx.set("session_activity", session.activity.to_string());
-                let alerts: Vec<String> = session
-                    .sorted_window_indices()
-                    .iter()
-                    .filter_map(|&idx| {
-                        let w = session.windows.get(&idx)?;
-                        let mut flags = String::new();
-                        if w.has_bell {
-                            flags.push('#');
-                        }
-                        if w.has_activity {
-                            flags.push('!');
-                        }
-                        if flags.is_empty() { None } else { Some(format!("{idx}:{flags}")) }
-                    })
-                    .collect();
-                ctx.set("session_alerts", alerts.join(", "));
+                Self::set_session_format_vars(&mut ctx, session, session_id);
                 if let Some(widx) = self.client_active_window() {
-                    ctx.set("window_index", widx.to_string());
-                    ctx.set(
-                        "window_last_flag",
-                        if session.last_window == Some(widx) { "1" } else { "0" },
-                    );
-                    if let Some(window) = session.windows.get(&widx) {
-                        ctx.set("window_name", &*window.name);
-                        ctx.set("window_panes", window.pane_count().to_string());
-                        ctx.set(
-                            "window_zoomed_flag",
-                            if window.zoomed_pane.is_some() { "1" } else { "0" },
-                        );
-                        let sync = window.options.get_flag("synchronize-panes").unwrap_or(false);
-                        ctx.set("pane_synchronized", if sync { "1" } else { "0" });
-                        if let Some(pane) = window.active_pane() {
-                            ctx.set("pane_id", format!("%{}", pane.id));
-                            ctx.set("pane_index", pane.id.to_string());
-                            ctx.set("pane_title", &*pane.screen.title);
-                            ctx.set("pane_width", pane.screen.width().to_string());
-                            ctx.set("pane_height", pane.screen.height().to_string());
-                            ctx.set("pane_active", "1");
-                            ctx.set("pane_dead", if pane.dead { "1" } else { "0" });
-                            ctx.set("pane_start_command", &*pane.start_command);
-                        }
-                    }
+                    Self::set_window_format_vars(&mut ctx, session, widx);
                 }
             }
         }
+        ctx.set("client_name", "client-0");
+        ctx.set("client_tty", "/dev/tty");
         ctx.set("client_prefix", "0");
+        ctx.set("client_pid", std::process::id().to_string());
+        ctx.set("client_key_table", "root");
+        ctx.set("client_termname", std::env::var("TERM").unwrap_or_default());
+        if let Some(buf) = self.paste_buffers.get_top() {
+            ctx.set("buffer_name", &buf.name);
+            ctx.set("buffer_size", buf.data.len().to_string());
+        }
+        if let Ok(hostname) = nix::unistd::gethostname() {
+            let h = hostname.to_string_lossy().to_string();
+            if let Some(short) = h.split('.').next() {
+                ctx.set("host_short", short);
+            }
+            ctx.set("host", h);
+        }
         // current_file — path of config file being sourced (if any)
         if let Ok(cf) = self.options.get_string("current_file") {
             ctx.set("current_file", cf);

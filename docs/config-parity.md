@@ -292,20 +292,21 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 - [x] `#{b:variable}` basename
 - [x] `#{s/pattern/replacement:expr}` substitution
 - [x] `#{=N:expr}` truncation (positive=left, negative=right)
-- [ ] `#{q:expr}` shell quoting
-- [ ] `#{n:expr}` string length
-- [ ] `#{w:expr}` display width
-- [ ] `#{a:expr}` ASCII code to character
-- [ ] `#{p:N:expr}` padding
-- [ ] `#{!expr}` logical NOT
-- [ ] `#{||:a,b}` / `#{&&:a,b}` logical OR/AND
-- [ ] `#{e|op:a,b}` arithmetic (+,-,*,/,%)
-- [ ] `#{m:pattern,string}` fnmatch/regex match
+- [x] `#{q:expr}` shell quoting (single-quote with escaping)
+- [x] `#{n:expr}` string length (character count)
+- [x] `#{w:expr}` display width (CJK-aware)
+- [x] `#{a:expr}` ASCII/Unicode code to character
+- [x] `#{p:N:expr}` padding (positive=right-pad, negative=left-pad)
+- [x] `#{!expr}` logical NOT
+- [x] `#{||:a,b}` / `#{&&:a,b}` logical OR/AND
+- [x] `#{e|op:a,b}` arithmetic (+,-,*,/,%)
+- [x] `#{m:pattern,string}` fnmatch glob match
+- [x] `#{m/r:pattern,string}` regex match (basic POSIX-like)
 
 ### Conditionals & Comparisons
 - [x] `#{?condition,true,false}` ternary
 - [x] `#{==:a,b}`, `#{!=:a,b}`, `#{<:a,b}`, `#{>:a,b}`, `#{<=:a,b}`, `#{>=:a,b}`
-- [ ] Multi-branch `#{?c1,v1,c2,v2,...,default}`
+- [~] Multi-branch — works via nested conditionals (tmux doesn't support native multi-branch either)
 
 ### Loops
 - [ ] `#{S:format}` sessions
@@ -321,39 +322,36 @@ Legend: `[x]` = implemented, `[ ]` = missing, `[~]` = partial/wrong default, `[!
 
 ### Implemented
 
-**Session:** `session_name`, `session_id`, `session_windows`, `session_attached`, `session_created`, `session_activity`, `session_alerts`
+**Session:** `session_name`, `session_id`, `session_windows`, `session_attached`, `session_created`, `session_activity`, `session_alerts`, `session_path`
 
-**Window:** `window_index`, `window_name`, `window_id`, `window_flags`, `window_active`, `window_panes`, `window_layout`
+**Window:** `window_index`, `window_name`, `window_id`, `window_flags`, `window_active`, `window_panes`, `window_layout`, `window_zoomed_flag`, `window_last_flag`, `window_activity_flag`, `window_bell_flag`, `window_silence_flag`, `window_bigger`
 
-**Pane:** `pane_id`, `pane_index`, `pane_title`, `pane_width`, `pane_height`, `pane_active`, `pane_dead`, `pane_current_command`, `pane_current_path`, `pane_pid`, `pane_tty`, `pane_start_command`, `pane_in_mode`, `pane_synchronized`
+**Pane:** `pane_id`, `pane_index`, `pane_title`, `pane_width`, `pane_height`, `pane_active`, `pane_dead`, `pane_dead_status`, `pane_current_command`, `pane_current_path`, `pane_pid`, `pane_tty`, `pane_start_command`, `pane_in_mode`, `pane_synchronized`, `pane_at_top`, `pane_at_bottom`, `pane_at_left`, `pane_at_right`
 
-**Client:** `client_name` (stub), `client_tty` (stub), `client_prefix`, `client_width`, `client_height`, `client_activity`, `client_session`
+**Client:** `client_name`, `client_tty`, `client_prefix`, `client_width`, `client_height`, `client_activity`, `client_session`, `client_pid`, `client_key_table`, `client_termname`
 
-**Terminal state:** `cursor_x`, `cursor_y`, `cursor_flag`, `insert_flag`, `keypad_flag`, `alternate_on`
+**Terminal state:** `cursor_x`, `cursor_y`, `cursor_flag`, `insert_flag`, `keypad_flag`, `alternate_on`, `mouse_any_flag`
 
-**System:** `host`, `host_short`, `version`, `current_file`
+**Scrollback:** `history_size`, `history_limit`
 
-### Missing (commonly used)
+**Paste buffers:** `buffer_name`, `buffer_size`
+
+**System:** `host`, `host_short`, `version`, `pid`, `socket_path`, `current_file`
+
+**Mouse:** `mouse_x`, `mouse_y`
+
+### Missing (less common)
 
 | Variable | Why it matters |
 |---|---|
-| `pid` | Scripts check server PID |
-| `socket_path` | Plugin path resolution |
-| `session_path` | Status bar configs |
-| `window_zoomed_flag` | Status bar zoom indicator |
-| `window_last_flag` | Status bar last-window marker |
-| `window_activity_flag` | Alert styling |
-| `window_bell_flag` | Alert styling |
-| `window_silence_flag` | Alert styling |
-| `window_bigger` | Used in tmux's own default `status-right` |
-| `pane_at_top/bottom/left/right` | Navigation config |
-| `pane_dead_status` | Exit code display |
-| `client_pid` | Plugin process management |
-| `client_key_table` | Key table indicator in status |
-| `client_termname` | Terminal detection |
-| `history_size` / `history_limit` | Scrollback display |
-| `buffer_name` / `buffer_size` | Paste buffer display |
-| `mouse_x` / `mouse_y` | Mouse tracking |
+| `session_grouped` | Session group membership |
+| `session_group` | Session group name |
+| `window_linked` | Window linked to multiple sessions |
+| `pane_pipe` | Whether pipe-pane is active |
+| `pane_search_string` | Last search in copy mode |
+| `client_control_mode` | Control mode indicator |
+| `client_flags` | Client flag string |
+| `server_sessions` | Total server session count |
 
 ---
 

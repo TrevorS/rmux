@@ -188,6 +188,11 @@ impl KeyBindings {
         self.in_prefix
     }
 
+    /// Return the name of the current key table.
+    pub fn current_table(&self) -> &str {
+        if self.in_prefix { "prefix" } else { "root" }
+    }
+
     /// Set the repeat timeout (called after dispatching a repeatable binding).
     pub fn set_repeat_timeout(&mut self, repeat_time_ms: u64) {
         if repeat_time_ms > 0 {

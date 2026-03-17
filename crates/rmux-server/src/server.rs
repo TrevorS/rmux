@@ -2781,6 +2781,17 @@ impl Server {
             "mouse_any_flag",
             if mode.intersects(ModeFlags::MOUSE_BUTTON | ModeFlags::MOUSE_ANY) { "1" } else { "0" },
         );
+        // Pane edge flags
+        ctx.set("pane_at_top", if pane.yoff == 0 { "1" } else { "0" });
+        ctx.set("pane_at_left", if pane.xoff == 0 { "1" } else { "0" });
+        // pane_at_bottom/right require window dimensions — approximate from pane geometry
+        ctx.set("pane_at_bottom", "0");
+        ctx.set("pane_at_right", "0");
+        // History info
+        ctx.set("history_size", pane.screen.grid.history_size().to_string());
+        ctx.set("history_limit", pane.screen.grid.history_limit().to_string());
+        // Dead status (exit code) — not tracked yet, default to 0
+        ctx.set("pane_dead_status", "0");
     }
 }
 
@@ -3509,6 +3520,13 @@ impl CommandServer for Server {
         let mut ctx = crate::format::FormatContext::new();
         // version — rmux version string (tracks tmux for plugin compat)
         ctx.set("version", env!("CARGO_PKG_VERSION"));
+        // pid — server process ID
+        ctx.set("pid", std::process::id().to_string());
+        // socket_path — server socket path
+        ctx.set("socket_path", self.socket_path.to_string_lossy());
+        // mouse coordinates — defaults, updated during mouse event processing
+        ctx.set("mouse_x", "0");
+        ctx.set("mouse_y", "0");
         if let Some(session_id) = self.client_session_id() {
             if let Some(session) = self.sessions.find_by_id(session_id) {
                 ctx.set("session_name", &*session.name);
@@ -3556,6 +3574,14 @@ impl CommandServer for Server {
                             "window_zoomed_flag",
                             if window.zoomed_pane.is_some() { "1" } else { "0" },
                         );
+                        ctx.set(
+                            "window_activity_flag",
+                            if window.has_activity { "1" } else { "0" },
+                        );
+                        ctx.set("window_bell_flag", if window.has_bell { "1" } else { "0" });
+                        ctx.set("window_silence_flag", "0");
+                        // window_bigger — "1" when window is constrained by a smaller client
+                        ctx.set("window_bigger", "0");
                         // pane_synchronized
                         let sync = window.options.get_flag("synchronize-panes").unwrap_or(false);
                         ctx.set("pane_synchronized", if sync { "1" } else { "0" });
@@ -3580,10 +3606,13 @@ impl CommandServer for Server {
         ctx.set("client_name", format!("client-{client_id}"));
         ctx.set("client_tty", "/dev/tty");
         ctx.set("client_prefix", if self.keybindings.in_prefix() { "1" } else { "0" });
+        ctx.set("client_pid", std::process::id().to_string());
+        ctx.set("client_key_table", self.keybindings.current_table());
         if let Some(client) = self.clients.get(&client_id) {
             ctx.set("client_width", client.sx.to_string());
             ctx.set("client_height", client.sy.to_string());
             ctx.set("client_activity", client.activity.to_string());
+            ctx.set("client_termname", std::env::var("TERM").unwrap_or_default());
             if let Some(sid) = client.session_id {
                 if let Some(session) = self.sessions.find_by_id(sid) {
                     ctx.set("client_session", &*session.name);
@@ -3596,6 +3625,17 @@ impl CommandServer for Server {
                 ctx.set("host_short", short);
             }
             ctx.set("host", h);
+        }
+        // Paste buffer info
+        if let Some(buf) = self.paste_buffers.get_top() {
+            ctx.set("buffer_name", &buf.name);
+            ctx.set("buffer_size", buf.data.len().to_string());
+        }
+        // session_path — session working directory
+        if let Some(session_id) = self.client_session_id() {
+            if let Some(session) = self.sessions.find_by_id(session_id) {
+                ctx.set("session_path", &session.cwd);
+            }
         }
         // current_file — path of config file being sourced (if any)
         if let Ok(cf) = self.options.get_string("current_file") {

@@ -747,6 +747,105 @@ mod format_var_tests {
         let result = exec(&mut s, &["resize-pane", "-Z", "-t", "%999"]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn pid_and_socket_path_variables() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{pid}"]));
+        let pid: u32 = output.trim().parse().expect("pid should be a number");
+        assert!(pid > 0, "pid should be positive, got: {pid}");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{socket_path}"]));
+        assert!(!output.trim().is_empty(), "socket_path should not be empty");
+    }
+
+    #[test]
+    fn session_path_variable() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{session_path}"]));
+        assert!(!output.trim().is_empty(), "session_path should not be empty");
+    }
+
+    #[test]
+    fn window_alert_flags_in_format() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output =
+            output_text(exec(&mut s, &["display-message", "-p", "#{window_activity_flag}"]));
+        assert_eq!(output.trim(), "0");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{window_bell_flag}"]));
+        assert_eq!(output.trim(), "0");
+    }
+
+    #[test]
+    fn pane_edge_flags_in_format() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Single pane at offset 0,0 — should be at_top and at_left
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{pane_at_top}"]));
+        assert_eq!(output.trim(), "1");
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{pane_at_left}"]));
+        assert_eq!(output.trim(), "1");
+    }
+
+    #[test]
+    fn history_variables_in_format() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{history_size}"]));
+        let size: u32 = output.trim().parse().unwrap_or(u32::MAX);
+        // History size should be 0 for a fresh pane
+        assert_eq!(size, 0, "history_size should be 0 for fresh pane");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{history_limit}"]));
+        let limit: u32 = output.trim().parse().unwrap_or(0);
+        assert!(limit > 0, "history_limit should be > 0, got: {limit}");
+    }
+
+    #[test]
+    fn client_variables_in_format() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{client_key_table}"]));
+        assert_eq!(output.trim(), "root");
+
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{client_pid}"]));
+        let pid: u32 = output.trim().parse().expect("client_pid should be numeric");
+        assert!(pid > 0);
+    }
+
+    #[test]
+    fn format_modifiers_via_display_message() {
+        let mut s = MockCommandServer::new();
+        s.create_test_session("test");
+
+        // Shell quoting
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{q:session_name}"]));
+        assert_eq!(output.trim(), "'test'");
+
+        // String length
+        let output = output_text(exec(&mut s, &["display-message", "-p", "#{n:session_name}"]));
+        assert_eq!(output.trim(), "4");
+
+        // Logical NOT
+        let output =
+            output_text(exec(&mut s, &["display-message", "-p", "#{!window_zoomed_flag}"]));
+        assert_eq!(output.trim(), "1");
+
+        // Arithmetic
+        let output =
+            output_text(exec(&mut s, &["display-message", "-p", "#{e|+:#{window_index},1}"]));
+        assert_eq!(output.trim(), "1");
+    }
 }
 
 // ============================================================

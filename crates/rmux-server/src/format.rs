@@ -224,31 +224,9 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
         return expand_conditional(rest, ctx);
     }
 
-    // Literal: l:text (no further expansion)
-    if let Some(rest) = inner.strip_prefix("l:") {
-        return rest.to_string();
-    }
-
-    // Double expansion: E:expr — look up variable, then expand result as a format string
-    if let Some(rest) = inner.strip_prefix("E:") {
-        let first = eval_expr(rest, ctx);
-        return format_expand(&first, ctx);
-    }
-
-    // Dirname: d:variable — directory component of a path
-    if let Some(rest) = inner.strip_prefix("d:") {
-        let val = eval_expr(rest, ctx);
-        return std::path::Path::new(&val)
-            .parent()
-            .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
-    }
-
-    // Basename: b:variable — filename component of a path
-    if let Some(rest) = inner.strip_prefix("b:") {
-        let val = eval_expr(rest, ctx);
-        return std::path::Path::new(&val)
-            .file_name()
-            .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+    // Try modifier dispatch (l:, E:, d:, b:, q:, n:, w:, a:, p:, !, ||:, &&:, etc.)
+    if let Some(result) = expand_modifier(inner, ctx) {
+        return result;
     }
 
     // Substitution: s/pattern/replacement:expr
@@ -259,23 +237,8 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
     }
 
     // Comparison operators: ==:a,b  !=:a,b  <:a,b  etc.
-    if let Some(rest) = inner.strip_prefix("==:") {
-        return expand_comparison(rest, ctx, |a, b| a == b);
-    }
-    if let Some(rest) = inner.strip_prefix("!=:") {
-        return expand_comparison(rest, ctx, |a, b| a != b);
-    }
-    if let Some(rest) = inner.strip_prefix("<=:") {
-        return expand_comparison(rest, ctx, |a, b| a <= b);
-    }
-    if let Some(rest) = inner.strip_prefix(">=:") {
-        return expand_comparison(rest, ctx, |a, b| a >= b);
-    }
-    if let Some(rest) = inner.strip_prefix("<:") {
-        return expand_comparison(rest, ctx, |a, b| a < b);
-    }
-    if let Some(rest) = inner.strip_prefix(">:") {
-        return expand_comparison(rest, ctx, |a, b| a > b);
+    if let Some(result) = expand_comparison_dispatch(inner, ctx) {
+        return result;
     }
 
     // Width truncation: =N:expr (positive N = right trunc, negative = left trunc)
@@ -287,15 +250,115 @@ fn expand_inner(inner: &str, ctx: &FormatContext) -> String {
 
     // Plain variable lookup (may contain nested #{} that need expanding first)
     let expanded = format_expand(inner, ctx);
-    // If the expanded result is itself a variable name, look it up
-    // But first check if the original inner was a plain variable name
-    if inner.contains('#') {
-        // Had nested expansions — return the expanded result
-        expanded
-    } else {
-        // Plain variable name — use lookup which also handles @user_options
-        ctx.lookup(inner).unwrap_or_default()
+    if inner.contains('#') { expanded } else { ctx.lookup(inner).unwrap_or_default() }
+}
+
+/// Dispatch single-letter and multi-char modifiers.
+fn expand_modifier(inner: &str, ctx: &FormatContext) -> Option<String> {
+    // Literal
+    if let Some(rest) = inner.strip_prefix("l:") {
+        return Some(rest.to_string());
     }
+    // Double expansion
+    if let Some(rest) = inner.strip_prefix("E:") {
+        let first = eval_expr(rest, ctx);
+        return Some(format_expand(&first, ctx));
+    }
+    // Dirname
+    if let Some(rest) = inner.strip_prefix("d:") {
+        let val = eval_expr(rest, ctx);
+        return Some(
+            std::path::Path::new(&val)
+                .parent()
+                .map_or_else(String::new, |p| p.to_string_lossy().into_owned()),
+        );
+    }
+    // Basename
+    if let Some(rest) = inner.strip_prefix("b:") {
+        let val = eval_expr(rest, ctx);
+        return Some(
+            std::path::Path::new(&val)
+                .file_name()
+                .map_or_else(String::new, |f| f.to_string_lossy().into_owned()),
+        );
+    }
+    // Shell quoting
+    if let Some(rest) = inner.strip_prefix("q:") {
+        return Some(shell_quote(&eval_expr(rest, ctx)));
+    }
+    // String length
+    if let Some(rest) = inner.strip_prefix("n:") {
+        return Some(eval_expr(rest, ctx).chars().count().to_string());
+    }
+    // Display width
+    if let Some(rest) = inner.strip_prefix("w:") {
+        return Some(display_width(&eval_expr(rest, ctx)).to_string());
+    }
+    // ASCII code to character
+    if let Some(rest) = inner.strip_prefix("a:") {
+        // Try as literal number first, then as expression
+        let val = if rest.chars().all(|c| c.is_ascii_digit()) {
+            rest.to_string()
+        } else {
+            eval_expr(rest, ctx)
+        };
+        return Some(
+            val.parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .map_or_else(String::new, |ch| ch.to_string()),
+        );
+    }
+    // Padding
+    if inner.starts_with("p:") || inner.starts_with("p:-") {
+        return expand_padding(inner, ctx);
+    }
+    // Logical NOT (but not !=: comparison)
+    if inner.starts_with('!') && !inner.starts_with("!=:") {
+        let rest = &inner[1..];
+        let val = eval_expr(rest, ctx);
+        let is_true = !val.is_empty() && val != "0";
+        return Some(if is_true { "0" } else { "1" }.to_string());
+    }
+    // Logical OR / AND
+    if let Some(rest) = inner.strip_prefix("||:") {
+        return Some(expand_logical_or(rest, ctx));
+    }
+    if let Some(rest) = inner.strip_prefix("&&:") {
+        return Some(expand_logical_and(rest, ctx));
+    }
+    // Arithmetic
+    if inner.starts_with("e|") {
+        return expand_arithmetic(inner, ctx);
+    }
+    // Pattern match
+    if inner.starts_with("m:") || inner.starts_with("m/r:") {
+        return Some(expand_match(inner, ctx));
+    }
+    None
+}
+
+/// Dispatch comparison operators.
+fn expand_comparison_dispatch(inner: &str, ctx: &FormatContext) -> Option<String> {
+    if let Some(rest) = inner.strip_prefix("==:") {
+        return Some(expand_comparison(rest, ctx, |a, b| a == b));
+    }
+    if let Some(rest) = inner.strip_prefix("!=:") {
+        return Some(expand_comparison(rest, ctx, |a, b| a != b));
+    }
+    if let Some(rest) = inner.strip_prefix("<=:") {
+        return Some(expand_comparison(rest, ctx, |a, b| a <= b));
+    }
+    if let Some(rest) = inner.strip_prefix(">=:") {
+        return Some(expand_comparison(rest, ctx, |a, b| a >= b));
+    }
+    if let Some(rest) = inner.strip_prefix("<:") {
+        return Some(expand_comparison(rest, ctx, |a, b| a < b));
+    }
+    if let Some(rest) = inner.strip_prefix(">:") {
+        return Some(expand_comparison(rest, ctx, |a, b| a > b));
+    }
+    None
 }
 
 /// Split a format string at a top-level comma, respecting nested `#{}`.
@@ -393,6 +456,321 @@ fn expand_truncation(inner: &str, ctx: &FormatContext) -> Option<String> {
     } else {
         // Negative: keep last N chars
         Some(expanded.chars().skip(char_count - abs_n).collect())
+    }
+}
+
+/// Shell-quote a string (single-quote with escaping).
+fn shell_quote(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 2);
+    result.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            result.push_str("'\\''");
+        } else {
+            result.push(ch);
+        }
+    }
+    result.push('\'');
+    result
+}
+
+/// Compute display width of a string (ASCII = 1, wide CJK chars = 2, control = 0).
+fn display_width(s: &str) -> usize {
+    s.chars()
+        .map(|ch| {
+            if ch.is_control() {
+                0
+            } else if is_wide_char(ch) {
+                2
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+/// Check if a character is a CJK wide character.
+fn is_wide_char(ch: char) -> bool {
+    let c = ch as u32;
+    // CJK Unified Ideographs
+    (0x4E00..=0x9FFF).contains(&c)
+    // CJK Unified Ideographs Extension A
+    || (0x3400..=0x4DBF).contains(&c)
+    // CJK Compatibility Ideographs
+    || (0xF900..=0xFAFF).contains(&c)
+    // Fullwidth Forms
+    || (0xFF01..=0xFF60).contains(&c)
+    || (0xFFE0..=0xFFE6).contains(&c)
+    // CJK Radicals Supplement, Kangxi Radicals
+    || (0x2E80..=0x2FDF).contains(&c)
+    // CJK Symbols and Punctuation, Hiragana, Katakana
+    || (0x3000..=0x303F).contains(&c)
+    || (0x3040..=0x309F).contains(&c)
+    || (0x30A0..=0x30FF).contains(&c)
+    // Hangul Syllables
+    || (0xAC00..=0xD7AF).contains(&c)
+    // CJK Unified Ideographs Extension B and beyond
+    || (0x20000..=0x2FA1F).contains(&c)
+}
+
+/// Expand padding: `p:N:expr` — pad to width N (positive=right-pad, negative=left-pad).
+fn expand_padding(inner: &str, ctx: &FormatContext) -> Option<String> {
+    let rest = inner.strip_prefix("p:")?;
+    let colon_pos = rest.find(':')?;
+    let n_str = &rest[..colon_pos];
+    let expr = &rest[colon_pos + 1..];
+
+    let n: i32 = n_str.parse().ok()?;
+    let expanded = eval_expr(expr, ctx);
+    let char_count = expanded.chars().count();
+    let abs_n = n.unsigned_abs() as usize;
+
+    if char_count >= abs_n {
+        return Some(expanded);
+    }
+
+    let padding = abs_n - char_count;
+    if n >= 0 {
+        // Positive: right-pad (add spaces after)
+        Some(format!("{expanded}{}", " ".repeat(padding)))
+    } else {
+        // Negative: left-pad (add spaces before)
+        Some(format!("{}{expanded}", " ".repeat(padding)))
+    }
+}
+
+/// Expand logical OR: `a,b` — returns "1" if either is truthy.
+fn expand_logical_or(rest: &str, ctx: &FormatContext) -> String {
+    let Some((a_expr, b_expr)) = split_at_comma(rest) else {
+        return String::new();
+    };
+    let a = format_expand(a_expr, ctx);
+    let b = format_expand(b_expr, ctx);
+    let a_true = !a.is_empty() && a != "0";
+    let b_true = !b.is_empty() && b != "0";
+    if a_true || b_true { "1" } else { "0" }.to_string()
+}
+
+/// Expand logical AND: `a,b` — returns "1" if both are truthy.
+fn expand_logical_and(rest: &str, ctx: &FormatContext) -> String {
+    let Some((a_expr, b_expr)) = split_at_comma(rest) else {
+        return String::new();
+    };
+    let a = format_expand(a_expr, ctx);
+    let b = format_expand(b_expr, ctx);
+    let a_true = !a.is_empty() && a != "0";
+    let b_true = !b.is_empty() && b != "0";
+    if a_true && b_true { "1" } else { "0" }.to_string()
+}
+
+/// Expand arithmetic: `e|op:a,b` where op is +, -, *, /, or %.
+fn expand_arithmetic(inner: &str, ctx: &FormatContext) -> Option<String> {
+    let rest = inner.strip_prefix("e|")?;
+    let colon_pos = rest.find(':')?;
+    let op = &rest[..colon_pos];
+    let args = &rest[colon_pos + 1..];
+
+    let (a_expr, b_expr) = split_at_comma(args)?;
+    let a = format_expand(a_expr, ctx);
+    let b = format_expand(b_expr, ctx);
+    let a_num: i64 = a.parse().unwrap_or(0);
+    let b_num: i64 = b.parse().unwrap_or(0);
+
+    let result = match op {
+        "+" => a_num.wrapping_add(b_num),
+        "-" => a_num.wrapping_sub(b_num),
+        "*" => a_num.wrapping_mul(b_num),
+        "/" => {
+            if b_num == 0 {
+                return Some("0".to_string());
+            }
+            a_num / b_num
+        }
+        "%" => {
+            if b_num == 0 {
+                return Some("0".to_string());
+            }
+            a_num % b_num
+        }
+        _ => return None,
+    };
+    Some(result.to_string())
+}
+
+/// Expand pattern match: `m:pattern,string` (glob) or `m/r:pattern,string` (regex).
+fn expand_match(inner: &str, ctx: &FormatContext) -> String {
+    let (pattern_expr, string_expr, is_regex) = if let Some(rest) = inner.strip_prefix("m/r:") {
+        let Some((p, s)) = split_at_comma(rest) else {
+            return String::new();
+        };
+        (p, s, true)
+    } else if let Some(rest) = inner.strip_prefix("m:") {
+        let Some((p, s)) = split_at_comma(rest) else {
+            return String::new();
+        };
+        (p, s, false)
+    } else {
+        return String::new();
+    };
+
+    let pattern = format_expand(pattern_expr, ctx);
+    let string = format_expand(string_expr, ctx);
+
+    let matched = if is_regex {
+        // Simple regex match — tmux uses POSIX regex, we use a basic approach
+        regex_match(&pattern, &string)
+    } else {
+        // fnmatch-style glob: * matches any, ? matches one char
+        fnmatch(&pattern, &string)
+    };
+
+    if matched { "1" } else { "0" }.to_string()
+}
+
+/// Simple fnmatch-style glob matching (supports `*` and `?`).
+fn fnmatch(pattern: &str, string: &str) -> bool {
+    let pat: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = string.chars().collect();
+    fnmatch_inner(&pat, &s, 0, 0)
+}
+
+fn fnmatch_inner(pat: &[char], s: &[char], pi: usize, si: usize) -> bool {
+    let mut pi = pi;
+    let mut si = si;
+
+    while pi < pat.len() {
+        match pat[pi] {
+            '*' => {
+                // Skip consecutive *
+                while pi < pat.len() && pat[pi] == '*' {
+                    pi += 1;
+                }
+                if pi == pat.len() {
+                    return true;
+                }
+                // Try matching rest of pattern from each position
+                for i in si..=s.len() {
+                    if fnmatch_inner(pat, s, pi, i) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            '?' => {
+                if si >= s.len() {
+                    return false;
+                }
+                pi += 1;
+                si += 1;
+            }
+            ch => {
+                if si >= s.len() || s[si] != ch {
+                    return false;
+                }
+                pi += 1;
+                si += 1;
+            }
+        }
+    }
+    si == s.len()
+}
+
+/// Simple regex match — anchored match using basic regex features.
+fn regex_match(pattern: &str, string: &str) -> bool {
+    // Basic implementation: support `.` (any), `.*` (any sequence), `^`, `$`
+    // For full regex we'd need a crate, but tmux uses POSIX extended regex.
+    // We do a simple substring search if no special chars, otherwise basic matching.
+    if pattern.is_empty() {
+        return true;
+    }
+
+    // If pattern has no regex metacharacters, do substring match
+    let has_meta = pattern.chars().any(|c| {
+        matches!(
+            c,
+            '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' | '\\'
+        )
+    });
+    if !has_meta {
+        return string.contains(pattern);
+    }
+
+    // For anchored patterns, do basic matching
+    let pat = if let Some(p) = pattern.strip_prefix('^') {
+        if let Some(p2) = p.strip_suffix('$') {
+            // ^...$  — full match
+            return simple_regex_match(p2, string, true);
+        }
+        // ^... — prefix match
+        return simple_regex_match(p, string, true);
+    } else if let Some(p) = pattern.strip_suffix('$') {
+        // ...$  — check from each position
+        for i in 0..=string.len() {
+            if simple_regex_match(p, &string[i..], true) {
+                return true;
+            }
+        }
+        return false;
+    } else {
+        pattern
+    };
+
+    // Unanchored — search
+    for i in 0..=string.len() {
+        if simple_regex_match(pat, &string[i..], false) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Very basic regex: supports `.` (any char), `.*` (any sequence), literal chars.
+fn simple_regex_match(pattern: &str, string: &str, must_consume_all: bool) -> bool {
+    let pat: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = string.chars().collect();
+    simple_regex_inner(&pat, &s, 0, 0, must_consume_all)
+}
+
+fn simple_regex_inner(
+    pat: &[char],
+    s: &[char],
+    pi: usize,
+    si: usize,
+    must_consume_all: bool,
+) -> bool {
+    if pi == pat.len() {
+        return if must_consume_all { si == s.len() } else { true };
+    }
+
+    // Check for quantifier: `X*`
+    if pi + 1 < pat.len() && pat[pi + 1] == '*' {
+        let match_char = pat[pi];
+        // Try matching 0..n occurrences
+        let mut si2 = si;
+        loop {
+            if simple_regex_inner(pat, s, pi + 2, si2, must_consume_all) {
+                return true;
+            }
+            if si2 >= s.len() {
+                break;
+            }
+            if match_char == '.' || s[si2] == match_char {
+                si2 += 1;
+            } else {
+                break;
+            }
+        }
+        return false;
+    }
+
+    if si >= s.len() {
+        return false;
+    }
+
+    match pat[pi] {
+        '.' => simple_regex_inner(pat, s, pi + 1, si + 1, must_consume_all),
+        ch if ch == s[si] => simple_regex_inner(pat, s, pi + 1, si + 1, must_consume_all),
+        _ => false,
     }
 }
 
@@ -987,6 +1365,260 @@ mod tests {
         assert!(!result.is_empty());
     }
 
+    // --- Section 3: new modifier tests ---
+
+    #[test]
+    fn shell_quoting_simple() {
+        let mut ctx = FormatContext::new();
+        ctx.set("cmd", "echo hello");
+        assert_eq!(format_expand("#{q:cmd}", &ctx), "'echo hello'");
+    }
+
+    #[test]
+    fn shell_quoting_with_single_quotes() {
+        let mut ctx = FormatContext::new();
+        ctx.set("cmd", "it's a test");
+        assert_eq!(format_expand("#{q:cmd}", &ctx), "'it'\\''s a test'");
+    }
+
+    #[test]
+    fn shell_quoting_empty() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{q:missing}", &ctx), "''");
+    }
+
+    #[test]
+    fn string_length() {
+        let mut ctx = FormatContext::new();
+        ctx.set("name", "hello");
+        assert_eq!(format_expand("#{n:name}", &ctx), "5");
+    }
+
+    #[test]
+    fn string_length_empty() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{n:missing}", &ctx), "0");
+    }
+
+    #[test]
+    fn string_length_unicode() {
+        let mut ctx = FormatContext::new();
+        ctx.set("text", "café");
+        assert_eq!(format_expand("#{n:text}", &ctx), "4");
+    }
+
+    #[test]
+    fn display_width_ascii() {
+        let mut ctx = FormatContext::new();
+        ctx.set("text", "hello");
+        assert_eq!(format_expand("#{w:text}", &ctx), "5");
+    }
+
+    #[test]
+    fn display_width_cjk() {
+        let mut ctx = FormatContext::new();
+        ctx.set("text", "日本語");
+        assert_eq!(format_expand("#{w:text}", &ctx), "6");
+    }
+
+    #[test]
+    fn display_width_mixed() {
+        let mut ctx = FormatContext::new();
+        ctx.set("text", "hi日本");
+        assert_eq!(format_expand("#{w:text}", &ctx), "6");
+    }
+
+    #[test]
+    fn ascii_code_to_char() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{a:65}", &ctx), "A");
+        assert_eq!(format_expand("#{a:97}", &ctx), "a");
+        assert_eq!(format_expand("#{a:48}", &ctx), "0");
+    }
+
+    #[test]
+    fn ascii_code_from_variable() {
+        let mut ctx = FormatContext::new();
+        ctx.set("code", "72");
+        assert_eq!(format_expand("#{a:code}", &ctx), "H");
+    }
+
+    #[test]
+    fn ascii_code_invalid() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{a:not_a_number}", &ctx), "");
+    }
+
+    #[test]
+    fn padding_right() {
+        let mut ctx = FormatContext::new();
+        ctx.set("x", "hi");
+        assert_eq!(format_expand("#{p:5:x}", &ctx), "hi   ");
+    }
+
+    #[test]
+    fn padding_left() {
+        let mut ctx = FormatContext::new();
+        ctx.set("x", "hi");
+        assert_eq!(format_expand("#{p:-5:x}", &ctx), "   hi");
+    }
+
+    #[test]
+    fn padding_no_op() {
+        let mut ctx = FormatContext::new();
+        ctx.set("x", "hello");
+        assert_eq!(format_expand("#{p:3:x}", &ctx), "hello");
+    }
+
+    #[test]
+    fn logical_not_true() {
+        let mut ctx = FormatContext::new();
+        ctx.set("active", "1");
+        assert_eq!(format_expand("#{!active}", &ctx), "0");
+    }
+
+    #[test]
+    fn logical_not_false() {
+        let mut ctx = FormatContext::new();
+        ctx.set("active", "0");
+        assert_eq!(format_expand("#{!active}", &ctx), "1");
+    }
+
+    #[test]
+    fn logical_not_empty() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{!missing}", &ctx), "1");
+    }
+
+    #[test]
+    fn logical_or() {
+        let mut ctx = FormatContext::new();
+        ctx.set("a", "1");
+        ctx.set("b", "0");
+        assert_eq!(format_expand("#{||:#{a},#{b}}", &ctx), "1");
+        ctx.set("a", "0");
+        assert_eq!(format_expand("#{||:#{a},#{b}}", &ctx), "0");
+    }
+
+    #[test]
+    fn logical_and() {
+        let mut ctx = FormatContext::new();
+        ctx.set("a", "1");
+        ctx.set("b", "1");
+        assert_eq!(format_expand("#{&&:#{a},#{b}}", &ctx), "1");
+        ctx.set("b", "0");
+        assert_eq!(format_expand("#{&&:#{a},#{b}}", &ctx), "0");
+    }
+
+    #[test]
+    fn arithmetic_add() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{e|+:3,4}", &ctx), "7");
+    }
+
+    #[test]
+    fn arithmetic_subtract() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{e|-:10,3}", &ctx), "7");
+    }
+
+    #[test]
+    fn arithmetic_multiply() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{e|*:6,7}", &ctx), "42");
+    }
+
+    #[test]
+    fn arithmetic_divide() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{e|/:10,3}", &ctx), "3");
+    }
+
+    #[test]
+    fn arithmetic_modulo() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{e|%:10,3}", &ctx), "1");
+    }
+
+    #[test]
+    fn arithmetic_divide_by_zero() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{e|/:5,0}", &ctx), "0");
+        assert_eq!(format_expand("#{e|%:5,0}", &ctx), "0");
+    }
+
+    #[test]
+    fn arithmetic_with_variables() {
+        let mut ctx = FormatContext::new();
+        ctx.set("width", "80");
+        ctx.set("offset", "10");
+        assert_eq!(format_expand("#{e|-:#{width},#{offset}}", &ctx), "70");
+    }
+
+    #[test]
+    fn match_glob_star() {
+        let mut ctx = FormatContext::new();
+        ctx.set("name", "my-session");
+        assert_eq!(format_expand("#{m:*session,#{name}}", &ctx), "1");
+        assert_eq!(format_expand("#{m:*window,#{name}}", &ctx), "0");
+    }
+
+    #[test]
+    fn match_glob_question() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{m:h?llo,hello}", &ctx), "1");
+        assert_eq!(format_expand("#{m:h?llo,hilo}", &ctx), "0");
+    }
+
+    #[test]
+    fn match_glob_exact() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{m:hello,hello}", &ctx), "1");
+        assert_eq!(format_expand("#{m:hello,world}", &ctx), "0");
+    }
+
+    #[test]
+    fn match_regex() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{m/r:^hello$,hello}", &ctx), "1");
+        assert_eq!(format_expand("#{m/r:^hello$,hello world}", &ctx), "0");
+        assert_eq!(format_expand("#{m/r:he.*o,hello}", &ctx), "1");
+    }
+
+    #[test]
+    fn match_regex_dot_star() {
+        let ctx = FormatContext::new();
+        assert_eq!(format_expand("#{m/r:.*session.*,my-session-1}", &ctx), "1");
+    }
+
+    #[test]
+    fn not_does_not_interfere_with_ne_comparison() {
+        let mut ctx = FormatContext::new();
+        ctx.set("a", "hello");
+        ctx.set("b", "world");
+        assert_eq!(format_expand("#{!=:#{a},#{b}}", &ctx), "1");
+        assert_eq!(format_expand("#{!=:#{a},#{a}}", &ctx), "0");
+    }
+
+    #[test]
+    fn combined_modifiers_in_conditional() {
+        let mut ctx = FormatContext::new();
+        ctx.set("count", "5");
+        ctx.set("limit", "10");
+        // Use arithmetic in a conditional
+        let tmpl = "#{?#{e|-:#{limit},#{count}},remaining,done}";
+        assert_eq!(format_expand(tmpl, &ctx), "remaining");
+    }
+
+    #[test]
+    fn combined_not_in_conditional() {
+        let mut ctx = FormatContext::new();
+        ctx.set("zoomed", "0");
+        assert_eq!(format_expand("#{?#{!zoomed},normal,ZOOM}", &ctx), "normal");
+        ctx.set("zoomed", "1");
+        assert_eq!(format_expand("#{?#{!zoomed},normal,ZOOM}", &ctx), "ZOOM");
+    }
+
     // --- strftime tests ---
 
     #[test]
@@ -1472,6 +2104,72 @@ mod tests {
             fn unix_to_local_yday_in_range(ts in 0i64..2_000_000_000i64) {
                 let (_, _, _, _, _, _, _, yday) = unix_to_local(ts);
                 prop_assert!((1..=366).contains(&yday), "yday={yday}");
+            }
+
+            // --- prop tests for new Section 3 modifiers ---
+
+            #[test]
+            fn shell_quote_never_panics(value in "\\PC{0,100}") {
+                let mut ctx = FormatContext::new();
+                ctx.set("v", &value);
+                let result = format_expand("#{q:v}", &ctx);
+                // Result should start and end with single quote
+                prop_assert!(result.starts_with('\''));
+                prop_assert!(result.ends_with('\''));
+            }
+
+            #[test]
+            fn string_length_matches(value in "[a-zA-Z0-9]{0,50}") {
+                let mut ctx = FormatContext::new();
+                ctx.set("v", &value);
+                let result = format_expand("#{n:v}", &ctx);
+                let expected = value.chars().count().to_string();
+                prop_assert_eq!(result, expected);
+            }
+
+            #[test]
+            fn display_width_at_least_char_count(value in "[a-zA-Z0-9]{0,50}") {
+                let mut ctx = FormatContext::new();
+                ctx.set("v", &value);
+                let width: usize = format_expand("#{w:v}", &ctx).parse().unwrap_or(0);
+                // For ASCII, display width == char count
+                prop_assert_eq!(width, value.len());
+            }
+
+            #[test]
+            fn logical_not_idempotent(flag in prop::bool::ANY) {
+                let mut ctx = FormatContext::new();
+                ctx.set("f", if flag { "1" } else { "0" });
+                let not_result = format_expand("#{!f}", &ctx);
+                let expected = if flag { "0" } else { "1" };
+                prop_assert_eq!(not_result, expected);
+            }
+
+            #[test]
+            fn arithmetic_add_commutative(a in -1000i64..1000i64, b in -1000i64..1000i64) {
+                let ctx = FormatContext::new();
+                let ab = format_expand(&format!("#{{e|+:{a},{b}}}"), &ctx);
+                let ba = format_expand(&format!("#{{e|+:{b},{a}}}"), &ctx);
+                prop_assert_eq!(ab, ba);
+            }
+
+            #[test]
+            fn fnmatch_star_always_matches(s in "[a-zA-Z]{0,30}") {
+                let mut ctx = FormatContext::new();
+                ctx.set("s", &s);
+                let result = format_expand("#{m:*,#{s}}", &ctx);
+                prop_assert_eq!(result, "1");
+            }
+
+            #[test]
+            fn padding_result_at_least_input_len(
+                value in "[a-z]{0,10}",
+                width in 0u32..20u32
+            ) {
+                let mut ctx = FormatContext::new();
+                ctx.set("v", &value);
+                let result = format_expand(&format!("#{{p:{width}:v}}"), &ctx);
+                prop_assert!(result.len() >= value.len());
             }
         }
     }
